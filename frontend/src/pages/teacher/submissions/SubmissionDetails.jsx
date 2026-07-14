@@ -1,0 +1,5725 @@
+import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import {
+  Calendar,
+  FileText,
+  ShieldAlert,
+  ShieldCheck,
+  CheckSquare,
+  ClipboardList,
+  ChevronDown,
+  ChevronRight,
+  Activity,
+  Highlighter,
+  Trash2,
+  Plus,
+  Minus,
+  MessageSquare,
+  Pencil,
+  AlertTriangle,
+  Eye,
+  Info,
+  X,
+  BookOpen,
+  Bot,
+  Sparkles,
+  Loader2,
+  Wand2,
+  BrainCircuit,
+  Play,
+  Pause,
+  SkipBack,
+  SkipForward,
+  Clock3,
+  Copy,
+  MousePointerClick,
+  Gauge,
+} from "lucide-react";
+
+import { useTeacherWorkspace } from "../../../contexts/TeacherWorkspaceContext";
+
+const ANNOTATION_CODES = [
+  { code: "CS", label: "Comma splice", type: "mechanics" },
+  { code: "RO", label: "Run-on", type: "sentence" },
+  { code: "FR", label: "Fragment", type: "sentence" },
+  { code: "P", label: "Missing punctuation", type: "mechanics" },
+  { code: "VT", label: "Wrong verb tense", type: "grammar" },
+  { code: "WF", label: "Wrong word form", type: "grammar" },
+  { code: "AGR", label: "Agreement error", type: "grammar" },
+  { code: "SP", label: "Spelling error", type: "spelling" },
+  { code: "WW", label: "Wrong word", type: "word choice" },
+  { code: "GOOD", label: "Good", type: "positive" },
+  { code: "NOTE", label: "Note", type: "note" },
+];
+
+const REVIEW_TABS = [
+  { id: "feedback", label: "Feedback", icon: MessageSquare },
+  { id: "annotations", label: "Marks", icon: Highlighter },
+  { id: "signals", label: "Signals", icon: Activity },
+];
+
+function roundToHalf(value) {
+  return Math.round(Number(value || 0) * 2) / 2;
+}
+
+function clampScore(value, min, max) {
+  const numeric = Number(value || 0);
+
+  if (Number.isNaN(numeric)) return min;
+  if (numeric < min) return min;
+  if (numeric > max) return max;
+
+  return roundToHalf(numeric);
+}
+
+function buildDefaultBands(points = 0) {
+  const max = Number(points || 0);
+
+  return [
+    {
+      id: "excellent",
+      label: "Excellent",
+      points: roundToHalf(max),
+      description: "Fully meets or exceeds expectations.",
+    },
+    {
+      id: "good",
+      label: "Good",
+      points: roundToHalf(max * 0.85),
+      description: "Meets the criterion well with minor gaps.",
+    },
+    {
+      id: "satisfactory",
+      label: "Satisfactory",
+      points: roundToHalf(max * 0.7),
+      description: "Meets basic expectations but needs development.",
+    },
+    {
+      id: "needs-work",
+      label: "Needs Work",
+      points: roundToHalf(max * 0.5),
+      description: "Partially meets the criterion.",
+    },
+    {
+      id: "beginning",
+      label: "Beginning",
+      points: roundToHalf(max * 0.3),
+      description: "Shows limited progress.",
+    },
+  ];
+}
+
+function normalizeCriterion(criterion = {}, index = 0) {
+  const points = Number(
+    criterion.points ?? criterion.maxPoints ?? criterion.weight ?? 0
+  );
+
+  return {
+    id: criterion.id || `criterion_${index + 1}`,
+    name: criterion.name || criterion.title || `Criterion ${index + 1}`,
+    description:
+      criterion.description ||
+      criterion.guidelines ||
+      criterion.descriptor ||
+      "",
+    points,
+    bands:
+      Array.isArray(criterion.bands) && criterion.bands.length > 0
+        ? criterion.bands.map((band, bandIndex) => ({
+            id: band.id || `band_${bandIndex + 1}`,
+            label: band.label || band.name || `Level ${bandIndex + 1}`,
+            points: Number(band.points ?? band.score ?? 0),
+            description:
+              band.description || band.feedback || band.descriptor || "",
+          }))
+        : buildDefaultBands(points),
+  };
+}
+
+function normalizeRubric(rubric) {
+  if (!rubric) return null;
+
+  if (Array.isArray(rubric)) {
+    const criteria = rubric.map(normalizeCriterion);
+
+    return {
+      id: "embedded_rubric",
+      title: "Attached Rubric",
+      criteria,
+      totalPoints: criteria.reduce(
+        (sum, criterion) => sum + Number(criterion.points || 0),
+        0
+      ),
+    };
+  }
+
+  const rawCriteria =
+    rubric.criteria ||
+    rubric.rubricCriteria ||
+    rubric.items ||
+    rubric.dimensions ||
+    [];
+
+  const criteria = Array.isArray(rawCriteria)
+    ? rawCriteria.map(normalizeCriterion)
+    : [];
+
+  return {
+    ...rubric,
+    id: rubric.id || rubric.rubricId || "embedded_rubric",
+    title:
+      rubric.title ||
+      rubric.name ||
+      rubric.rubricTitle ||
+      "Attached Rubric",
+    criteria,
+    totalPoints:
+      rubric.totalPoints ||
+      rubric.maxPoints ||
+      criteria.reduce(
+        (sum, criterion) => sum + Number(criterion.points || 0),
+        0
+      ),
+  };
+}
+
+function getScoreEntry(rubricScores, criterionId) {
+  const value = rubricScores?.[criterionId];
+
+  if (value && typeof value === "object") {
+    return {
+      criterionId,
+      bandId: value.bandId || "",
+      bandLabel: value.bandLabel || "",
+      score:
+        value.score !== null && value.score !== undefined ? value.score : "",
+      comment: value.comment || "",
+    };
+  }
+
+  return {
+    criterionId,
+    bandId: "",
+    bandLabel: "",
+    score: value !== null && value !== undefined ? value : "",
+    comment: "",
+  };
+}
+
+function countWords(text = "") {
+  const clean = String(text || "").trim();
+  if (!clean) return 0;
+  return clean.split(/\s+/).filter(Boolean).length;
+}
+
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+
+function getSubmissionText(submission = {}) {
+  return String(
+    submission.finalText ||
+      submission.submittedText ||
+      submission.content ||
+      submission.draftText ||
+      submission.text ||
+      submission.essay ||
+      submission.response ||
+      ""
+  );
+}
+
+function formatDateTime(value) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatTime(value) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+
+function formatSubmittedDateTime(value) {
+  if (!value) return "Not submitted";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  const time = date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  return `${year}-${month}-${day} · ${time}`;
+}
+
+function getAnnotationTone(annotation = {}) {
+  const code = String(annotation.code || "").toUpperCase();
+  const type = String(annotation.type || "").toLowerCase();
+
+  if (code === "GOOD" || type === "positive") {
+    return {
+      highlight:
+        "bg-emerald-100/90 border-b-2 border-emerald-500 text-slate-950 after:bg-emerald-500 after:text-white",
+      chip: "bg-emerald-50 border-emerald-200 text-emerald-700",
+      tooltip: "border-emerald-200",
+    };
+  }
+
+  if (code === "NOTE" || type === "note") {
+    return {
+      highlight:
+        "bg-sky-100/90 border-b-2 border-sky-500 text-slate-950 after:bg-sky-500 after:text-white",
+      chip: "bg-sky-50 border-sky-200 text-sky-700",
+      tooltip: "border-sky-200",
+    };
+  }
+
+  return {
+    highlight:
+      "bg-amber-100/95 border-b-2 border-amber-500 text-slate-950 after:bg-amber-500 after:text-white",
+    chip: "bg-amber-50 border-amber-200 text-amber-700",
+    tooltip: "border-amber-200",
+  };
+}
+
+function getAnnotationTooltipText(annotation = {}) {
+  const code = annotation.code || annotation.type || "NOTE";
+  const label = annotation.label || annotation.type || "Teacher note";
+  const comment = annotation.comment || label;
+
+  return {
+    code,
+    label,
+    comment,
+  };
+}
+
+function getAnnotationRange(annotation, text) {
+  const selectedText = String(annotation.selectedText || "");
+  const rawStart = Number(annotation.rangeStart);
+  const rawEnd = Number(annotation.rangeEnd);
+
+  if (
+    Number.isFinite(rawStart) &&
+    Number.isFinite(rawEnd) &&
+    rawStart >= 0 &&
+    rawEnd > rawStart &&
+    rawEnd <= text.length
+  ) {
+    return {
+      start: rawStart,
+      end: rawEnd,
+    };
+  }
+
+  if (!selectedText.trim()) return null;
+
+  const index = text.indexOf(selectedText);
+
+  if (index < 0) return null;
+
+  return {
+    start: index,
+    end: index + selectedText.length,
+  };
+}
+
+function normalizeAnnotationRanges(text, annotations) {
+  const normalized = safeArray(annotations)
+    .map((annotation, index) => {
+      const range = getAnnotationRange(annotation, text);
+      if (!range) return null;
+
+      return {
+        ...annotation,
+        rangeStart: range.start,
+        rangeEnd: range.end,
+        order: index,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (a.rangeStart !== b.rangeStart) {
+        return a.rangeStart - b.rangeStart;
+      }
+
+      return a.rangeEnd - b.rangeEnd;
+    });
+
+  const clean = [];
+  let cursor = 0;
+
+  normalized.forEach((annotation) => {
+    if (annotation.rangeStart < cursor) return;
+    if (annotation.rangeStart >= annotation.rangeEnd) return;
+
+    clean.push(annotation);
+    cursor = annotation.rangeEnd;
+  });
+
+  return clean;
+}
+
+function getFloatingPosition(rect) {
+  const width = 560;
+  const margin = 16;
+
+  let left = rect.left;
+  let top = rect.top - 14;
+
+  if (left + width > window.innerWidth - margin) {
+    left = window.innerWidth - width - margin;
+  }
+
+  if (left < margin) {
+    left = margin;
+  }
+
+  if (top < margin + 70) {
+    top = rect.bottom + 12;
+  }
+
+  return {
+    left,
+    top,
+    width: Math.min(width, window.innerWidth - margin * 2),
+  };
+}
+
+function getSelectionOffsets(container) {
+  const selection = window.getSelection();
+
+  if (!selection || selection.rangeCount === 0) return null;
+
+  const rawText = selection.toString();
+
+  if (!rawText || !rawText.trim()) return null;
+
+  const range = selection.getRangeAt(0);
+
+  if (!container.contains(range.commonAncestorContainer)) {
+    return null;
+  }
+
+  const rect = range.getBoundingClientRect();
+
+  if (!rect || rect.width === 0) return null;
+
+  const preRange = document.createRange();
+  preRange.selectNodeContents(container);
+  preRange.setEnd(range.startContainer, range.startOffset);
+
+  let start = preRange.toString().length;
+  let end = start + rawText.length;
+
+  const leadingWhitespace = rawText.match(/^\s*/)?.[0]?.length || 0;
+  const trailingWhitespace = rawText.match(/\s*$/)?.[0]?.length || 0;
+
+  start += leadingWhitespace;
+  end -= trailingWhitespace;
+
+  const selectedText = rawText.trim();
+
+  if (!selectedText || end <= start) return null;
+
+  return {
+    selectedText,
+    rangeStart: start,
+    rangeEnd: end,
+    toolbarPosition: getFloatingPosition(rect),
+  };
+}
+
+function renderAnnotatedText(text, annotations, onDeleteAnnotation) {
+  const cleanText = String(text || "");
+  const annotationRanges = normalizeAnnotationRanges(cleanText, annotations);
+
+  if (annotationRanges.length === 0) {
+    return cleanText;
+  }
+
+  const parts = [];
+  let cursor = 0;
+
+  annotationRanges.forEach((annotation) => {
+    if (annotation.rangeStart > cursor) {
+      parts.push(cleanText.slice(cursor, annotation.rangeStart));
+    }
+
+    const annotatedText = cleanText.slice(
+      annotation.rangeStart,
+      annotation.rangeEnd
+    );
+
+    parts.push(
+      <AnnotationHighlight
+        key={annotation.id || `${annotation.rangeStart}-${annotation.rangeEnd}`}
+        annotation={annotation}
+        onDelete={onDeleteAnnotation}
+      >
+        {annotatedText}
+      </AnnotationHighlight>
+    );
+
+    cursor = annotation.rangeEnd;
+  });
+
+  if (cursor < cleanText.length) {
+    parts.push(cleanText.slice(cursor));
+  }
+
+  return parts;
+}
+
+function getSelfAssessmentSummary(submission, rubricTotal) {
+  const hasSelfAssessment =
+    submission?.selfRubricAssessment ||
+    submission?.selfAssessment ||
+    submission?.selfRubricScores ||
+    submission?.selfRubricTotal !== undefined;
+
+  if (!hasSelfAssessment) return null;
+
+  const score = submission.selfRubricTotal ?? "—";
+  const max = submission.selfRubricMax ?? rubricTotal ?? "—";
+  const percent =
+    submission.selfRubricPercentage !== undefined &&
+    submission.selfRubricPercentage !== null
+      ? ` · ${submission.selfRubricPercentage}%`
+      : "";
+
+  return `${score} / ${max}${percent}`;
+}
+
+function hasGradeSheetValue(value) {
+  return (
+    value !== null &&
+    value !== undefined &&
+    value !== ""
+  );
+}
+
+function firstNonEmptyArray(...values) {
+  for (const value of values) {
+    if (Array.isArray(value) && value.length > 0) return value;
+  }
+  return [];
+}
+
+function normalizeConversationMessage(message, index = 0) {
+  if (typeof message === "string") {
+    return {
+      id: `message_${index}`,
+      role: "student",
+      content: message,
+      createdAt: null,
+    };
+  }
+
+  return {
+    id: message?.id || `message_${index}`,
+    role:
+      message?.role ||
+      message?.sender ||
+      message?.authorRole ||
+      message?.type ||
+      "student",
+    content:
+      message?.content ||
+      message?.message ||
+      message?.text ||
+      message?.response ||
+      message?.prompt ||
+      "",
+    createdAt:
+      message?.createdAt ||
+      message?.timestamp ||
+      message?.sentAt ||
+      message?.date ||
+      null,
+  };
+}
+
+function getPlanningChatMessages(submission) {
+  const direct = firstNonEmptyArray(
+    submission?.planningChat,
+    submission?.planningMessages,
+    submission?.planningConversation,
+    submission?.coachChatHistory,
+    submission?.chatHistory,
+    submission?.planning?.messages,
+    submission?.conversations?.planning
+  );
+
+  return direct
+    .map(normalizeConversationMessage)
+    .filter((message) => String(message.content || "").trim());
+}
+
+function normalizeStudentAiFeedbackIssue(issue = {}, index = 0) {
+  if (typeof issue === "string") {
+    return {
+      id: `issue_${index + 1}`,
+      excerpt: "",
+      problem: issue,
+      suggestion: "",
+      severity: "medium",
+    };
+  }
+
+  return {
+    id: issue.id || `issue_${index + 1}`,
+    excerpt:
+      issue.excerpt ||
+      issue.quote ||
+      issue.selectedText ||
+      issue.text ||
+      "",
+    problem:
+      issue.problem ||
+      issue.issue ||
+      issue.comment ||
+      issue.description ||
+      "",
+    suggestion:
+      issue.suggestion ||
+      issue.advice ||
+      issue.fix ||
+      issue.recommendation ||
+      "",
+    severity: String(
+      issue.severity ||
+        issue.level ||
+        "medium"
+    ).toLowerCase(),
+  };
+}
+
+function normalizeStudentAiFeedback(item, index = 0) {
+  if (typeof item === "string") {
+    return {
+      id: `ai_feedback_${index}`,
+      overall: item,
+      strengths: [],
+      issues: [],
+      nextSteps: [],
+      rawText: item,
+      request: "",
+      used: null,
+      saved: true,
+      createdAt: null,
+      draftWordCount: null,
+      assignmentTitle: "",
+    };
+  }
+
+  const source =
+    item?.feedback &&
+    typeof item.feedback === "object"
+      ? item.feedback
+      : item || {};
+
+  const nestedResponse =
+    source.response &&
+    typeof source.response === "object"
+      ? source.response
+      : {};
+
+  const overall =
+    source.overall ||
+    source.summary ||
+    source.overallFeedback ||
+    source.feedbackSummary ||
+    nestedResponse.overall ||
+    nestedResponse.summary ||
+    (typeof source.feedback === "string"
+      ? source.feedback
+      : "") ||
+    (typeof source.response === "string"
+      ? source.response
+      : "") ||
+    source.aiResponse ||
+    source.suggestion ||
+    source.content ||
+    source.message ||
+    "";
+
+  const strengths = safeArray(
+    source.strengths ||
+      source.positivePoints ||
+      nestedResponse.strengths
+  )
+    .map((strength) =>
+      typeof strength === "string"
+        ? strength
+        : strength?.text ||
+          strength?.description ||
+          strength?.comment ||
+          ""
+    )
+    .filter(Boolean);
+
+  const issues = safeArray(
+    source.issues ||
+      source.improvements ||
+      source.areasToImprove ||
+      nestedResponse.issues
+  )
+    .map(normalizeStudentAiFeedbackIssue)
+    .filter(
+      (issue) =>
+        issue.excerpt ||
+        issue.problem ||
+        issue.suggestion
+    );
+
+  const nextSteps = safeArray(
+    source.nextSteps ||
+      source.recommendations ||
+      source.actionItems ||
+      nestedResponse.nextSteps
+  )
+    .map((step) =>
+      typeof step === "string"
+        ? step
+        : step?.text ||
+          step?.description ||
+          step?.action ||
+          ""
+    )
+    .filter(Boolean);
+
+  const rawText =
+    source.rawText ||
+    source.rawResponse ||
+    nestedResponse.rawText ||
+    "";
+
+  return {
+    id:
+      source.id ||
+      item?.id ||
+      `ai_feedback_${index}`,
+    overall,
+    strengths,
+    issues,
+    nextSteps,
+    rawText,
+    request:
+      source.request ||
+      source.prompt ||
+      source.studentMessage ||
+      source.draftExcerpt ||
+      source.input ||
+      "",
+    used:
+      source.used ??
+      source.applied ??
+      source.accepted ??
+      source.inserted ??
+      item?.used ??
+      null,
+    saved:
+      source.saved ??
+      item?.saved ??
+      true,
+    createdAt:
+      source.createdAt ||
+      item?.createdAt ||
+      source.timestamp ||
+      item?.timestamp ||
+      source.requestedAt ||
+      item?.requestedAt ||
+      null,
+    draftWordCount:
+      source.draftWordCount ??
+      item?.draftWordCount ??
+      source.wordCount ??
+      item?.wordCount ??
+      null,
+    assignmentTitle:
+      source.assignmentTitle ||
+      item?.assignmentTitle ||
+      "",
+  };
+}
+
+function getStudentAiFeedbackHistory(submission) {
+  const direct = firstNonEmptyArray(
+    submission?.feedbackHistory,
+    submission?.aiFeedbackHistory,
+    submission?.studentAiFeedbackHistory,
+    submission?.aiFeedbackUsed,
+    submission?.draftFeedbackHistory,
+    submission?.coachFeedbackHistory
+  );
+
+  return direct
+    .map(normalizeStudentAiFeedback)
+    .filter(
+      (item) =>
+        String(item.overall || "").trim() ||
+        item.strengths.length > 0 ||
+        item.issues.length > 0 ||
+        item.nextSteps.length > 0 ||
+        String(item.rawText || "").trim()
+    );
+}
+
+function getWritingReplayEvents(submission) {
+  return firstNonEmptyArray(
+    submission?.writingEvents,
+    submission?.writingReplay,
+    submission?.writingHistory,
+    submission?.draftEvents,
+    submission?.playbackEvents,
+    submission?.autosaveHistory
+  )
+    .map((event, index) => ({
+      ...event,
+      id: event?.id || `writing_event_${index}`,
+      timestamp:
+        event?.timestamp || event?.createdAt || event?.savedAt || event?.date || null,
+    }))
+    .sort(
+      (a, b) =>
+        new Date(a.timestamp || 0).getTime() -
+        new Date(b.timestamp || 0).getTime()
+    );
+}
+
+function normalizeAiSuggestion(rawData, rubricCriteria, rubricTotal) {
+  const data =
+    rawData?.review ||
+    rawData?.aiReview ||
+    rawData?.suggestion ||
+    rawData?.result ||
+    rawData ||
+    {};
+
+  const feedback =
+    data.suggestedFeedback ||
+    data.feedback ||
+    data.teacherFeedback ||
+    data.summaryFeedback ||
+    data.comment ||
+    "";
+
+  const summary =
+    data.summary ||
+    data.overall ||
+    data.overallSummary ||
+    "AI review completed. Review the suggestion before applying it.";
+
+  const strengths = safeArray(data.strengths || data.positivePoints);
+  const improvements = safeArray(
+    data.improvements || data.issues || data.nextSteps || data.recommendations
+  );
+
+  const rawScores =
+    data.criteria ||
+    data.rubricScores ||
+    data.scores ||
+    data.criterionScores ||
+    [];
+
+  let criteriaScores = [];
+
+  if (Array.isArray(rawScores)) {
+    criteriaScores = rawScores.map((item, index) => {
+      const matchedCriterion =
+        rubricCriteria.find(
+          (criterion) =>
+            String(criterion.id) === String(item.criterionId || item.id) ||
+            String(criterion.name).toLowerCase() ===
+              String(item.criterionName || item.name || "").toLowerCase()
+        ) || rubricCriteria[index];
+
+      const score = clampScore(
+        item.score ?? item.points ?? item.value ?? 0,
+        0,
+        matchedCriterion?.points || rubricTotal || 100
+      );
+
+      const closestBand = matchedCriterion?.bands
+        ?.slice()
+        .sort(
+          (a, b) =>
+            Math.abs(Number(a.points || 0) - score) -
+            Math.abs(Number(b.points || 0) - score)
+        )?.[0];
+
+      return {
+        criterionId: matchedCriterion?.id || item.criterionId || item.id,
+        criterionName:
+          matchedCriterion?.name ||
+          item.criterionName ||
+          item.name ||
+          `Criterion ${index + 1}`,
+        score,
+        maxPoints: matchedCriterion?.points || item.maxPoints || "",
+        bandId: item.bandId || closestBand?.id || "",
+        bandLabel: item.bandLabel || item.level || closestBand?.label || "",
+        comment:
+          item.comment ||
+          item.reason ||
+          item.feedback ||
+          item.explanation ||
+          "",
+      };
+    });
+  } else if (rawScores && typeof rawScores === "object") {
+    criteriaScores = Object.entries(rawScores).map(([key, value]) => {
+      const matchedCriterion =
+        rubricCriteria.find(
+          (criterion) =>
+            String(criterion.id) === String(key) ||
+            String(criterion.name).toLowerCase() === String(key).toLowerCase()
+        ) || {};
+
+      const rawValue = value && typeof value === "object" ? value : {};
+      const score = clampScore(
+        rawValue.score ?? rawValue.points ?? value ?? 0,
+        0,
+        matchedCriterion.points || rubricTotal || 100
+      );
+
+      const closestBand = matchedCriterion?.bands
+        ?.slice()
+        .sort(
+          (a, b) =>
+            Math.abs(Number(a.points || 0) - score) -
+            Math.abs(Number(b.points || 0) - score)
+        )?.[0];
+
+      return {
+        criterionId: matchedCriterion.id || key,
+        criterionName: matchedCriterion.name || key,
+        score,
+        maxPoints: matchedCriterion.points || rawValue.maxPoints || "",
+        bandId: rawValue.bandId || closestBand?.id || "",
+        bandLabel: rawValue.bandLabel || rawValue.level || closestBand?.label || "",
+        comment:
+          rawValue.comment ||
+          rawValue.reason ||
+          rawValue.feedback ||
+          rawValue.explanation ||
+          "",
+      };
+    });
+  }
+
+  const finalScore =
+    data.finalScore ??
+    data.score ??
+    data.suggestedScore ??
+    criteriaScores.reduce((sum, item) => sum + Number(item.score || 0), 0);
+
+  return {
+    summary,
+    feedback,
+    strengths,
+    improvements,
+    criteriaScores,
+    finalScore: clampScore(finalScore, 0, rubricTotal || 100),
+    createdAt: new Date().toISOString(),
+  };
+}
+
+const SubmissionDetails = forwardRef(function SubmissionDetails(
+  { submission, onSaveReview },
+  ref
+) {
+  const { rubrics = [], getRubricForAssignment } =
+    useTeacherWorkspace() || {};
+
+  const [feedback, setFeedback] = useState("");
+  const [manualScore, setManualScore] = useState("");
+  const [rubricScores, setRubricScores] = useState({});
+  const [finalOverrideEnabled, setFinalOverrideEnabled] = useState(false);
+  const [finalOverride, setFinalOverride] = useState("");
+  const [saveMessage, setSaveMessage] = useState("");
+
+  const [annotations, setAnnotations] = useState([]);
+  const annotationsRef = useRef([]);
+
+  const [selectedText, setSelectedText] = useState("");
+  const [selectedRange, setSelectedRange] = useState(null);
+  const [selectionToolbar, setSelectionToolbar] = useState(null);
+  const [annotationComment, setAnnotationComment] = useState("");
+  const [annotationMessage, setAnnotationMessage] = useState("");
+
+  
+  const [reviewMode, setReviewMode] = useState("text");
+
+  const [aiReviewLoading, setAiReviewLoading] = useState(false);
+  const [aiReviewError, setAiReviewError] = useState("");
+  const [aiSuggestion, setAiSuggestion] = useState(null);
+
+  const studentTextRef = useRef(null);
+
+  useImperativeHandle(ref, () => ({
+    saveReview: handleSave,
+    getGradeSheetData: buildGradeSheetData,
+  }));
+
+  const currentRubric = useMemo(() => {
+    if (!submission) return null;
+
+    const embeddedRubrics = [
+      submission.rubricSchema,
+      submission.assignment?.rubricSchema,
+      submission.assignmentDetails?.rubricSchema,
+      submission.rubric,
+      submission.assignment?.rubric,
+      submission.assignmentDetails?.rubric,
+      submission.assignment?.rubricCriteria,
+      submission.assignmentDetails?.rubricCriteria,
+      submission.rubricCriteria,
+    ];
+
+    for (const rubric of embeddedRubrics) {
+      const normalized = normalizeRubric(rubric);
+
+      if (normalized && normalized.criteria.length > 0) {
+        return normalized;
+      }
+    }
+
+    if (typeof getRubricForAssignment === "function") {
+      const rubricFromContext = getRubricForAssignment(submission.assignmentId);
+      const normalized = normalizeRubric(rubricFromContext);
+
+      if (normalized && normalized.criteria.length > 0) {
+        return normalized;
+      }
+    }
+
+    const activeRubric = rubrics.find(
+      (rubric) =>
+        String(rubric.assignmentId) === String(submission.assignmentId) &&
+        String(rubric.status).toLowerCase() === "active"
+    );
+
+    const normalizedActive = normalizeRubric(activeRubric);
+
+    if (normalizedActive && normalizedActive.criteria.length > 0) {
+      return normalizedActive;
+    }
+
+    const fallbackRubric = rubrics.find(
+      (rubric) => String(rubric.assignmentId) === String(submission.assignmentId)
+    );
+
+    const normalizedFallback = normalizeRubric(fallbackRubric);
+
+    return normalizedFallback && normalizedFallback.criteria.length > 0
+      ? normalizedFallback
+      : null;
+  }, [rubrics, submission, getRubricForAssignment]);
+
+  const rubricCriteria = Array.isArray(currentRubric?.criteria)
+    ? currentRubric.criteria
+    : [];
+
+  const rubricTotal = Number(currentRubric?.totalPoints || 0);
+
+  const selfAssessmentSummary = getSelfAssessmentSummary(
+    submission,
+    rubricTotal
+  );
+
+  const rubricScoreTotal = currentRubric
+    ? rubricCriteria.reduce((sum, criterion) => {
+        const entry = getScoreEntry(rubricScores, criterion.id);
+        return sum + Number(entry.score || 0);
+      }, 0)
+    : 0;
+
+  const gradedCriteriaCount = currentRubric
+    ? rubricCriteria.filter((criterion) => {
+        const entry = getScoreEntry(rubricScores, criterion.id);
+        return entry.score !== "" && entry.score !== null;
+      }).length
+    : 0;
+
+  const finalDisplayedScore = currentRubric
+    ? finalOverrideEnabled && finalOverride !== ""
+      ? Number(finalOverride)
+      : rubricScoreTotal
+    : manualScore;
+
+  useEffect(() => {
+    if (!submission) return;
+
+    const savedAnnotations = Array.isArray(submission.annotations)
+      ? submission.annotations
+      : [];
+
+    setFeedback(submission.feedback || "");
+    setManualScore(submission.score ?? "");
+    setRubricScores(submission.rubricScores || {});
+    setFinalOverrideEnabled(Boolean(submission.rubricOverride));
+    setFinalOverride(
+      submission.rubricOverride ? String(submission.score ?? "") : ""
+    );
+
+    setAnnotations(savedAnnotations);
+    annotationsRef.current = savedAnnotations;
+
+    setSelectedText("");
+    setSelectedRange(null);
+    setSelectionToolbar(null);
+    setAnnotationComment("");
+    setSaveMessage("");
+    setAnnotationMessage("");
+    setReviewMode("text");
+    setAiReviewError("");
+    setAiSuggestion(
+      submission.aiTeacherReviewSuggestion ||
+        submission.aiReviewSuggestion ||
+        null
+    );
+  }, [submission?.id]);
+
+  if (!submission) return null;
+
+  const submissionText =
+    submission.content ||
+    submission.draftText ||
+    submission.submittedText ||
+    submission.finalText ||
+    submission.text ||
+    "";
+
+  const integrityLogs = safeArray(submission.integrityLogs);
+  const copyPasteLogs = safeArray(submission.copyPasteLogs);
+  const focusLossLogs = safeArray(submission.focusLossLogs);
+  const writingEvents = safeArray(submission.writingEvents);
+
+  const planningChatMessages = getPlanningChatMessages(submission);
+  const studentAiFeedbackHistory = getStudentAiFeedbackHistory(submission);
+  const writingReplayEvents = getWritingReplayEvents(submission);
+
+  const pasteAttemptCount = Number(
+    submission.pasteAttemptCount ?? copyPasteLogs.length ?? 0
+  );
+
+  const focusLossCount = Number(
+    submission.focusLossCount ?? focusLossLogs.length ?? 0
+  );
+
+  const feedbackChecksUsed = Number(
+    submission.feedbackChecksUsed ??
+      safeArray(submission.feedbackHistory).length ??
+      0
+  );
+
+  const hasAiFlags = Number(submission.aiFlags || 0) > 0;
+  const aiFlagCount = Number(submission.aiFlags || 0);
+  const integrityFlagCount = pasteAttemptCount + focusLossCount + aiFlagCount;
+
+  const hasReviewSignals =
+    integrityFlagCount > 0 ||
+    writingEvents.length > 0 ||
+    feedbackChecksUsed > 0 ||
+    Boolean(submission.honorConfirmed);
+
+  const wordCount = submission.wordCount || countWords(submissionText);
+
+  const integrityDescription = `${integrityFlagCount} integrity signal${
+    integrityFlagCount === 1 ? "" : "s"
+  } recorded:
+Paste attempts: ${pasteAttemptCount}
+Focus loss / tab switching: ${focusLossCount}
+AI / external flags: ${aiFlagCount}
+
+These are teacher-only review signals and are not automatic grades.`;
+
+  function updateRubricEntry(criterionId, nextEntry) {
+    setRubricScores((prev) => {
+      const previousEntry = getScoreEntry(prev, criterionId);
+
+      return {
+        ...prev,
+        [criterionId]: {
+          ...previousEntry,
+          ...nextEntry,
+          criterionId,
+        },
+      };
+    });
+  }
+
+  function selectBand(criterion, band) {
+    updateRubricEntry(criterion.id, {
+      bandId: band.id,
+      bandLabel: band.label,
+      score: clampScore(band.points, 0, criterion.points),
+    });
+  }
+
+  function adjustCriterionScore(criterion, delta) {
+    const entry = getScoreEntry(rubricScores, criterion.id);
+    const currentScore = Number(entry.score || 0);
+
+    updateRubricEntry(criterion.id, {
+      score: clampScore(currentScore + delta, 0, criterion.points),
+    });
+  }
+
+  function updateCriterionScore(criterion, value) {
+    updateRubricEntry(criterion.id, {
+      score: clampScore(value, 0, criterion.points),
+    });
+  }
+
+  function updateCriterionComment(criterionId, comment) {
+    updateRubricEntry(criterionId, {
+      comment,
+    });
+  }
+
+  function captureSelectedText() {
+    if (reviewMode !== "text") return;
+
+    const container = studentTextRef.current;
+    if (!container) return;
+
+    const selectionInfo = getSelectionOffsets(container);
+
+    if (!selectionInfo) return;
+
+    setSelectedText(selectionInfo.selectedText);
+    setSelectedRange({
+      rangeStart: selectionInfo.rangeStart,
+      rangeEnd: selectionInfo.rangeEnd,
+    });
+    setSelectionToolbar(selectionInfo.toolbarPosition);
+    setAnnotationMessage("");
+  }
+
+  function clearSelectionState() {
+    setSelectedText("");
+    setSelectedRange(null);
+    setSelectionToolbar(null);
+    setAnnotationComment("");
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function addAnnotation(codeItem) {
+    if (!codeItem) {
+      setAnnotationMessage("Choose an annotation code.");
+      return;
+    }
+
+    const cleanSelectedText = selectedText.trim();
+    let cleanComment = annotationComment.trim();
+
+    if (!cleanSelectedText) {
+      setAnnotationMessage("Select text from the student submission first.");
+      return;
+    }
+
+    if (codeItem.code === "NOTE" && !cleanComment) {
+      setAnnotationMessage("Write the note in the note box before adding it.");
+      return;
+    }
+
+    let rangeStart = selectedRange?.rangeStart;
+    let rangeEnd = selectedRange?.rangeEnd;
+
+    if (
+      !Number.isFinite(Number(rangeStart)) ||
+      !Number.isFinite(Number(rangeEnd)) ||
+      Number(rangeEnd) <= Number(rangeStart)
+    ) {
+      const fallbackIndex = submissionText.indexOf(cleanSelectedText);
+
+      if (fallbackIndex >= 0) {
+        rangeStart = fallbackIndex;
+        rangeEnd = fallbackIndex + cleanSelectedText.length;
+      }
+    }
+
+    const newAnnotation = {
+      id: `ann_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+      selectedText: cleanSelectedText,
+      rangeStart: Number(rangeStart),
+      rangeEnd: Number(rangeEnd),
+      comment: cleanComment || codeItem.label,
+      type: codeItem.type,
+      code: codeItem.code,
+      label: codeItem.label,
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextAnnotations = [...annotationsRef.current, newAnnotation];
+
+    annotationsRef.current = nextAnnotations;
+    setAnnotations(nextAnnotations);
+
+    clearSelectionState();
+
+    setAnnotationMessage(`${codeItem.code} added. Save the review to keep it.`);
+  }
+
+  function deleteAnnotation(annotationId) {
+    const nextAnnotations = annotationsRef.current.filter(
+      (annotation) => annotation.id !== annotationId
+    );
+
+    annotationsRef.current = nextAnnotations;
+    setAnnotations(nextAnnotations);
+
+    setAnnotationMessage("Mark removed. Save the review to keep changes.");
+  }
+
+  async function handleAiCheck() {
+    if (!submissionText.trim()) {
+      setAiReviewError("No student text is available for AI check.");
+      setReviewMode("ai");
+      return;
+    }
+
+    setReviewMode("ai");
+    setAiReviewLoading(true);
+    setAiReviewError("");
+    setAiSuggestion(null);
+
+    try {
+      const apiBase = import.meta.env.VITE_API_BASE_URL || "";
+
+      const response = await fetch(
+        `${apiBase}/api/teacher/ai-review-submission`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            submissionId: submission.id,
+            assignmentId: submission.assignmentId,
+            assignmentTitle: submission.assignmentTitle,
+            studentEmail: submission.studentEmail,
+            studentText: submissionText,
+            wordCount,
+            rubric: currentRubric,
+            rubricCriteria,
+            rubricTotal,
+            existingAnnotations: annotations,
+            integritySignals: {
+              pasteAttemptCount,
+              focusLossCount,
+              aiFlagCount,
+              feedbackChecksUsed,
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`AI review failed with status ${response.status}`);
+      }
+
+      const rawData = await response.json();
+      const normalizedSuggestion = normalizeAiSuggestion(
+        rawData,
+        rubricCriteria,
+        rubricTotal
+      );
+
+      setAiSuggestion(normalizedSuggestion);
+      setSaveMessage(
+        "AI check completed. Review the suggestion before applying anything."
+      );
+    } catch (error) {
+      console.error("AI review error:", error);
+
+      setAiReviewError(
+        "AI Check could not run. Confirm backend route POST /api/teacher/ai-review-submission is running and VITE_API_BASE_URL points to the backend."
+      );
+    } finally {
+      setAiReviewLoading(false);
+    }
+  }
+
+  function openAiWorkspace() {
+    setReviewMode("ai");
+    setAiReviewError("");
+  }
+
+  function applyAiRubricScores() {
+    if (!aiSuggestion) return;
+
+    if (!currentRubric) {
+      setManualScore(aiSuggestion.finalScore || "");
+      setSaveMessage("AI suggested manual score applied. Review before saving.");
+      setReviewMode("rubric");
+      return;
+    }
+
+    const nextRubricScores = {
+      ...rubricScores,
+    };
+
+    aiSuggestion.criteriaScores.forEach((item) => {
+      if (!item.criterionId) return;
+
+      const criterion = rubricCriteria.find(
+        (rubricCriterion) =>
+          String(rubricCriterion.id) === String(item.criterionId)
+      );
+
+      nextRubricScores[item.criterionId] = {
+        criterionId: item.criterionId,
+        criterionName: item.criterionName || criterion?.name || "",
+        maxPoints: criterion?.points || item.maxPoints || 0,
+        bandId: item.bandId || "",
+        bandLabel: item.bandLabel || "",
+        score: clampScore(item.score, 0, criterion?.points || rubricTotal || 100),
+        comment: item.comment || "",
+      };
+    });
+
+    setRubricScores(nextRubricScores);
+    setReviewMode("rubric");
+    setSaveMessage("AI suggested rubric scores applied. Review before saving.");
+  }
+
+  function applyAiFeedback() {
+    const suggestion = String(aiSuggestion?.feedback || "").trim();
+
+    if (!suggestion) return;
+
+    setFeedback((currentFeedback) => {
+      const current = String(currentFeedback || "").trim();
+
+      if (current.includes(suggestion)) {
+        return currentFeedback;
+      }
+
+      return current ? `${current}\n\n${suggestion}` : suggestion;
+    });
+
+    setSaveMessage(
+      "AI feedback added as a teacher comment. Review and edit it before saving."
+    );
+  }
+
+  function buildGradeSheetData() {
+    const assignment =
+      submission.assignment ||
+      submission.assignmentDetails ||
+      {};
+
+    const dynamicRubricCriteria =
+      rubricCriteria.map(
+        (criterion, index) => {
+          const entry =
+            getScoreEntry(
+              rubricScores,
+              criterion.id
+            );
+
+          const selectedBand =
+            safeArray(
+              criterion.bands
+            ).find(
+              (band) =>
+                String(band.id) ===
+                String(
+                  entry.bandId || ""
+                )
+            );
+
+          return {
+            ...criterion,
+
+            reportKey:
+              `${criterion.id || "criterion"}::${index}`,
+
+            scoreEntry: {
+              criterionId:
+                criterion.id,
+
+              criterionName:
+                criterion.name,
+
+              maxPoints:
+                Number(
+                  criterion.points ||
+                    0
+                ),
+
+              bandId:
+                entry.bandId ||
+                "",
+
+              bandLabel:
+                entry.bandLabel ||
+                selectedBand?.label ||
+                "",
+
+              score:
+                entry.score === "" ||
+                entry.score === null ||
+                entry.score ===
+                  undefined
+                  ? null
+                  : Number(
+                      entry.score
+                    ),
+
+              comment:
+                entry.comment ||
+                "",
+
+              description:
+                criterion.description ||
+                "",
+
+              selectedBandDescription:
+                selectedBand?.description ||
+                "",
+            },
+          };
+        }
+      );
+
+    const rubricTotalFromCriteria =
+      rubricCriteria.reduce(
+        (sum, criterion) =>
+          sum +
+          Number(
+            criterion.points ||
+              0
+          ),
+        0
+      );
+
+    const manualMaximum =
+      Number(
+        submission.rubricTotal ??
+          submission.maxScore ??
+          submission.pointsPossible ??
+          assignment.rubricTotal ??
+          assignment.totalPoints ??
+          assignment.maxScore ??
+          assignment.pointsPossible ??
+          0
+      ) || null;
+
+    const resolvedRubricTotal =
+      currentRubric
+        ? Number(
+            rubricTotal ||
+              rubricTotalFromCriteria ||
+              0
+          ) || null
+        : manualMaximum;
+
+    const displayedFinalScore =
+      currentRubric
+        ? finalOverrideEnabled &&
+          finalOverride !== ""
+          ? Number(
+              finalOverride
+            )
+          : gradedCriteriaCount > 0
+          ? rubricScoreTotal
+          : hasGradeSheetValue(
+              submission.score
+            )
+          ? Number(
+              submission.score
+            )
+          : null
+        : manualScore !== ""
+        ? Number(
+            manualScore
+          )
+        : hasGradeSheetValue(
+            submission.score
+          )
+        ? Number(
+            submission.score
+          )
+        : null;
+
+    const selfAssessmentScore =
+      submission.selfRubricTotal ??
+      submission.selfGradeScore ??
+      submission.selfAssessmentScore ??
+      null;
+
+    const selfAssessmentMax =
+      submission.selfRubricMax ??
+      submission.selfGradeMax ??
+      resolvedRubricTotal ??
+      null;
+
+    const selfAssessmentPercentage =
+      submission.selfRubricPercentage ??
+      submission.selfGradePercentage ??
+      (hasGradeSheetValue(
+        selfAssessmentScore
+      ) &&
+      Number(
+        selfAssessmentMax
+      ) > 0
+        ? Math.round(
+            (Number(
+              selfAssessmentScore
+            ) /
+              Number(
+                selfAssessmentMax
+              )) *
+              100
+          )
+        : null);
+
+    const finalText =
+      String(
+        submissionText || ""
+      );
+
+    const actualFeedbackChecks =
+      Math.max(
+        Number(
+          feedbackChecksUsed || 0
+        ),
+        studentAiFeedbackHistory.length
+      );
+
+    return {
+      submission: {
+        ...submission,
+
+        content:
+          finalText,
+
+        finalText:
+          finalText,
+
+        submittedText:
+          finalText,
+
+        text:
+          finalText,
+
+        annotations:
+          annotationsRef.current,
+      },
+
+      studentName:
+        submission.studentName ||
+        "Student",
+
+      studentEmail:
+        submission.studentEmail ||
+        "",
+
+      assignmentTitle:
+        assignment.title ||
+        submission.assignmentTitle ||
+        "Assignment",
+
+      assignmentInstructions:
+        assignment.instructions ||
+        assignment.description ||
+        assignment.prompt ||
+        submission.assignmentPrompt ||
+        "",
+
+      deadline:
+        assignment.dueDate ||
+        assignment.deadline ||
+        assignment.dueAt ||
+        submission.dueDate ||
+        null,
+
+      status:
+        submission.status ||
+        "Submitted",
+
+      submittedAt:
+        submission.resubmittedAt ||
+        submission.submittedAt ||
+        submission.createdAt ||
+        null,
+
+      reviewedAt:
+        submission.reviewedAt ||
+        null,
+
+      attemptNumber:
+        Number(
+          submission.attemptNumber ||
+            1
+        ),
+
+      isCurrent:
+        submission.isCurrent !==
+        false,
+
+      wordCount:
+        Number(
+          submission.wordCount
+        ) ||
+        countWords(
+          finalText
+        ),
+
+      finalScore:
+        displayedFinalScore,
+
+      rubricTotal:
+        resolvedRubricTotal,
+
+      rubricTitle:
+        currentRubric?.title ||
+        submission.rubricTitle ||
+        "Rubric",
+
+      rubricCriteria:
+        dynamicRubricCriteria,
+
+      rubricScores,
+
+      gradedCriteriaCount,
+
+      feedback:
+        feedback || "",
+
+      selfAssessmentScore,
+      selfAssessmentMax,
+      selfAssessmentPercentage,
+
+      selfAssessmentSummary:
+        hasGradeSheetValue(
+          selfAssessmentScore
+        )
+          ? `${selfAssessmentScore}${
+              hasGradeSheetValue(
+                selfAssessmentMax
+              )
+                ? ` / ${selfAssessmentMax}`
+                : ""
+            }${
+              hasGradeSheetValue(
+                selfAssessmentPercentage
+              )
+                ? ` · ${selfAssessmentPercentage}%`
+                : ""
+            }`
+          : null,
+
+      annotations:
+        annotationsRef.current,
+
+      planningChatMessages,
+      studentAiFeedbackHistory,
+      writingReplayEvents,
+      writingEvents,
+      copyPasteLogs,
+      focusLossLogs,
+      integrityLogs,
+
+      pasteAttemptCount,
+      focusLossCount,
+      aiFlagCount,
+      integrityFlagCount,
+
+      feedbackChecksUsed:
+        actualFeedbackChecks,
+
+      aiSuggestion,
+
+      honorConfirmed:
+        Boolean(
+          submission.honorConfirmed
+        ),
+
+      generatedAt:
+        new Date().toISOString(),
+    };
+  }
+
+  function handleSave() {
+    let finalScore = manualScore;
+    let cleanedRubricScores = {};
+    let calculatedRubricScore = rubricScoreTotal;
+
+    if (currentRubric) {
+      for (const criterion of rubricCriteria) {
+        const entry = getScoreEntry(rubricScores, criterion.id);
+        const numericValue = Number(entry.score || 0);
+
+        if (
+          Number.isNaN(numericValue) ||
+          numericValue < 0 ||
+          numericValue > Number(criterion.points)
+        ) {
+          setSaveMessage(
+            `Score for "${criterion.name}" must be between 0 and ${criterion.points}.`
+          );
+          setReviewMode("rubric");
+          return;
+        }
+
+        cleanedRubricScores[criterion.id] = {
+          criterionId: criterion.id,
+          criterionName: criterion.name,
+          maxPoints: Number(criterion.points || 0),
+          bandId: entry.bandId || "",
+          bandLabel: entry.bandLabel || "",
+          score: numericValue,
+          comment: entry.comment || "",
+        };
+      }
+
+      calculatedRubricScore = Object.values(cleanedRubricScores).reduce(
+        (sum, item) => sum + Number(item.score || 0),
+        0
+      );
+
+      if (finalOverrideEnabled && finalOverride !== "") {
+        const overrideValue = Number(finalOverride);
+
+        if (
+          Number.isNaN(overrideValue) ||
+          overrideValue < 0 ||
+          overrideValue > rubricTotal
+        ) {
+          setSaveMessage(
+            `Final score override must be between 0 and ${rubricTotal}.`
+          );
+          setReviewMode("rubric");
+          return;
+        }
+
+        finalScore = overrideValue;
+      } else {
+        finalScore = calculatedRubricScore;
+      }
+    } else {
+      const numericScore = Number(manualScore);
+
+      if (
+        manualScore !== "" &&
+        (Number.isNaN(numericScore) || numericScore < 0 || numericScore > 100)
+      ) {
+        setSaveMessage("Score must be between 0 and 100.");
+        return;
+      }
+
+      finalScore = manualScore === "" ? null : numericScore;
+    }
+
+    const annotationsToSave = Array.isArray(annotationsRef.current)
+      ? annotationsRef.current
+      : annotations;
+
+    const saveAccepted = onSaveReview(submission.id, {
+      status: "Graded",
+      feedback,
+      score: finalScore,
+      annotations: annotationsToSave,
+
+      rubricId: currentRubric?.id || null,
+      rubricTitle: currentRubric?.title || null,
+      rubricScores: currentRubric ? cleanedRubricScores : {},
+      rubricTotal: currentRubric?.totalPoints || null,
+      rubricCalculatedScore: currentRubric ? calculatedRubricScore : null,
+      rubricOverride: currentRubric ? finalOverrideEnabled : false,
+
+      aiTeacherReviewSuggestion: aiSuggestion || null,
+      aiTeacherReviewUsed: Boolean(aiSuggestion),
+
+      reviewedAt: new Date().toISOString().slice(0, 10),
+    });
+
+    if (saveAccepted === false) {
+      setSaveMessage(
+        "This assignment is reopened. The student must resubmit it before a new teacher review can be saved."
+      );
+      return;
+    }
+
+    setSaveMessage("Review, grade, and annotations saved successfully.");
+    setAnnotationMessage("");
+  }
+
+  return (
+    <div className="h-full min-h-0 animate-fade-in-up">
+      <div className="h-full min-h-0 flex flex-col gap-3">
+        
+
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.95fr)_390px] gap-3 flex-1 min-h-0">
+          <div className="min-w-0 min-h-0 flex flex-col gap-2">
+            <ReviewModeSwitch
+              reviewMode={reviewMode}
+              setReviewMode={setReviewMode}
+              hasRubric={Boolean(currentRubric)}
+              rubricScoreTotal={rubricScoreTotal}
+              rubricTotal={rubricTotal}
+              gradedCriteriaCount={gradedCriteriaCount}
+              rubricCriteriaCount={rubricCriteria.length}
+              onAiCheck={openAiWorkspace}
+              aiReviewLoading={aiReviewLoading}
+              hasAiSuggestion={Boolean(aiSuggestion)}
+              planningMessageCount={planningChatMessages.length}
+              studentAiFeedbackCount={studentAiFeedbackHistory.length}
+              writingReplayCount={writingReplayEvents.length}
+            />
+
+            <div className="flex-1 min-h-0 [&>*]:h-full">
+              {reviewMode === "ai" ? (
+            <AiCheckWorkspace
+              aiReviewLoading={aiReviewLoading}
+              aiReviewError={aiReviewError}
+              aiSuggestion={aiSuggestion}
+              onRunAiCheck={handleAiCheck}
+              applyAiRubricScores={applyAiRubricScores}
+              applyAiFeedback={applyAiFeedback}
+              rubricCriteria={rubricCriteria}
+              rubricTotal={rubricTotal}
+              currentRubric={currentRubric}
+              onCancel={() => setReviewMode("text")}
+            />
+          ) : reviewMode === "planning" ? (
+            <PlanningAndAiFeedbackWorkspace
+              planningMessages={planningChatMessages}
+              aiFeedbackHistory={studentAiFeedbackHistory}
+            />
+          ) : reviewMode === "writing" ? (
+            <WritingBehaviourWorkspace
+              submission={submission}
+              writingEvents={writingReplayEvents}
+              copyPasteLogs={copyPasteLogs}
+              focusLossLogs={focusLossLogs}
+              integrityLogs={integrityLogs}
+            />
+          ) : reviewMode === "rubric" ? (
+            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
+              <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <ClipboardList className="w-4 h-4 text-blue-700 shrink-0" />
+
+                    <div className="min-w-0">
+                      <h2 className="font-serif text-base font-bold text-slate-950 truncate">
+                        Rubric Grading Workspace
+                        {currentRubric?.title && (
+                          <span className="font-sans text-xs font-bold text-slate-400 ml-2">
+                            · {currentRubric.title}
+                          </span>
+                        )}
+                      </h2>
+
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Grade one criterion at a time. AI suggestions are optional.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
+                {currentRubric ? (
+                  <RubricScorePanel
+                    rubric={currentRubric}
+                    rubricCriteria={rubricCriteria}
+                    rubricScores={rubricScores}
+                    rubricScoreTotal={rubricScoreTotal}
+                    rubricTotal={rubricTotal}
+                    gradedCriteriaCount={gradedCriteriaCount}
+                    selectBand={selectBand}
+                    adjustCriterionScore={adjustCriterionScore}
+                    updateCriterionScore={updateCriterionScore}
+                    updateCriterionComment={updateCriterionComment}
+                    finalOverrideEnabled={finalOverrideEnabled}
+                    setFinalOverrideEnabled={setFinalOverrideEnabled}
+                    finalOverride={finalOverride}
+                    setFinalOverride={setFinalOverride}
+                    aiSuggestion={aiSuggestion}
+                    applyAiRubricScores={applyAiRubricScores}
+                  />
+                ) : (
+                  <ManualScorePanel
+                    manualScore={manualScore}
+                    setManualScore={setManualScore}
+                    aiSuggestion={aiSuggestion}
+                    applyAiRubricScores={applyAiRubricScores}
+                  />
+                )}
+              </div>
+            </section>
+          ) : (
+            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
+              <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="w-4 h-4 text-blue-700 shrink-0" />
+
+                    <div className="min-w-0">
+                      <h2 className="font-serif text-base font-bold text-slate-950">
+                        Student Text
+                      </h2>
+
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Select text to reveal annotation tools.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5">
+                      <Calendar className="h-3.5 w-3.5 text-slate-400" />
+
+                      <span className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+                        Submitted
+                      </span>
+
+                      <span className="text-[10px] font-mono font-bold text-slate-700">
+                        {formatSubmittedDateTime(
+                          submission.resubmittedAt ||
+                            submission.submittedAt ||
+                            submission.createdAt
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5">
+                      <FileText className="h-3.5 w-3.5 text-slate-400" />
+
+                      <span className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+                        Words
+                      </span>
+
+                      <span className="text-[10px] font-mono font-bold text-slate-700">
+                        {wordCount}
+                      </span>
+                    </div>
+
+                    {annotationMessage && (
+                      <span className="text-[10px] font-mono font-bold text-blue-700">
+                        {annotationMessage}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                ref={studentTextRef}
+                onMouseUp={captureSelectedText}
+                className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] px-5 py-5 text-[13px] font-mono text-slate-700 leading-7 whitespace-pre-wrap select-text cursor-text"
+              >
+                <div className="max-w-[900px] mx-auto w-full">
+                  {renderAnnotatedText(
+                    submissionText,
+                    annotations,
+                    deleteAnnotation
+                  )}
+                </div>
+              </div>
+            </section>
+              )}
+            </div>
+          </div>
+
+          <aside className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden h-full min-h-0 flex flex-col">
+            <div className="shrink-0 px-4 py-3 border-b border-slate-100">
+              <ReviewPanelHeader />
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-4">
+              <FeedbackPanel feedback={feedback} setFeedback={setFeedback} />
+            </div>
+
+            <ReviewActionBar
+              currentRubric={currentRubric}
+              finalDisplayedScore={finalDisplayedScore}
+              saveMessage={saveMessage}
+            />
+          </aside>
+        </div>
+      </div>
+
+      {selectedText && selectionToolbar && reviewMode === "text" && (
+        <FloatingAnnotationToolbar
+          position={selectionToolbar}
+          selectedText={selectedText}
+          annotationComment={annotationComment}
+          setAnnotationComment={setAnnotationComment}
+          addAnnotation={addAnnotation}
+          onClose={clearSelectionState}
+        />
+      )}
+    </div>
+  );
+});
+
+function EmptyEvidenceState({ title, description }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-[#F8FAFC] p-8 text-center">
+      <Info className="w-7 h-7 text-slate-300 mx-auto" />
+      <h3 className="font-serif text-base font-bold text-slate-900 mt-3">{title}</h3>
+      <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">{description}</p>
+    </div>
+  );
+}
+
+function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+        <div className="flex items-center gap-2">
+          <MessageSquare className="w-4 h-4 text-cyan-700 shrink-0" />
+          <div>
+            <h2 className="font-serif text-base font-bold text-slate-950">Planning Chat & Student AI Feedback</h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">Review the student’s planning conversation and the AI feedback available during drafting.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
+        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4 max-w-[1300px] mx-auto">
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Planning chat</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">Conversation used to plan and brainstorm the assignment.</p>
+              </div>
+              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-1 text-[10px] font-mono font-bold text-cyan-700">{planningMessages.length} messages</span>
+            </div>
+
+            <div className="p-4 space-y-3 max-h-[58vh] overflow-y-auto">
+              {planningMessages.length === 0 ? (
+                <EmptyEvidenceState title="No planning chat saved" description="No planning or brainstorming conversation was attached to this submission." />
+              ) : (
+                planningMessages.map((message, index) => {
+                  const role = String(message.role || "student").toLowerCase();
+                  const isStudent = ["student", "user", "learner"].includes(role);
+                  return (
+                    <div key={message.id || index} className={`flex ${isStudent ? "justify-end" : "justify-start"}`}>
+                      <div className={`max-w-[88%] rounded-2xl border px-3 py-2.5 ${isStudent ? "border-blue-200 bg-blue-50 text-blue-950" : "border-slate-200 bg-[#F8FAFC] text-slate-800"}`}>
+                        <div className="flex items-center justify-between gap-3 mb-1">
+                          <span className="text-[9px] font-mono font-black uppercase tracking-wider opacity-60">{isStudent ? "Student" : "AI coach"}</span>
+                          {message.createdAt && <span className="text-[9px] font-mono opacity-50">{formatDateTime(message.createdAt)}</span>}
+                        </div>
+                        <p className="text-xs leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+            <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Student AI draft checks</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">Each saved AI response shown to the student while reviewing the draft.</p>
+              </div>
+              <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-mono font-bold text-violet-700">{aiFeedbackHistory.length} checks</span>
+            </div>
+
+            <div className="p-4 space-y-3 max-h-[58vh] overflow-y-auto">
+              {aiFeedbackHistory.length === 0 ? (
+                <EmptyEvidenceState title="No AI feedback history" description="The student did not request AI draft feedback, or no feedback history was saved." />
+              ) : (
+                aiFeedbackHistory.map((item, index) => (
+                  <StudentAiFeedbackCard
+                    key={item.id || index}
+                    item={item}
+                    index={index}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function getAiFeedbackIssueTone(severity = "medium") {
+  const normalized = String(severity).toLowerCase();
+
+  if (normalized === "major") {
+    return {
+      badge:
+        "border-red-200 bg-red-50 text-red-700",
+      panel:
+        "border-red-100 bg-red-50/60",
+    };
+  }
+
+  if (normalized === "minor") {
+    return {
+      badge:
+        "border-amber-200 bg-amber-50 text-amber-700",
+      panel:
+        "border-amber-100 bg-amber-50/60",
+    };
+  }
+
+  return {
+    badge:
+      "border-orange-200 bg-orange-50 text-orange-700",
+    panel:
+      "border-orange-100 bg-orange-50/60",
+  };
+}
+
+function CompactAiFeedbackSection({
+  title,
+  count,
+  icon: Icon,
+  tone,
+  open,
+  onToggle,
+  children,
+}) {
+  const toneClasses = {
+    emerald: {
+      icon: "border-emerald-200 bg-emerald-50 text-emerald-700",
+      count: "bg-emerald-100 text-emerald-700",
+    },
+    orange: {
+      icon: "border-orange-200 bg-orange-50 text-orange-700",
+      count: "bg-orange-100 text-orange-700",
+    },
+    blue: {
+      icon: "border-blue-200 bg-blue-50 text-blue-700",
+      count: "bg-blue-100 text-blue-700",
+    },
+  };
+
+  const classes =
+    toneClasses[tone] || toneClasses.blue;
+
+  return (
+    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-colors hover:bg-slate-50"
+      >
+        <div className="flex items-center gap-2">
+          <span
+            className={`flex h-7 w-7 items-center justify-center rounded-lg border ${classes.icon}`}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+
+          <span className="text-[11px] font-bold text-slate-900">
+            {title}
+          </span>
+
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[8px] font-mono font-black ${classes.count}`}
+          >
+            {count}
+          </span>
+        </div>
+
+        <ChevronDown
+          className={`h-3.5 w-3.5 text-slate-400 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-100 p-3">
+          {children}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CompactAiIssue({
+  issue,
+  index,
+  open,
+  onToggle,
+}) {
+  const tone = getAiFeedbackIssueTone(
+    issue.severity
+  );
+
+  const preview =
+    issue.problem ||
+    issue.suggestion ||
+    issue.excerpt ||
+    `Issue ${index + 1}`;
+
+  return (
+    <div
+      className={`overflow-hidden rounded-lg border ${tone.panel}`}
+    >
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="flex w-full items-start justify-between gap-3 px-3 py-2.5 text-left"
+      >
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-900">
+              Issue {index + 1}
+            </span>
+
+            <span
+              className={`rounded-full border px-1.5 py-0.5 text-[7px] font-mono font-black uppercase ${tone.badge}`}
+            >
+              {issue.severity || "medium"}
+            </span>
+          </div>
+
+          <p className="mt-1 line-clamp-1 text-[10px] text-slate-600">
+            {preview}
+          </p>
+        </div>
+
+        <ChevronDown
+          className={`mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {open && (
+        <div className="space-y-2 border-t border-white/80 px-3 py-2.5">
+          {issue.excerpt && (
+            <div className="rounded-lg bg-white/90 px-2.5 py-2">
+              <p className="font-mono text-[7px] font-black uppercase text-slate-400">
+                Draft excerpt
+              </p>
+
+              <p className="mt-1 line-clamp-3 text-[10px] font-semibold leading-4 text-slate-700">
+                “{issue.excerpt}”
+              </p>
+            </div>
+          )}
+
+          {issue.problem && (
+            <div>
+              <p className="font-mono text-[7px] font-black uppercase text-orange-600">
+                Problem
+              </p>
+
+              <p className="mt-1 text-[10px] leading-4 text-slate-700">
+                {issue.problem}
+              </p>
+            </div>
+          )}
+
+          {issue.suggestion && (
+            <div className="rounded-lg bg-white/80 px-2.5 py-2">
+              <p className="font-mono text-[7px] font-black uppercase text-blue-600">
+                AI suggestion
+              </p>
+
+              <p className="mt-1 text-[10px] leading-4 text-slate-700">
+                {issue.suggestion}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StudentAiFeedbackCard({ item, index }) {
+  const [expanded, setExpanded] =
+    useState(false);
+
+  const [openSection, setOpenSection] =
+    useState("issues");
+
+  const [openIssueIndex, setOpenIssueIndex] =
+    useState(null);
+
+  const overall = String(
+    item.overall || ""
+  ).trim();
+
+  const strengths = safeArray(
+    item.strengths
+  );
+
+  const issues = safeArray(item.issues);
+
+  const nextSteps = safeArray(
+    item.nextSteps
+  );
+
+  const rawText = String(
+    item.rawText || ""
+  ).trim();
+
+  const hasStructuredDetails =
+    strengths.length > 0 ||
+    issues.length > 0 ||
+    nextSteps.length > 0;
+
+  const summaryText =
+    overall ||
+    rawText ||
+    "The AI draft check was recorded, but no readable response was found.";
+
+  const visibleSummary =
+    summaryText.length > 330
+      ? `${summaryText
+          .slice(0, 330)
+          .trim()}…`
+      : summaryText;
+
+  function toggleSection(section) {
+    setOpenSection((current) =>
+      current === section ? "" : section
+    );
+  }
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-violet-200 bg-white shadow-sm">
+      <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 to-white px-3.5 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700">
+              <Bot className="h-4 w-4" />
+            </div>
+
+            <div className="min-w-0">
+              <p className="truncate font-mono text-[9px] font-black uppercase tracking-wider text-violet-700">
+                AI draft check #{index + 1}
+              </p>
+
+              <p className="mt-0.5 truncate text-[9px] text-slate-500">
+                Feedback shown to the student.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            {item.draftWordCount !== null &&
+              item.draftWordCount !==
+                undefined && (
+                <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[8px] font-mono font-bold text-slate-500">
+                  {item.draftWordCount} words
+                </span>
+              )}
+
+            {item.saved && (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[8px] font-bold text-emerald-700">
+                Saved
+              </span>
+            )}
+
+            {item.createdAt && (
+              <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[8px] font-mono text-slate-400">
+                {formatDateTime(
+                  item.createdAt
+                )}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="p-3">
+        <div className="rounded-xl border border-violet-100 bg-violet-50/40 px-3 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3 w-3 text-violet-700" />
+
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-violet-600">
+              Overall AI feedback
+            </p>
+          </div>
+
+          <p className="mt-1.5 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-slate-700">
+            {visibleSummary}
+          </p>
+        </div>
+
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 text-[8px] font-bold text-emerald-700">
+            <CheckSquare className="h-3 w-3" />
+            {strengths.length} strengths
+          </span>
+
+          <span className="inline-flex items-center gap-1 rounded-full border border-orange-200 bg-orange-50 px-2 py-1 text-[8px] font-bold text-orange-700">
+            <AlertTriangle className="h-3 w-3" />
+            {issues.length} issues
+          </span>
+
+          <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-[8px] font-bold text-blue-700">
+            <BookOpen className="h-3 w-3" />
+            {nextSteps.length} next steps
+          </span>
+
+          <button
+            type="button"
+            onClick={() =>
+              setExpanded(
+                (value) => !value
+              )
+            }
+            className="ml-auto inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-white px-2.5 py-1.5 text-[9px] font-bold text-violet-700 transition-colors hover:bg-violet-50"
+          >
+            {expanded
+              ? "Hide details"
+              : "View details"}
+
+            <ChevronDown
+              className={`h-3 w-3 transition-transform ${
+                expanded
+                  ? "rotate-180"
+                  : ""
+              }`}
+            />
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="max-h-[360px] space-y-2 overflow-y-auto border-t border-violet-100 bg-[#FBFAFF] p-3">
+          {strengths.length > 0 && (
+            <CompactAiFeedbackSection
+              title="Strengths"
+              count={strengths.length}
+              icon={CheckSquare}
+              tone="emerald"
+              open={openSection === "strengths"}
+              onToggle={() =>
+                toggleSection("strengths")
+              }
+            >
+              <div className="space-y-1.5">
+                {strengths.map(
+                  (strength, strengthIndex) => (
+                    <div
+                      key={`strength_${strengthIndex}`}
+                      className="flex items-start gap-2 rounded-lg bg-emerald-50/70 px-2.5 py-2"
+                    >
+                      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[7px] font-black text-white">
+                        {strengthIndex + 1}
+                      </span>
+
+                      <p className="text-[10px] leading-4 text-slate-700">
+                        {strength}
+                      </p>
+                    </div>
+                  )
+                )}
+              </div>
+            </CompactAiFeedbackSection>
+          )}
+
+          {issues.length > 0 && (
+            <CompactAiFeedbackSection
+              title="Areas to improve"
+              count={issues.length}
+              icon={AlertTriangle}
+              tone="orange"
+              open={openSection === "issues"}
+              onToggle={() =>
+                toggleSection("issues")
+              }
+            >
+              <div className="space-y-1.5">
+                {issues.map(
+                  (issue, issueIndex) => (
+                    <CompactAiIssue
+                      key={
+                        issue.id ||
+                        `issue_${issueIndex}`
+                      }
+                      issue={issue}
+                      index={issueIndex}
+                      open={
+                        openIssueIndex ===
+                        issueIndex
+                      }
+                      onToggle={() =>
+                        setOpenIssueIndex(
+                          (current) =>
+                            current === issueIndex
+                              ? null
+                              : issueIndex
+                        )
+                      }
+                    />
+                  )
+                )}
+              </div>
+            </CompactAiFeedbackSection>
+          )}
+
+          {nextSteps.length > 0 && (
+            <CompactAiFeedbackSection
+              title="Next steps"
+              count={nextSteps.length}
+              icon={BookOpen}
+              tone="blue"
+              open={openSection === "nextSteps"}
+              onToggle={() =>
+                toggleSection("nextSteps")
+              }
+            >
+              <div className="space-y-1.5">
+                {nextSteps.map(
+                  (step, stepIndex) => (
+                    <div
+                      key={`next_step_${stepIndex}`}
+                      className="flex items-start gap-2 rounded-lg bg-blue-50/70 px-2.5 py-2"
+                    >
+                      <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[7px] font-black text-white">
+                        {stepIndex + 1}
+                      </span>
+
+                      <p className="text-[10px] leading-4 text-slate-700">
+                        {step}
+                      </p>
+                    </div>
+                  )
+                )}
+              </div>
+            </CompactAiFeedbackSection>
+          )}
+
+          {!hasStructuredDetails &&
+            rawText &&
+            rawText !== overall && (
+              <section className="rounded-xl border border-slate-200 bg-white p-3">
+                <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+                  Raw AI response
+                </p>
+
+                <p className="mt-1.5 whitespace-pre-wrap text-[10px] leading-4 text-slate-700">
+                  {rawText}
+                </p>
+              </section>
+            )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatDuration(totalSeconds = 0) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const minutes = Math.floor(safeSeconds / 60);
+  const seconds = safeSeconds % 60;
+
+  if (minutes <= 0) return `${seconds}s`;
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function getEventSnapshot(event, fallback = "") {
+  return (
+    event?.snapshot ||
+    event?.draftText ||
+    event?.text ||
+    event?.content ||
+    event?.details?.draftSnapshot ||
+    fallback ||
+    ""
+  );
+}
+
+function getEventLabel(event) {
+  const safeEvent = event || {};
+
+  const type = String(
+    safeEvent.type || safeEvent.action || "event"
+  ).toLowerCase();
+
+  if (type.includes("paste")) return "Paste event";
+  if (type.includes("focus")) return "Focus changed";
+  if (type.includes("delete")) return "Text deleted";
+  if (type.includes("replace")) return "Text revised";
+  if (type.includes("insert")) return "Text added";
+  if (type.includes("save")) return "Draft saved";
+  if (type.includes("submit")) return "Submitted";
+
+  return safeEvent.type || safeEvent.action || "Writing event";
+}
+
+
+function isPasteReplayEvent(event) {
+  const type = String(
+    event?.type || event?.action || event?.eventGroup || ""
+  ).toLowerCase();
+
+  return type.includes("paste");
+}
+
+const PLAYBACK_INTRA_EVENT_DELAY_MS = 60;
+const PLAYBACK_MAX_FRAME_DELAY_MS = 1200;
+const LARGE_PASTE_LIMIT = 80;
+
+function clampNumber(value, minimum, maximum) {
+  return Math.min(
+    maximum,
+    Math.max(minimum, Number(value || 0))
+  );
+}
+
+function getEventTimeMs(event) {
+  const parsed = Date.parse(
+    event?.timestamp || event?.createdAt || ""
+  );
+
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getStableEventKey(event, index = 0) {
+  return String(
+    event?.id ||
+      [
+        event?.timestamp || event?.createdAt || "no-time",
+        event?.type || event?.action || "event",
+        event?.start ?? "",
+        event?.end ?? "",
+        String(event?.insertedText || "").length,
+        String(event?.removedText || "").length,
+        index,
+      ].join(":")
+  );
+}
+
+function getEventSemanticSignature(event) {
+  return [
+    event?.timestamp || event?.createdAt || "",
+    event?.type || event?.action || "",
+    event?.start ?? event?.position ?? "",
+    event?.end ?? "",
+    event?.insertedText || "",
+    event?.removedText || "",
+  ].join("|");
+}
+
+function dedupeReplayEvents(events = []) {
+  const seenIds = new Set();
+  const seenSignatures = new Set();
+
+  return safeArray(events).filter((event, index) => {
+    if (!event) return false;
+
+    const id = event.id ? String(event.id) : "";
+    const signature = getEventSemanticSignature(event);
+
+    if (id && seenIds.has(id)) return false;
+    if (signature && seenSignatures.has(signature)) return false;
+
+    if (id) seenIds.add(id);
+    if (signature) seenSignatures.add(signature);
+
+    event.__replayKey = getStableEventKey(event, index);
+    return true;
+  });
+}
+
+function isLargeSingleInsertEvent(event) {
+  return (
+    String(event?.type || "").toLowerCase() === "insert" &&
+    String(event?.insertedText || "").length >=
+      LARGE_PASTE_LIMIT &&
+    !String(event?.removedText || "")
+  );
+}
+
+function isPasteLikeWritingEvent(event) {
+  const type = String(
+    event?.type ||
+      event?.action ||
+      event?.eventGroup ||
+      ""
+  ).toLowerCase();
+
+  return Boolean(
+    type.includes("paste") ||
+      event?.flagged ||
+      isLargeSingleInsertEvent(event)
+  );
+}
+
+function hasStructuredPlaybackOperation(event) {
+  const start = Number(
+    event?.start ?? event?.position
+  );
+
+  return (
+    Number.isFinite(start) &&
+    (
+      String(event?.insertedText || "").length > 0 ||
+      String(event?.removedText || "").length > 0
+    )
+  );
+}
+
+function countPlaybackOperations(event) {
+  if (!event) return 1;
+
+  if (
+    isPasteLikeWritingEvent(event) ||
+    String(event.type || "").toLowerCase() === "delete"
+  ) {
+    return 1;
+  }
+
+  if (
+    String(event.type || "").toLowerCase() === "replace"
+  ) {
+    return Math.max(
+      1,
+      1 + String(event.insertedText || "").length
+    );
+  }
+
+  return Math.max(
+    1,
+    String(event.removedText || "").length +
+      String(event.insertedText || "").length
+  );
+}
+
+function getIntraEventDelayMs(
+  event,
+  nextEventTimeMs,
+  eventTimeMs
+) {
+  const operationCount = countPlaybackOperations(event);
+
+  if (operationCount <= 1) return 0;
+
+  if (
+    Number.isFinite(nextEventTimeMs) &&
+    Number.isFinite(eventTimeMs) &&
+    nextEventTimeMs > eventTimeMs
+  ) {
+    return Math.max(
+      0,
+      Math.min(
+        PLAYBACK_INTRA_EVENT_DELAY_MS,
+        (nextEventTimeMs - eventTimeMs) /
+          operationCount
+      )
+    );
+  }
+
+  return PLAYBACK_INTRA_EVENT_DELAY_MS;
+}
+
+function createPlaybackFramePusher(
+  frames,
+  firstEventTime
+) {
+  return ({
+    text,
+    label,
+    timeMs,
+    caret,
+    event,
+    pasteRange = null,
+  }) => {
+    frames.push({
+      id: `frame_${frames.length}_${event?.__replayKey || "start"}`,
+      text: String(text || ""),
+      label: label || "Writing event",
+      timeMs: Number.isFinite(timeMs)
+        ? timeMs
+        : frames.at(-1)?.timeMs || firstEventTime,
+      caret: Number.isFinite(caret)
+        ? caret
+        : String(text || "").length,
+      sourceEventId:
+        event?.id || event?.__replayKey || null,
+      sourceEventKey:
+        event?.__replayKey || null,
+      eventType:
+        event?.type || event?.action || "event",
+      eventGroup:
+        event?.eventGroup || "Writing",
+      pasteRange,
+    });
+  };
+}
+
+function applyPlaybackDeletion({
+  event,
+  text,
+  eventTimeMs,
+  operationIndex,
+  intraEventDelayMs,
+  pushFrame,
+}) {
+  const start = clampNumber(
+    event.start ?? event.position,
+    0,
+    text.length
+  );
+
+  const recordedEnd = Number(event.end);
+  const fallbackEnd =
+    start + String(event.removedText || "").length;
+
+  const end = clampNumber(
+    Number.isFinite(recordedEnd) &&
+      recordedEnd > start
+      ? recordedEnd
+      : fallbackEnd,
+    start,
+    text.length
+  );
+
+  const nextText =
+    text.slice(0, start) + text.slice(end);
+
+  pushFrame({
+    text: nextText,
+    label: `Deleted ${String(
+      event.removedText || ""
+    ).length} characters`,
+    timeMs:
+      eventTimeMs +
+      operationIndex * intraEventDelayMs,
+    caret: start,
+    event,
+  });
+
+  return nextText;
+}
+
+function applyPlaybackBulkInsert({
+  event,
+  text,
+  eventTimeMs,
+  operationIndex,
+  intraEventDelayMs,
+  pushFrame,
+}) {
+  const insertedText = String(
+    event.insertedText || ""
+  );
+
+  const start = clampNumber(
+    event.start ?? event.position,
+    0,
+    text.length
+  );
+
+  const nextText =
+    text.slice(0, start) +
+    insertedText +
+    text.slice(start);
+
+  pushFrame({
+    text: nextText,
+    label: `Pasted ${insertedText.length} characters`,
+    timeMs:
+      eventTimeMs +
+      operationIndex * intraEventDelayMs,
+    caret: start + insertedText.length,
+    event,
+    pasteRange: {
+      start,
+      end: start + insertedText.length,
+    },
+  });
+
+  return nextText;
+}
+
+function applyPlaybackCharacterInsertions({
+  event,
+  text,
+  eventTimeMs,
+  operationIndex,
+  intraEventDelayMs,
+  pushFrame,
+}) {
+  const insertedText = String(
+    event.insertedText || ""
+  );
+
+  const start = clampNumber(
+    event.start ?? event.position,
+    0,
+    text.length
+  );
+
+  let nextText = text;
+
+  for (
+    let index = 0;
+    index < insertedText.length;
+    index += 1
+  ) {
+    const character = insertedText[index];
+
+    const insertIndex = clampNumber(
+      start + index,
+      0,
+      nextText.length
+    );
+
+    nextText =
+      nextText.slice(0, insertIndex) +
+      character +
+      nextText.slice(insertIndex);
+
+    pushFrame({
+      text: nextText,
+      label: getEventLabel(event),
+      timeMs:
+        eventTimeMs +
+        (operationIndex + index) *
+          intraEventDelayMs,
+      caret: insertIndex + 1,
+      event,
+    });
+  }
+
+  return nextText;
+}
+
+function applyPlaybackEvent({
+  event,
+  eventTimeMs,
+  intraEventDelayMs,
+  text,
+  pushFrame,
+}) {
+  if (!event) return text;
+
+  if (!hasStructuredPlaybackOperation(event)) {
+    const snapshot = getEventSnapshot(event, "");
+
+    if (snapshot && snapshot !== text) {
+      pushFrame({
+        text: snapshot,
+        label: getEventLabel(event),
+        timeMs: eventTimeMs,
+        caret: snapshot.length,
+        event,
+      });
+
+      return snapshot;
+    }
+
+    return text;
+  }
+
+  let nextText = text;
+  let operationIndex = 0;
+
+  if (String(event.removedText || "")) {
+    nextText = applyPlaybackDeletion({
+      event,
+      text: nextText,
+      eventTimeMs,
+      operationIndex,
+      intraEventDelayMs,
+      pushFrame,
+    });
+
+    operationIndex += 1;
+  }
+
+  if (!String(event.insertedText || "")) {
+    return nextText;
+  }
+
+  if (isPasteLikeWritingEvent(event)) {
+    return applyPlaybackBulkInsert({
+      event,
+      text: nextText,
+      eventTimeMs,
+      operationIndex,
+      intraEventDelayMs,
+      pushFrame,
+    });
+  }
+
+  return applyPlaybackCharacterInsertions({
+    event,
+    text: nextText,
+    eventTimeMs,
+    operationIndex,
+    intraEventDelayMs,
+    pushFrame,
+  });
+}
+
+function finalizePlaybackFrameDelays(frames) {
+  const startTime = Number(frames[0]?.timeMs) || 0;
+
+  return frames.map((frame, index) => {
+    const currentTime = Number(frame.timeMs);
+    const nextTime = Number(frames[index + 1]?.timeMs);
+
+    return {
+      ...frame,
+      elapsedMs: Number.isFinite(currentTime)
+        ? Math.max(0, currentTime - startTime)
+        : 0,
+      delayMs:
+        Number.isFinite(currentTime) &&
+        Number.isFinite(nextTime)
+          ? Math.max(0, nextTime - currentTime)
+          : 0,
+    };
+  });
+}
+
+function buildPlaybackFrames(
+  writingEvents,
+  finalText = ""
+) {
+  const events = dedupeReplayEvents(
+    safeArray(writingEvents)
+      .filter(
+        (event) =>
+          event?.phase !== "coach_outline"
+      )
+      .sort(
+        (a, b) =>
+          (getEventTimeMs(a) || 0) -
+          (getEventTimeMs(b) || 0)
+      )
+  );
+
+  const firstEventTime =
+    events
+      .map(getEventTimeMs)
+      .find((time) => Number.isFinite(time)) ||
+    Date.now();
+
+  let text = "";
+
+  const frames = [
+    {
+      id: "frame_start",
+      text: "",
+      label: "Start",
+      timeMs: firstEventTime,
+      caret: 0,
+      sourceEventId: null,
+      sourceEventKey: null,
+      eventType: "start",
+      eventGroup: "Writing",
+      pasteRange: null,
+    },
+  ];
+
+  const pushFrame =
+    createPlaybackFramePusher(
+      frames,
+      firstEventTime
+    );
+
+  events.forEach((event, eventIndex) => {
+    const eventTimeMs =
+      getEventTimeMs(event) ??
+      frames.at(-1)?.timeMs ??
+      firstEventTime;
+
+    const nextEventTimeMs = events
+      .slice(eventIndex + 1)
+      .map(getEventTimeMs)
+      .find((time) => Number.isFinite(time));
+
+    const intraEventDelayMs =
+      getIntraEventDelayMs(
+        event,
+        nextEventTimeMs,
+        eventTimeMs
+      );
+
+    text = applyPlaybackEvent({
+      event,
+      eventTimeMs,
+      intraEventDelayMs,
+      text,
+      pushFrame,
+    });
+  });
+
+  if (finalText && finalText !== text) {
+    pushFrame({
+      text: finalText,
+      label: "Current final version",
+      timeMs:
+        frames.at(-1)?.timeMs || firstEventTime,
+      caret: finalText.length,
+      event: {
+        id: "final_version",
+        __replayKey: "final_version",
+        type: "final",
+        eventGroup: "Submission",
+      },
+    });
+  }
+
+  return {
+    events,
+    frames: finalizePlaybackFrameDelays(
+      frames
+    ),
+  };
+}
+
+function formatPlaybackDuration(milliseconds) {
+  const totalSeconds = Math.max(
+    0,
+    Math.round(
+      Number(milliseconds || 0) / 1000
+    )
+  );
+
+  const hours = Math.floor(
+    totalSeconds / 3600
+  );
+
+  const minutes = Math.floor(
+    (totalSeconds % 3600) / 60
+  );
+
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(
+      2,
+      "0"
+    )}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${String(minutes).padStart(
+    2,
+    "0"
+  )}:${String(seconds).padStart(2, "0")}`;
+}
+
+function PlaybackFrameText({ frame }) {
+  const text = String(frame?.text || "");
+  const caret = Number(frame?.caret);
+  const pasteRange = frame?.pasteRange;
+
+  const hasPasteRange =
+    pasteRange &&
+    Number.isFinite(pasteRange.start) &&
+    Number.isFinite(pasteRange.end);
+
+  const beforePaste = hasPasteRange
+    ? text.slice(0, pasteRange.start)
+    : text;
+
+  const pastedText = hasPasteRange
+    ? text.slice(
+        pasteRange.start,
+        pasteRange.end
+      )
+    : "";
+
+  const afterPaste = hasPasteRange
+    ? text.slice(pasteRange.end)
+    : "";
+
+  function renderWithCaret(
+    value,
+    offset = 0
+  ) {
+    const localCaret =
+      Number.isFinite(caret)
+        ? caret - offset
+        : -1;
+
+    if (
+      localCaret < 0 ||
+      localCaret > value.length
+    ) {
+      return value;
+    }
+
+    return (
+      <>
+        {value.slice(0, localCaret)}
+        <span
+          aria-hidden="true"
+          className="mx-[1px] inline-block h-[1.2em] w-[2px] animate-pulse bg-amber-600 align-middle"
+        />
+        {value.slice(localCaret)}
+      </>
+    );
+  }
+
+  if (!hasPasteRange) {
+    return <>{renderWithCaret(text)}</>;
+  }
+
+  return (
+    <>
+      {renderWithCaret(beforePaste, 0)}
+
+      <mark className="rounded bg-violet-200 px-0.5 text-violet-950 ring-2 ring-violet-300/70">
+        {renderWithCaret(
+          pastedText,
+          pasteRange.start
+        )}
+      </mark>
+
+      {renderWithCaret(
+        afterPaste,
+        pasteRange.end
+      )}
+    </>
+  );
+}
+
+function WritingBehaviourWorkspace({
+  submission,
+  writingEvents,
+  copyPasteLogs,
+  focusLossLogs,
+  integrityLogs,
+}) {
+  const finalText = getSubmissionText(submission);
+  const finalWordCount = countWords(finalText);
+
+  const playbackData = useMemo(
+    () =>
+      buildPlaybackFrames(
+        writingEvents,
+        finalText
+      ),
+    [writingEvents, finalText]
+  );
+
+  const replayEvents = playbackData.events;
+  const frames = playbackData.frames;
+
+  const [frameIndex, setFrameIndex] =
+    useState(0);
+
+  const [isPlaying, setIsPlaying] =
+    useState(false);
+
+  const [playbackSpeed, setPlaybackSpeed] =
+    useState(5);
+
+  const [processCheckOpen, setProcessCheckOpen] =
+    useState(false);
+
+  const [timelineOpen, setTimelineOpen] =
+    useState(true);
+
+  useEffect(() => {
+    setFrameIndex(0);
+    setIsPlaying(false);
+  }, [submission?.id, frames.length]);
+
+  useEffect(() => {
+    if (
+      !isPlaying ||
+      frames.length <= 1
+    ) {
+      return undefined;
+    }
+
+    if (frameIndex >= frames.length - 1) {
+      setIsPlaying(false);
+      return undefined;
+    }
+
+    const rawDelay = Math.max(
+      0,
+      Number(
+        frames[frameIndex]?.delayMs || 0
+      )
+    );
+
+    const delay = Math.max(
+      15,
+      Math.min(
+        rawDelay,
+        PLAYBACK_MAX_FRAME_DELAY_MS
+      ) / Math.max(1, playbackSpeed)
+    );
+
+    const timer = window.setTimeout(() => {
+      setFrameIndex((current) => {
+        if (current >= frames.length - 1) {
+          setIsPlaying(false);
+          return current;
+        }
+
+        return current + 1;
+      });
+    }, delay);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    isPlaying,
+    frameIndex,
+    playbackSpeed,
+    frames,
+  ]);
+
+  const activeFrame =
+    frames[frameIndex] || frames[0];
+
+  const activeEvent =
+    replayEvents.find(
+      (event) =>
+        String(
+          event.id ||
+            event.__replayKey
+        ) ===
+        String(
+          activeFrame?.sourceEventId ||
+            activeFrame?.sourceEventKey
+        )
+    ) || null;
+
+  const firstTimestamp =
+    replayEvents[0]?.timestamp ||
+    replayEvents[0]?.createdAt;
+
+  const lastTimestamp =
+    replayEvents.at(-1)?.timestamp ||
+    replayEvents.at(-1)?.createdAt;
+
+  const calculatedDurationSeconds =
+    firstTimestamp && lastTimestamp
+      ? Math.max(
+          0,
+          Math.floor(
+            (new Date(lastTimestamp).getTime() -
+              new Date(firstTimestamp).getTime()) /
+              1000
+          )
+        )
+      : 0;
+
+  const activeWritingSeconds = Number(
+    submission?.writingSessionDurationSeconds ||
+      submission?.activeWritingSeconds ||
+      calculatedDurationSeconds ||
+      0
+  );
+
+  const editEvents = replayEvents.filter(
+    (event) => {
+      const type = String(
+        event.type || event.action || ""
+      ).toLowerCase();
+
+      return (
+        type.includes("insert") ||
+        type.includes("delete") ||
+        type.includes("replace") ||
+        type.includes("edit") ||
+        type.includes("paste")
+      );
+    }
+  );
+
+  const deletionCount = editEvents.reduce(
+    (sum, event) =>
+      sum +
+      Number(
+        event.deletedChars ||
+          String(
+            event.removedText || ""
+          ).length
+      ),
+    0
+  );
+
+  const insertionCount = editEvents.reduce(
+    (sum, event) =>
+      sum +
+      Number(
+        event.addedChars ||
+          String(
+            event.insertedText || ""
+          ).length
+      ),
+    0
+  );
+
+  const revisionCount = editEvents.filter(
+    (event) =>
+      String(event.removedText || "") ||
+      String(event.type || "")
+        .toLowerCase()
+        .includes("replace")
+  ).length;
+
+  const pasteEvents = dedupeReplayEvents([
+    ...safeArray(copyPasteLogs),
+    ...replayEvents.filter(
+      isPasteLikeWritingEvent
+    ),
+  ]);
+
+  const focusEvents = dedupeReplayEvents(
+    safeArray(focusLossLogs)
+  );
+
+  const integrityEventList =
+    dedupeReplayEvents(
+      safeArray(integrityLogs)
+    );
+
+  const totalTypedCharacters = Math.max(
+    insertionCount,
+    finalText.length
+  );
+
+  const typingRate =
+    activeWritingSeconds > 0
+      ? Math.round(
+          totalTypedCharacters /
+            Math.max(
+              1,
+              activeWritingSeconds / 60
+            )
+        )
+      : 0;
+
+  const revisionRate =
+    finalWordCount > 0
+      ? Number(
+          (
+            (revisionCount /
+              finalWordCount) *
+            100
+          ).toFixed(1)
+        )
+      : 0;
+
+  const firstWritingFrame = frames.find(
+    (frame) =>
+      frame.text &&
+      frame.eventType !== "start"
+  );
+
+  const firstSnapshot =
+    firstWritingFrame?.text || "";
+
+  const textSurvival =
+    firstSnapshot && finalText
+      ? Math.min(
+          100,
+          Math.round(
+            (firstSnapshot
+              .split(/\s+/)
+              .filter((word) =>
+                finalText
+                  .toLowerCase()
+                  .includes(
+                    word.toLowerCase()
+                  )
+              ).length /
+              Math.max(
+                1,
+                firstSnapshot
+                  .split(/\s+/)
+                  .filter(Boolean).length
+              )) *
+              100
+          )
+        )
+      : null;
+
+  const hasEnoughData =
+    replayEvents.length >= 8 &&
+    activeWritingSeconds >= 60;
+
+  const totalElapsedMs =
+    frames.at(-1)?.elapsedMs || 0;
+
+  function findFrameForEvent(event) {
+    const eventId = String(
+      event?.id ||
+        event?.__replayKey ||
+        ""
+    );
+
+    const index = frames.findIndex(
+      (frame) =>
+        String(
+          frame.sourceEventId ||
+            frame.sourceEventKey ||
+            ""
+        ) === eventId
+    );
+
+    return index >= 0 ? index : 0;
+  }
+
+  function jumpToEvent(event) {
+    setFrameIndex(
+      findFrameForEvent(event)
+    );
+    setIsPlaying(false);
+  }
+
+  function stepFrame(direction) {
+    setIsPlaying(false);
+
+    setFrameIndex((current) =>
+      clampNumber(
+        current + direction,
+        0,
+        frames.length - 1
+      )
+    );
+  }
+
+  return (
+    <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-2">
+            <Activity className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+
+            <div>
+              <h2 className="font-serif text-base font-bold text-slate-950">
+                Writing Journey & Replay
+              </h2>
+
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Exact assignment-specific writing operations recorded from the student draft.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <EvidencePill
+              icon={Clock3}
+              label={formatDuration(
+                activeWritingSeconds
+              )}
+            />
+
+            <EvidencePill
+              icon={FileText}
+              label={`${finalWordCount} final words`}
+            />
+
+            <EvidencePill
+              icon={Activity}
+              label={`${editEvents.length} edits`}
+            />
+
+            <EvidencePill
+              icon={Copy}
+              label={`${pasteEvents.length} paste`}
+              alert={pasteEvents.length > 0}
+            />
+
+            <EvidencePill
+              icon={MousePointerClick}
+              label={`${focusEvents.length} focus`}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
+        {replayEvents.length === 0 ? (
+          <EmptyEvidenceState
+            title="No writing journey data"
+            description="New student drafting activity will appear here after Step 2 saves structured writing events."
+          />
+        ) : (
+          <div className="mx-auto max-w-[1350px] space-y-4">
+            <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[390px_minmax(0,1fr)]">
+              <div className="space-y-4">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <button
+                    type="button"
+                    aria-expanded={processCheckOpen}
+                    onClick={() =>
+                      setProcessCheckOpen((current) => !current)
+                    }
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+                        <Gauge className="h-4 w-4" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Writing process check
+                        </h3>
+
+                        <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                          Evidence summary, not an automatic misconduct decision.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span
+                        className={`rounded-full border px-2 py-1 text-[9px] font-mono font-bold ${
+                          hasEnoughData
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : "border-slate-200 bg-slate-50 text-slate-500"
+                        }`}
+                      >
+                        {hasEnoughData
+                          ? "Usable"
+                          : "Limited"}
+                      </span>
+
+                      {processCheckOpen ? (
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      )}
+                    </div>
+                  </button>
+
+                  {processCheckOpen && (
+                    <div className="border-t border-slate-100 p-4">
+                      <div className="grid grid-cols-2 gap-2">
+                        <ProcessMetric
+                          label="Typing rate"
+                          value={
+                            typingRate > 0
+                              ? `${typingRate} chars/min`
+                              : "Not enough data"
+                          }
+                          detail="Approximate active typing pace."
+                        />
+
+                        <ProcessMetric
+                          label="Local revisions"
+                          value={`${revisionRate}/100w`}
+                          detail={`${revisionCount} revision events recorded.`}
+                        />
+
+                        <ProcessMetric
+                          label="Characters added"
+                          value={insertionCount}
+                          detail={`${deletionCount} characters deleted.`}
+                        />
+
+                        <ProcessMetric
+                          label="Text survival"
+                          value={
+                            textSurvival === null
+                              ? "Not enough data"
+                              : `${textSurvival}%`
+                          }
+                          detail="How much early text remains in the final draft."
+                        />
+                      </div>
+
+                      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+                        <p className="text-[10px] leading-relaxed text-blue-800">
+                          {pasteEvents.length > 0
+                            ? `${replayEvents.length} unique writing events were reconstructed into ${frames.length} replay frames. ${pasteEvents.length} paste event${pasteEvents.length === 1 ? " was" : "s were"} recorded.`
+                            : `${replayEvents.length} unique writing events were reconstructed into ${frames.length} replay frames with no saved paste events.`}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                  <button
+                    type="button"
+                    aria-expanded={timelineOpen}
+                    onClick={() =>
+                      setTimelineOpen((current) => !current)
+                    }
+                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                  >
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-100 bg-amber-50 text-amber-700">
+                        <Activity className="h-4 w-4" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-bold text-slate-900">
+                          Activity timeline
+                        </h3>
+
+                        <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                          Select any event, including paste events, to jump to its replay frame.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-mono font-bold text-slate-600">
+                        {replayEvents.length} events
+                      </span>
+
+                      {timelineOpen ? (
+                        <ChevronDown className="h-4 w-4 text-slate-400" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 text-slate-400" />
+                      )}
+                    </div>
+                  </button>
+
+                  {timelineOpen && (
+                    <div className="max-h-[380px] space-y-1.5 overflow-y-auto border-t border-slate-100 p-3">
+                      {replayEvents.map(
+                        (event, index) => {
+                          const eventFrameIndex =
+                            findFrameForEvent(event);
+
+                          const isActive =
+                            activeFrame?.sourceEventKey ===
+                              event.__replayKey ||
+                            activeFrame?.sourceEventId ===
+                              event.id;
+
+                          const isPaste =
+                            isPasteLikeWritingEvent(event);
+
+                          return (
+                            <button
+                              key={`${event.__replayKey}-${index}`}
+                              type="button"
+                              onClick={() =>
+                                jumpToEvent(event)
+                              }
+                              className={`w-full rounded-xl border px-3 py-2.5 text-left transition-all ${
+                                isActive
+                                  ? isPaste
+                                    ? "border-violet-300 bg-violet-50 ring-2 ring-violet-500/10"
+                                    : "border-amber-300 bg-amber-50 ring-2 ring-amber-500/10"
+                                  : isPaste
+                                  ? "border-violet-100 bg-violet-50/50 hover:border-violet-200 hover:bg-violet-50"
+                                  : "border-slate-200 bg-[#F8FAFC] hover:border-amber-200 hover:bg-white"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <p className="truncate text-[11px] font-bold text-slate-900">
+                                      {getEventLabel(event)}
+                                    </p>
+
+                                    {isPaste && (
+                                      <span className="rounded-full border border-violet-200 bg-white px-1.5 py-0.5 text-[8px] font-mono font-black uppercase text-violet-700">
+                                        Paste
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
+                                    {event.preview ||
+                                      `${event.wordCount || 0} words recorded`}
+                                  </p>
+                                </div>
+
+                                <div className="shrink-0 text-right">
+                                  <span className="block text-[9px] font-mono text-slate-400">
+                                    {formatTime(
+                                      event.timestamp ||
+                                        event.createdAt
+                                    )}
+                                  </span>
+
+                                  <span className="mt-0.5 block text-[8px] font-mono text-slate-300">
+                                    frame {eventFrameIndex + 1}
+                                  </span>
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        }
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        Character-by-character replay
+                      </h3>
+
+                      <p className="mt-0.5 text-[10px] text-slate-500">
+                        Typing appears one character at a time. Paste appears in one highlighted burst.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFrameIndex(0);
+                          setIsPlaying(false);
+                        }}
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        title="Start"
+                      >
+                        <SkipBack className="h-3.5 w-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          stepFrame(-1)
+                        }
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                      >
+                        Back
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (isPlaying) {
+                            setIsPlaying(false);
+                            return;
+                          }
+
+                          if (
+                            frameIndex >=
+                            frames.length - 1
+                          ) {
+                            setFrameIndex(0);
+                          }
+
+                          setIsPlaying(true);
+                        }}
+                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 text-[10px] font-bold text-white hover:bg-amber-700"
+                      >
+                        {isPlaying ? (
+                          <Pause className="h-3.5 w-3.5" />
+                        ) : (
+                          <Play className="h-3.5 w-3.5" />
+                        )}
+
+                        {isPlaying
+                          ? "Pause"
+                          : "Play"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          stepFrame(1)
+                        }
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                      >
+                        Next
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setFrameIndex(
+                            frames.length - 1
+                          );
+                          setIsPlaying(false);
+                        }}
+                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        title="Final frame"
+                      >
+                        <SkipForward className="h-3.5 w-3.5" />
+                      </button>
+
+                      <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                        Speed
+
+                        <select
+                          value={playbackSpeed}
+                          onChange={(event) =>
+                            setPlaybackSpeed(
+                              Number(
+                                event.target.value
+                              )
+                            )
+                          }
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-700 outline-none"
+                        >
+                          {[1, 2, 5, 10, 15].map(
+                            (speed) => (
+                              <option
+                                key={speed}
+                                value={speed}
+                              >
+                                {speed}×
+                              </option>
+                            )
+                          )}
+                        </select>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-mono text-slate-500">
+                    <span>
+                      Frame {frameIndex + 1} /{" "}
+                      {frames.length}
+                    </span>
+
+                    <span>
+                      {formatPlaybackDuration(
+                        activeFrame?.elapsedMs || 0
+                      )}{" "}
+                      /{" "}
+                      {formatPlaybackDuration(
+                        totalElapsedMs
+                      )}{" "}
+                      recorded
+                    </span>
+                  </div>
+
+                  <input
+                    type="range"
+                    min="0"
+                    max={Math.max(
+                      0,
+                      frames.length - 1
+                    )}
+                    value={frameIndex}
+                    onChange={(event) => {
+                      setFrameIndex(
+                        Number(
+                          event.target.value
+                        )
+                      );
+                      setIsPlaying(false);
+                    }}
+                    className="mt-2 w-full accent-amber-600"
+                  />
+                </div>
+
+                <div className="p-4">
+                  <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-700">
+                          {activeFrame?.eventGroup ||
+                            "Writing"}{" "}
+                          ·{" "}
+                          {activeFrame?.label ||
+                            "Start"}
+                        </p>
+
+                        <p className="mt-1 text-[10px] text-slate-500">
+                          {activeEvent
+                            ? getEventLabel(
+                                activeEvent
+                              )
+                            : "Replay begins with an empty draft."}
+                        </p>
+                      </div>
+
+                      <span className="text-[10px] font-mono text-slate-500">
+                        {countWords(
+                          activeFrame?.text || ""
+                        )}{" "}
+                        words
+                      </span>
+                    </div>
+                  </div>
+
+                  <pre className="mt-3 min-h-[420px] max-h-[58vh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-white p-5 font-mono text-[12px] leading-7 text-slate-700">
+                    <PlaybackFrameText
+                      frame={activeFrame}
+                    />
+                  </pre>
+                </div>
+              </div>
+            </div>
+
+            {integrityEventList.length > 0 && (
+              <p className="text-[9px] font-mono text-slate-400">
+                {integrityEventList.length} unique integrity event
+                {integrityEventList.length === 1
+                  ? ""
+                  : "s"}{" "}
+                retained after deduplication.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EvidencePill({ icon: Icon, label, alert = false }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[9px] font-mono font-bold ${
+        alert
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-slate-200 bg-[#F8FAFC] text-slate-600"
+      }`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </span>
+  );
+}
+
+function ProcessMetric({ label, value, detail }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-3">
+      <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 text-sm font-mono font-black text-slate-900">
+        {value}
+      </p>
+      <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
+        {detail}
+      </p>
+    </div>
+  );
+}
+
+
+function AiCheckWorkspace({
+  aiReviewLoading,
+  aiReviewError,
+  aiSuggestion,
+  onRunAiCheck,
+  applyAiRubricScores,
+  applyAiFeedback,
+  rubricCriteria,
+  rubricTotal,
+  currentRubric,
+  onCancel,
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <BrainCircuit className="w-4 h-4 text-violet-700 shrink-0" />
+
+            <div className="min-w-0">
+              <h2 className="font-serif text-base font-bold text-slate-950">
+                AI Check Workspace
+                {currentRubric?.title && (
+                  <span className="font-sans text-xs font-bold text-slate-400 ml-2">
+                    · {currentRubric.title}
+                  </span>
+                )}
+              </h2>
+
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                Analyze the submission, suggest rubric scores, and generate feedback.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={onRunAiCheck}
+            disabled={aiReviewLoading}
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2 text-xs font-bold text-violet-800 hover:bg-violet-100 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {aiReviewLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Bot className="w-4 h-4" />
+            )}
+            {aiReviewLoading ? "Analyzing..." : aiSuggestion ? "Run Again" : "Run AI Check"}
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
+        {aiReviewLoading ? (
+          <div className="h-full min-h-[420px] flex items-center justify-center">
+            <div className="max-w-lg rounded-3xl border border-violet-200 bg-white p-8 text-center shadow-sm">
+              <div className="mx-auto w-14 h-14 rounded-2xl bg-violet-50 border border-violet-200 flex items-center justify-center text-violet-700">
+                <Loader2 className="w-7 h-7 animate-spin" />
+              </div>
+
+              <h3 className="font-serif text-xl font-bold text-slate-950 mt-4">
+                Analyzing submission and rubric
+              </h3>
+
+              <p className="text-sm text-slate-500 leading-relaxed mt-2">
+                Praxis is checking the student text against the assignment rubric and preparing a teacher-only suggestion.
+              </p>
+
+              <p className="text-[11px] text-violet-700 font-bold mt-4">
+                AI suggestion only. Teacher must review before applying.
+              </p>
+            </div>
+          </div>
+        ) : aiReviewError ? (
+          <div className="max-w-2xl rounded-2xl border border-red-200 bg-red-50 p-5">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-red-700 mt-0.5 shrink-0" />
+
+              <div>
+                <h3 className="font-serif text-lg font-bold text-red-900">
+                  AI Check could not run
+                </h3>
+
+                <p className="text-sm text-red-700 leading-relaxed mt-2">
+                  {aiReviewError}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={onRunAiCheck}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2 text-xs font-bold text-red-700 hover:bg-red-100"
+                >
+                  <Bot className="w-4 h-4" />
+                  Try Again
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : !aiSuggestion ? (
+          <div className="flex h-full min-h-[420px] items-center justify-center p-5">
+            <div className="w-full max-w-lg rounded-3xl border border-violet-200 bg-white p-7 text-center shadow-sm">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-violet-200 bg-violet-50 text-violet-700">
+                <Sparkles className="h-7 w-7" />
+              </div>
+
+              <h3 className="mt-4 font-serif text-xl font-bold text-slate-950">
+                Use AI Review?
+              </h3>
+
+              <p className="mt-2 text-sm leading-relaxed text-slate-500">
+                AI will analyze this student submission and suggest rubric
+                scores and feedback. Nothing is applied or saved automatically.
+              </p>
+
+              <div className="mt-4 rounded-xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-left">
+                <p className="text-[11px] leading-relaxed text-violet-800">
+                  You remain responsible for reviewing, editing, and approving
+                  every AI suggestion before saving the final review.
+                </p>
+              </div>
+
+              <div className="mt-5 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-white hover:text-slate-900"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onRunAiCheck}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-violet-600/20 transition-colors hover:bg-violet-700"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Start AI Review
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="max-w-[1100px] mx-auto space-y-4">
+            <div className="rounded-2xl border border-violet-200 bg-white p-4">
+              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Wand2 className="w-4 h-4 text-violet-700" />
+
+                    <h3 className="font-serif text-lg font-bold text-slate-950">
+                      AI Review Result
+                    </h3>
+                  </div>
+
+                  <p className="text-sm text-slate-600 leading-relaxed mt-2">
+                    {aiSuggestion.summary}
+                  </p>
+
+                  <p className="text-[11px] font-bold text-violet-700 mt-3">
+                    AI suggestion only. Teacher must review before applying.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3 text-right shrink-0">
+                  <p className="text-[10px] font-mono font-black uppercase tracking-wider text-violet-700">
+                    Suggested Score
+                  </p>
+
+                  <p className="text-2xl font-mono font-black text-violet-900 mt-1">
+                    {aiSuggestion.finalScore}
+                    <span className="text-sm text-violet-500">
+                      {" "}
+                      / {rubricTotal || 100}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-1 gap-3">
+                <button
+                  type="button"
+                  onClick={applyAiRubricScores}
+                  className="rounded-xl border border-blue-200 bg-blue-600 px-4 py-3 text-xs font-bold text-white hover:bg-blue-700 shadow-sm"
+                >
+                  Apply AI rubric scores
+                </button>
+
+              </div>
+            </div>
+
+            {aiSuggestion.feedback && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-blue-700" />
+
+                  <h3 className="font-serif text-base font-bold text-slate-950">
+                    Suggested Feedback
+                  </h3>
+                </div>
+
+                <p className="text-sm text-slate-700 leading-relaxed mt-3 whitespace-pre-wrap">
+                  {aiSuggestion.feedback}
+                </p>
+
+                <button
+                  type="button"
+                  onClick={applyAiFeedback}
+                  className="mt-4 inline-flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2 text-xs font-bold text-violet-800 hover:bg-violet-100"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  Apply AI feedback as comment
+                </button>
+              </div>
+            )}
+
+            {(aiSuggestion.strengths.length > 0 ||
+              aiSuggestion.improvements.length > 0) && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <AiPointList
+                  title="Strengths"
+                  tone="green"
+                  items={aiSuggestion.strengths}
+                />
+
+                <AiPointList
+                  title="Suggested Improvements"
+                  tone="amber"
+                  items={aiSuggestion.improvements}
+                />
+              </div>
+            )}
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <ClipboardList className="w-4 h-4 text-blue-700" />
+
+                  <h3 className="font-serif text-base font-bold text-slate-950">
+                    AI Rubric Grading
+                  </h3>
+                </div>
+
+              </div>
+
+              {aiSuggestion.criteriaScores.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] p-5 text-center">
+                  <p className="text-sm text-slate-500">
+                    AI did not return criterion-level scores. Use the final score and feedback as a suggestion.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {aiSuggestion.criteriaScores.map((item, index) => {
+                    const criterion =
+                      rubricCriteria.find(
+                        (entry) =>
+                          String(entry.id) === String(item.criterionId)
+                      ) || {};
+
+                    return (
+                      <div
+                        key={`${item.criterionId || index}`}
+                        className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-3"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="text-xs font-bold text-slate-900">
+                              {item.criterionName ||
+                                criterion.name ||
+                                `Criterion ${index + 1}`}
+                            </p>
+
+                            <p className="text-[11px] text-slate-500 mt-1">
+                              {item.bandLabel || "Suggested level"}
+                            </p>
+                          </div>
+
+                          <span className="shrink-0 text-[11px] font-mono font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-lg">
+                            {item.score} / {criterion.points || item.maxPoints || "—"}
+                          </span>
+                        </div>
+
+                        {item.comment && (
+                          <p className="text-[11px] text-slate-600 leading-relaxed mt-2">
+                            {item.comment}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AiPointList({ title, tone, items }) {
+  if (!items || items.length === 0) return null;
+
+  const classes =
+    tone === "green"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+      : "border-amber-200 bg-amber-50 text-amber-800";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${classes}`}>
+      <p className="text-[10px] font-mono font-black uppercase tracking-wider">
+        {title}
+      </p>
+
+      <ul className="mt-3 space-y-2 text-sm leading-relaxed">
+        {items.slice(0, 5).map((item, index) => (
+          <li key={index}>• {item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AnnotationHighlight({ annotation, children, onDelete }) {
+  const highlightRef = useRef(null);
+  const [tooltip, setTooltip] = useState(null);
+
+  const tone = getAnnotationTone(annotation);
+  const tooltipText = getAnnotationTooltipText(annotation);
+
+  function showTooltip(sticky = false) {
+    const element = highlightRef.current;
+    if (!element) return;
+
+    const rect = element.getBoundingClientRect();
+    const width = 310;
+    const margin = 12;
+
+    let left = rect.left;
+    let top = rect.bottom + 10;
+
+    if (left + width > window.innerWidth - margin) {
+      left = window.innerWidth - width - margin;
+    }
+
+    if (left < margin) {
+      left = margin;
+    }
+
+    if (top > window.innerHeight - 170) {
+      top = Math.max(margin, rect.top - 145);
+    }
+
+    setTooltip({
+      top,
+      left,
+      width,
+      sticky,
+    });
+  }
+
+  function hideTooltip() {
+    setTooltip((current) => {
+      if (current?.sticky) return current;
+      return null;
+    });
+  }
+
+  function closeTooltip() {
+    setTooltip(null);
+  }
+
+  return (
+    <>
+      <span
+        ref={highlightRef}
+        data-code={annotation.code || "NOTE"}
+        onMouseEnter={() => showTooltip(false)}
+        onMouseLeave={hideTooltip}
+        onFocus={() => showTooltip(false)}
+        onBlur={hideTooltip}
+        onClick={(event) => {
+          event.stopPropagation();
+          showTooltip(true);
+        }}
+        tabIndex={0}
+        title={`${tooltipText.code} — ${tooltipText.label}: ${tooltipText.comment}`}
+        className={`relative rounded px-0.5 cursor-help transition-all outline-none focus:ring-4 focus:ring-blue-500/10 after:content-[attr(data-code)] after:inline-flex after:ml-1 after:align-middle after:rounded after:px-1 after:py-0.5 after:text-[8px] after:font-mono after:font-black after:uppercase after:tracking-wide ${tone.highlight}`}
+      >
+        {children}
+      </span>
+
+      {tooltip &&
+        createPortal(
+          <div
+            className={`fixed z-[2147483647] rounded-xl border bg-white px-3 py-2 shadow-2xl ${tone.tooltip}`}
+            style={{
+              top: `${tooltip.top}px`,
+              left: `${tooltip.left}px`,
+              width: `${tooltip.width}px`,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={`text-[10px] font-mono font-black uppercase tracking-wider border px-2 py-0.5 rounded ${tone.chip}`}
+                >
+                  {tooltipText.code}
+                </span>
+
+                <span className="text-xs font-bold text-slate-900 truncate">
+                  {tooltipText.label}
+                </span>
+              </div>
+
+              {tooltip.sticky && (
+                <button
+                  type="button"
+                  onClick={closeTooltip}
+                  className="w-6 h-6 rounded-lg border border-slate-200 bg-[#F8FAFC] text-slate-400 hover:text-slate-900 flex items-center justify-center"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-slate-600 leading-relaxed mt-2">
+              {tooltipText.comment}
+            </p>
+
+            {tooltip.sticky && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof onDelete === "function") {
+                    onDelete(annotation.id);
+                  }
+                  closeTooltip();
+                }}
+                className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-700 hover:bg-red-100 transition-all"
+              >
+                <Trash2 className="w-3 h-3" />
+                Remove mark
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
+function FloatingAnnotationToolbar({
+  position,
+  selectedText,
+  annotationComment,
+  setAnnotationComment,
+  addAnnotation,
+  onClose,
+}) {
+  const [showNoteInput, setShowNoteInput] = useState(false);
+
+  const noteCode =
+    ANNOTATION_CODES.find((item) => item.code === "NOTE") || {
+      code: "NOTE",
+      label: "Note",
+      type: "note",
+    };
+
+  const markCodes = ANNOTATION_CODES.filter(
+    (item) => item.code !== "NOTE"
+  );
+
+  function handleAddNote() {
+    if (!annotationComment.trim()) {
+      setShowNoteInput(true);
+      return;
+    }
+
+    addAnnotation(noteCode);
+  }
+
+  return createPortal(
+    <div
+      className="fixed z-[2147483647] rounded-2xl border border-slate-200 bg-white p-3 shadow-2xl"
+      style={{
+        top: `${position.top}px`,
+        left: `${position.left}px`,
+        width: `${position.width}px`,
+        transform:
+          position.top < window.innerHeight / 2
+            ? "translateY(0)"
+            : "translateY(-100%)",
+      }}
+    >
+      <div className="mb-2 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-mono text-[10px] font-black uppercase tracking-wider text-blue-700">
+            Annotate selection
+          </p>
+
+          <p className="mt-0.5 truncate text-[11px] text-slate-500">
+            “{selectedText}”
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-[#F8FAFC] text-slate-400 hover:border-slate-300 hover:text-slate-900"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5">
+        {markCodes.map((codeItem) => (
+          <MiniAnnotationButton
+            key={codeItem.code}
+            codeItem={codeItem}
+            addAnnotation={addAnnotation}
+          />
+        ))}
+
+        <button
+          type="button"
+          onClick={() => setShowNoteInput((value) => !value)}
+          className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-all ${
+            showNoteInput
+              ? "border-sky-200 bg-sky-50 text-sky-700"
+              : "border-slate-200 bg-[#F8FAFC] text-slate-600 hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700"
+          }`}
+        >
+          <MessageSquare className="h-3 w-3" />
+          Note
+        </button>
+      </div>
+
+      {showNoteInput && (
+        <div className="mt-2 space-y-2 rounded-xl border border-sky-100 bg-sky-50/60 p-2.5">
+          <textarea
+            autoFocus
+            rows={3}
+            value={annotationComment}
+            onChange={(event) =>
+              setAnnotationComment(event.target.value)
+            }
+            placeholder="Write the teacher note for this selected text..."
+            className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10"
+          />
+
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setAnnotationComment("");
+                setShowNoteInput(false);
+              }}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[10px] font-bold text-slate-500 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              disabled={!annotationComment.trim()}
+              onClick={handleAddNote}
+              className="rounded-lg bg-sky-600 px-3 py-1.5 text-[10px] font-bold text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Add note
+            </button>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body
+  );
+}
+
+function MiniAnnotationButton({ codeItem, addAnnotation }) {
+  const isPositive = codeItem.code === "GOOD";
+  const isNote = codeItem.code === "NOTE";
+
+  return (
+    <button
+      type="button"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => addAnnotation(codeItem)}
+      title={`${codeItem.code} — ${codeItem.label}`}
+      className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-all ${
+        isPositive
+          ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+          : isNote
+          ? "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
+          : "bg-[#F8FAFC] text-slate-700 border-slate-200 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+      }`}
+    >
+      <span
+        className={`font-mono text-[9px] px-1.5 py-0.5 rounded ${
+          isPositive
+            ? "bg-emerald-100 text-emerald-700"
+            : isNote
+            ? "bg-amber-100 text-amber-700"
+            : "bg-blue-50 text-blue-700"
+        }`}
+      >
+        {codeItem.code === "GOOD" ? "✓" : codeItem.code}
+      </span>
+
+      <span className="hidden xl:inline">{codeItem.label}</span>
+    </button>
+  );
+}
+
+function ReviewModeSwitch({
+  reviewMode,
+  setReviewMode,
+  hasRubric,
+  rubricScoreTotal,
+  rubricTotal,
+  gradedCriteriaCount,
+  rubricCriteriaCount,
+  onAiCheck,
+  aiReviewLoading,
+  hasAiSuggestion,
+  planningMessageCount,
+  studentAiFeedbackCount,
+  writingReplayCount,
+}) {
+  const tabs = [
+    {
+      id: "text",
+      label: "Text Review",
+      icon: BookOpen,
+      summary: "Essay",
+      tone: "blue",
+      onClick: () => setReviewMode("text"),
+    },
+    {
+      id: "rubric",
+      label: hasRubric ? "Rubric Grading" : "Manual Grading",
+      icon: ClipboardList,
+      summary: hasRubric
+        ? `${gradedCriteriaCount}/${rubricCriteriaCount} · ${rubricScoreTotal}/${rubricTotal || 100}`
+        : `${rubricScoreTotal}/${rubricTotal || 100}`,
+      tone: "blue",
+      onClick: () => setReviewMode("rubric"),
+    },
+    {
+      id: "planning",
+      label: "Planning & AI",
+      icon: MessageSquare,
+      summary: planningMessageCount + studentAiFeedbackCount,
+      tone: "cyan",
+      onClick: () => setReviewMode("planning"),
+    },
+    {
+      id: "writing",
+      label: "Writing Replay",
+      icon: Activity,
+      summary: writingReplayCount,
+      tone: "amber",
+      onClick: () => setReviewMode("writing"),
+    },
+    {
+      id: "ai",
+      label: "AI",
+      icon: aiReviewLoading ? Loader2 : Bot,
+      summary: hasAiSuggestion ? "Ready" : "Run",
+      tone: "violet",
+      onClick: onAiCheck,
+      disabled: aiReviewLoading,
+      spinning: aiReviewLoading,
+    },
+  ];
+
+  const activeStyles = {
+    blue:
+      "border-blue-300 bg-blue-50 text-blue-800 ring-2 ring-blue-500/10",
+    cyan:
+      "border-cyan-300 bg-cyan-50 text-cyan-800 ring-2 ring-cyan-500/10",
+    amber:
+      "border-amber-300 bg-amber-50 text-amber-800 ring-2 ring-amber-500/10",
+    violet:
+      "border-violet-300 bg-violet-50 text-violet-800 ring-2 ring-violet-500/10",
+  };
+
+  return (
+    <div className="shrink-0 grid grid-cols-2 gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm md:grid-cols-[1.05fr_1.05fr_0.95fr_0.95fr_0.62fr]">
+      {tabs.map((tab) => {
+        const Icon = tab.icon;
+        const isActive = reviewMode === tab.id;
+
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            disabled={tab.disabled}
+            onClick={tab.onClick}
+            className={`min-w-0 rounded-xl border px-2.5 py-1.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+              isActive
+                ? activeStyles[tab.tone]
+                : tab.tone === "violet"
+                ? "border-violet-200 bg-violet-50/70 text-violet-800 hover:bg-violet-100"
+                : "border-slate-200 bg-[#F8FAFC] text-slate-600 hover:border-blue-200 hover:bg-white"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <Icon
+                  className={`h-3.5 w-3.5 shrink-0 ${
+                    tab.spinning ? "animate-spin" : ""
+                  }`}
+                />
+
+                <span className="truncate text-[11px] font-bold">
+                  {tab.label}
+                </span>
+              </div>
+
+              <span className="shrink-0 rounded-md bg-white/70 px-1 py-0.5 text-[8px] font-mono font-bold">
+                {tab.summary}
+              </span>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+function ReviewPanelHeader() {
+  return (
+    <div className="flex items-start gap-2.5">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+        <Pencil className="h-3.5 w-3.5" />
+      </div>
+
+      <div className="min-w-0">
+        <h2 className="font-serif text-sm font-bold text-slate-950">
+          Teacher Feedback
+        </h2>
+
+        <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+          Write the final comment the student will receive.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ReviewTabs({
+  activeReviewTab,
+  setActiveReviewTab,
+  annotationCount,
+  hasSignals,
+  hasAiSuggestion,
+}) {
+  return (
+    <div className="grid grid-cols-1 gap-2 mt-4">
+      {REVIEW_TABS.map((tab) => {
+        const Icon = tab.icon;
+        const isActive = activeReviewTab === tab.id;
+
+        let badge = null;
+
+        if (tab.id === "annotations" && annotationCount > 0) {
+          badge = annotationCount;
+        }
+
+        if (tab.id === "signals" && hasSignals) {
+          badge = "!";
+        }
+
+        if (tab.id === "feedback" && hasAiSuggestion) {
+          badge = "AI";
+        }
+
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveReviewTab(tab.id)}
+            className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+              isActive
+                ? "bg-blue-50 border-blue-300 ring-4 ring-blue-500/10 text-blue-800"
+                : "bg-[#F8FAFC] border-slate-200 hover:bg-white hover:border-blue-200 text-slate-600"
+            }`}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+
+                <span className="text-[11px] font-bold truncate">
+                  {tab.label}
+                </span>
+              </div>
+
+              {badge !== null && (
+                <span
+                  className={`text-[9px] font-mono font-bold rounded-full px-1.5 py-0.5 ${
+                    tab.id === "signals" && hasSignals
+                      ? "bg-red-100 text-red-700"
+                      : tab.id === "feedback" && hasAiSuggestion
+                      ? "bg-violet-100 text-violet-700"
+                      : "bg-white text-blue-700 border border-blue-100"
+                  }`}
+                >
+                  {badge}
+                </span>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function SavedAnnotationsPanel({ annotations, deleteAnnotation }) {
+  return (
+    <div className="space-y-3">
+      <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex items-start gap-2">
+        <Highlighter className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
+
+        <div>
+          <p className="text-xs font-bold text-blue-900">Saved inline marks</p>
+
+          <p className="text-[11px] text-blue-800 mt-1 leading-relaxed">
+            Marks appear inside the student text. Hover or click a mark to see
+            the explanation or remove it.
+          </p>
+        </div>
+      </div>
+
+      {annotations.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] p-4 text-center">
+          <p className="text-xs text-slate-400">
+            No marks yet. Select text on the left to add one.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {annotations.map((annotation, index) => {
+            const tone = getAnnotationTone(annotation);
+
+            return (
+              <div
+                key={annotation.id}
+                className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 space-y-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <span
+                      className={`text-[9px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tone.chip}`}
+                    >
+                      {annotation.code || annotation.type || "comment"}
+                    </span>
+
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {annotation.label || annotation.type || "Teacher note"}
+                    </p>
+
+                    <p className="text-[10px] text-slate-400 font-mono mt-1">
+                      Mark {index + 1}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => deleteAnnotation(annotation.id)}
+                    className="w-7 h-7 rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-red-600 hover:border-red-200 transition-all flex items-center justify-center"
+                    title="Delete annotation"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-slate-600 font-mono leading-relaxed bg-white border border-slate-200 rounded p-2">
+                  “{annotation.selectedText}”
+                </p>
+
+                <p className="text-[11px] text-slate-700 leading-relaxed">
+                  {annotation.comment}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RubricScorePanel({
+  rubric,
+  rubricCriteria,
+  rubricScores,
+  rubricScoreTotal,
+  rubricTotal,
+  gradedCriteriaCount,
+  selectBand,
+  adjustCriterionScore,
+  updateCriterionScore,
+  updateCriterionComment,
+  finalOverrideEnabled,
+  setFinalOverrideEnabled,
+  finalOverride,
+  setFinalOverride,
+  aiSuggestion,
+  applyAiRubricScores,
+}) {
+  const firstUngraded =
+    rubricCriteria.find((criterion) => {
+      const entry = getScoreEntry(rubricScores, criterion.id);
+      return entry.score === "" || entry.score === null;
+    })?.id || rubricCriteria[0]?.id;
+
+  const [openCriterionId, setOpenCriterionId] = useState(firstUngraded || null);
+
+  useEffect(() => {
+    if (!openCriterionId && firstUngraded) {
+      setOpenCriterionId(firstUngraded);
+    }
+  }, [firstUngraded, openCriterionId]);
+
+  function handleBandSelection(criterion, band) {
+    selectBand(criterion, band);
+
+    const currentIndex = rubricCriteria.findIndex(
+      (item) => String(item.id) === String(criterion.id)
+    );
+
+    const nextUngraded = rubricCriteria
+      .slice(currentIndex + 1)
+      .find((item) => {
+        const entry = getScoreEntry(rubricScores, item.id);
+        return entry.score === "" || entry.score === null;
+      });
+
+    if (nextUngraded) {
+      window.setTimeout(() => {
+        setOpenCriterionId(nextUngraded.id);
+      }, 120);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-[1100px] space-y-2">
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="mb-2 flex flex-col gap-2 border-b border-slate-100 pb-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 shrink-0 text-blue-600" />
+
+              <h3 className="truncate text-sm font-bold text-slate-900">
+                {rubric?.title || "Rubric Grading Workspace"}
+              </h3>
+            </div>
+
+            <p className="mt-1 text-[10px] text-slate-500">
+              {gradedCriteriaCount}/{rubricCriteria.length} graded
+              <span className="mx-1.5 text-slate-300">·</span>
+              {rubricScoreTotal}/{rubricTotal}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {aiSuggestion && (
+              <button
+                type="button"
+                onClick={applyAiRubricScores}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-800 hover:bg-violet-100"
+              >
+                <Bot className="h-3.5 w-3.5" />
+                Apply AI
+              </button>
+            )}
+
+            <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 font-mono text-xs font-black text-blue-700">
+              {rubricScoreTotal}/{rubricTotal}
+            </span>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          {rubricCriteria.map((criterion, index) => {
+            const entry = getScoreEntry(rubricScores, criterion.id);
+            const isOpen = openCriterionId === criterion.id;
+
+            return (
+              <CriterionAccordion
+                key={criterion.id}
+                index={index}
+                criterion={criterion}
+                entry={entry}
+                isOpen={isOpen}
+                onToggle={() =>
+                  setOpenCriterionId(isOpen ? null : criterion.id)
+                }
+                selectBand={handleBandSelection}
+                adjustCriterionScore={adjustCriterionScore}
+                updateCriterionScore={updateCriterionScore}
+                updateCriterionComment={updateCriterionComment}
+              />
+            );
+          })}
+        </div>
+
+        <div className="mt-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2">
+          <label className="flex cursor-pointer items-center justify-between gap-3">
+            <span>
+              <span className="block text-[11px] font-bold text-slate-900">
+                Final score override
+              </span>
+
+              <span className="block text-[10px] text-slate-500">
+                Optional manual adjustment.
+              </span>
+            </span>
+
+            <input
+              type="checkbox"
+              checked={finalOverrideEnabled}
+              onChange={(event) =>
+                setFinalOverrideEnabled(event.target.checked)
+              }
+              className="accent-blue-600"
+            />
+          </label>
+
+          {finalOverrideEnabled && (
+            <input
+              type="number"
+              min="0"
+              max={rubricTotal}
+              value={finalOverride}
+              onChange={(event) => setFinalOverride(event.target.value)}
+              placeholder="Final score"
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold focus:border-blue-500 focus:outline-none"
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+function CriterionAccordion({
+  index,
+  criterion,
+  entry,
+  isOpen,
+  onToggle,
+  selectBand,
+  adjustCriterionScore,
+  updateCriterionScore,
+  updateCriterionComment,
+}) {
+  const selectedBand = criterion.bands?.find(
+    (band) => String(band.id) === String(entry.bandId)
+  );
+
+  const hasScore = entry.score !== "" && entry.score !== null;
+
+  return (
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-all ${
+          isOpen ? "bg-blue-50" : "bg-white hover:bg-[#F8FAFC]"
+        }`}
+      >
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-[10px] font-mono font-black ${
+              hasScore
+                ? "border-blue-100 bg-white text-blue-700"
+                : "border-slate-200 bg-slate-50 text-slate-400"
+            }`}
+          >
+            {index + 1}
+          </span>
+
+          <div className="min-w-0">
+            <p className="truncate text-xs font-bold text-slate-900">
+              {criterion.name}
+            </p>
+
+            <p className="mt-0.5 truncate text-[10px] text-slate-500">
+              {selectedBand
+                ? selectedBand.label
+                : hasScore
+                ? "Custom score"
+                : "Not graded"}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <span
+            className={`rounded-lg border px-2 py-1 text-[10px] font-mono font-bold ${
+              hasScore
+                ? "border-blue-100 bg-white text-blue-700"
+                : "border-slate-200 bg-slate-50 text-slate-400"
+            }`}
+          >
+            {hasScore ? entry.score : "—"} / {criterion.points}
+          </span>
+
+          <ChevronDown
+            className={`h-4 w-4 text-slate-400 transition-transform ${
+              isOpen ? "rotate-180" : ""
+            }`}
+          />
+        </div>
+      </button>
+
+      {isOpen && (
+        <div className="space-y-2 border-t border-slate-200 p-3">
+          {criterion.description && (
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              {criterion.description}
+            </p>
+          )}
+
+          <div className="space-y-1.5">
+            {criterion.bands?.map((band) => {
+              const isSelected =
+                String(entry.bandId || "") === String(band.id);
+
+              return (
+                <button
+                  key={band.id}
+                  type="button"
+                  onClick={() => selectBand(criterion, band)}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition-all ${
+                    isSelected
+                      ? "border-blue-300 bg-blue-50 ring-2 ring-blue-500/10"
+                      : "border-slate-200 bg-[#F8FAFC] hover:border-blue-200 hover:bg-white"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold text-slate-900">
+                        {band.label}
+                      </p>
+
+                      {band.description && (
+                        <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
+                          {band.description}
+                        </p>
+                      )}
+                    </div>
+
+                    <span className="shrink-0 rounded-md border border-blue-100 bg-white px-2 py-1 text-[10px] font-mono font-bold text-blue-700">
+                      {band.points}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="grid grid-cols-1 gap-2 lg:grid-cols-[145px_minmax(0,1fr)]">
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => adjustCriterionScore(criterion, -0.5)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+
+              <input
+                type="number"
+                min="0"
+                max={criterion.points}
+                step="0.5"
+                value={entry.score}
+                onChange={(event) =>
+                  updateCriterionScore(criterion, event.target.value)
+                }
+                className="w-20 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-2 text-center text-xs font-bold focus:border-blue-500 focus:outline-none"
+              />
+
+              <button
+                type="button"
+                onClick={() => adjustCriterionScore(criterion, 0.5)}
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <input
+              value={entry.comment}
+              onChange={(event) =>
+                updateCriterionComment(criterion.id, event.target.value)
+              }
+              placeholder="Optional criterion comment..."
+              className="w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-[11px] focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function ManualScorePanel({
+  manualScore,
+  setManualScore,
+  aiSuggestion,
+  applyAiRubricScores,
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 max-w-lg">
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 mb-3">
+        <Pencil className="w-4 h-4 text-blue-600" />
+
+        <h3 className="text-xs font-bold text-slate-900">Manual Score</h3>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min="0"
+          max="100"
+          value={manualScore}
+          onChange={(event) => setManualScore(event.target.value)}
+          placeholder="Score"
+          className="w-24 bg-[#F8FAFC] border border-slate-200 text-center rounded-xl py-2 text-xs font-bold focus:outline-none focus:border-blue-500"
+        />
+
+        <span className="text-xs font-bold text-slate-400">/ 100</span>
+      </div>
+
+      {aiSuggestion && (
+        <button
+          type="button"
+          onClick={applyAiRubricScores}
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-800 hover:bg-violet-100"
+        >
+          <Bot className="w-3.5 h-3.5" />
+          Apply AI score
+        </button>
+      )}
+    </div>
+  );
+}
+
+function FeedbackPanel({ feedback, setFeedback }) {
+  const characterCount = String(feedback || "").length;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between gap-3">
+        <label className="flex items-center gap-1.5 text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+          <MessageSquare className="h-3.5 w-3.5 text-blue-600" />
+          Overall Feedback
+        </label>
+
+        <span className="text-[9px] font-mono text-slate-400">
+          {characterCount} characters
+        </span>
+      </div>
+
+      <textarea
+        value={feedback}
+        onChange={(event) => setFeedback(event.target.value)}
+        placeholder="Write clear, actionable feedback for the student..."
+        className="mt-2 flex-1 min-h-[260px] w-full resize-none rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4 text-xs leading-6 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+      />
+
+      <div className="mt-2 flex items-start gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+
+        <p className="text-[10px] leading-relaxed text-slate-500">
+          The student sees this message only after you save the review.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ReviewSignalsPanel({
+  submission,
+  hasAiFlags,
+  aiFlags,
+  integrityLogs,
+  copyPasteLogs,
+  focusLossLogs,
+  writingEvents,
+  pasteAttemptCount,
+  focusLossCount,
+  feedbackChecksUsed,
+}) {
+  const blockedPasteCount = copyPasteLogs.filter(
+    (log) => String(log.type).toLowerCase() === "paste_blocked"
+  ).length;
+
+  const honorConfirmed = Boolean(submission.honorConfirmed);
+
+  const recentSignals = [
+    ...copyPasteLogs.map((log) => ({
+      ...log,
+      signalSource: "Paste",
+    })),
+    ...focusLossLogs.map((log) => ({
+      ...log,
+      signalSource: "Focus",
+    })),
+    ...writingEvents.map((log) => ({
+      ...log,
+      signalSource: "Writing",
+    })),
+  ]
+    .sort((a, b) => {
+      const aTime = new Date(a.timestamp || a.createdAt || 0).getTime();
+      const bTime = new Date(b.timestamp || b.createdAt || 0).getTime();
+
+      return bTime - aTime;
+    })
+    .slice(0, 8);
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+        <Info className="w-4 h-4 text-amber-700 mt-0.5 shrink-0" />
+
+        <p className="text-[11px] text-amber-800 leading-relaxed">
+          Teacher-only context. Signals support review, not automatic grading.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3">
+        <PlaybackCard
+          icon={ShieldAlert}
+          label="Paste Attempts"
+          value={`${pasteAttemptCount || 0} total`}
+          detail={
+            blockedPasteCount > 0
+              ? `${blockedPasteCount} blocked`
+              : "No blocked paste"
+          }
+          hasAlert={pasteAttemptCount > 0}
+        />
+
+        <PlaybackCard
+          icon={Eye}
+          label="Focus Loss / Tab Switch"
+          value={`${focusLossCount || 0} events`}
+          detail={
+            focusLossCount > 0
+              ? "Student left the writing tab or window."
+              : "No focus loss recorded."
+          }
+          hasAlert={focusLossCount > 0}
+        />
+
+        <PlaybackCard
+          icon={Activity}
+          label="Writing Playback"
+          value={`${writingEvents.length || 0} events`}
+          detail="Drafting progress and autosave events."
+        />
+
+        <PlaybackCard
+          icon={MessageSquare}
+          label="AI Feedback Checks"
+          value={`${feedbackChecksUsed || 0} used`}
+          detail="AI draft feedback requests."
+        />
+
+        <PlaybackCard
+          icon={CheckSquare}
+          label="Honor Confirmation"
+          value={honorConfirmed ? "Confirmed" : "Not confirmed"}
+          detail={
+            honorConfirmed
+              ? `Confirmed at ${formatDateTime(submission.honorConfirmedAt)}`
+              : "Student confirmation not found."
+          }
+          hasAlert={false}
+        />
+
+        <PlaybackCard
+          icon={hasAiFlags ? AlertTriangle : ShieldCheck}
+          label="AI / External Flags"
+          value={hasAiFlags ? `${aiFlags} detected` : "0 clean"}
+          detail="Use as review context only."
+          hasAlert={hasAiFlags}
+        />
+      </div>
+
+      {recentSignals.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <h4 className="text-xs font-bold text-slate-900 mb-3">
+            Recent activity
+          </h4>
+
+          <div className="space-y-2">
+            {recentSignals.map((signal, index) => (
+              <SignalRow key={signal.id || index} signal={signal} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {integrityLogs.length === 0 &&
+        copyPasteLogs.length === 0 &&
+        focusLossLogs.length === 0 &&
+        writingEvents.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] p-4 text-center">
+            <p className="text-[11px] font-mono text-slate-400">
+              No integrity or writing activity logs were saved.
+            </p>
+          </div>
+        )}
+    </div>
+  );
+}
+
+function SignalRow({ signal }) {
+  const type = String(signal.type || "").toLowerCase();
+
+  let title = signal.signalSource || "Activity";
+  let description = "Writing activity recorded.";
+  let tone = "bg-slate-50 border-slate-200 text-slate-700";
+
+  if (type === "paste" || type === "paste_blocked") {
+    title = type === "paste_blocked" ? "Paste blocked" : "Paste detected";
+    description = `${signal.wordCount || 0} words · ${
+      signal.charCount || 0
+    } characters`;
+    tone =
+      type === "paste_blocked"
+        ? "bg-red-50 border-red-200 text-red-800"
+        : "bg-amber-50 border-amber-200 text-amber-800";
+  }
+
+  if (type === "focus_loss") {
+    title = "Focus loss / tab switch";
+    description =
+      signal.details?.message ||
+      "Student left the writing tab or window. No text was captured.";
+    tone = "bg-amber-50 border-amber-200 text-amber-800";
+  }
+
+  if (type === "draft_update") {
+    title = "Draft edited";
+    description = `${signal.wordCount || 0} words · ${
+      signal.charCount || 0
+    } characters saved`;
+  }
+
+  return (
+    <div className={`rounded-xl border px-3 py-2 text-[11px] ${tone}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-bold">{title}</p>
+
+          <p className="mt-1 opacity-80 leading-relaxed">{description}</p>
+
+          {signal.preview && type !== "focus_loss" && (
+            <p className="mt-1 font-mono opacity-70 truncate">
+              “{signal.preview}”
+            </p>
+          )}
+        </div>
+
+        <span className="font-mono opacity-70 shrink-0">
+          {formatTime(signal.timestamp || signal.createdAt)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function ReviewActionBar({ saveMessage }) {
+  if (!saveMessage) return null;
+
+  const normalizedMessage = saveMessage.toLowerCase();
+
+  const isSuccess =
+    normalizedMessage.includes("successfully") ||
+    normalizedMessage.includes("saved");
+
+  const isAiInfo =
+    normalizedMessage.includes("ai suggested") ||
+    normalizedMessage.includes("ai check") ||
+    normalizedMessage.includes("ai review");
+
+  const isWarning =
+    normalizedMessage.includes("review before saving") ||
+    normalizedMessage.includes("must be between") ||
+    normalizedMessage.includes("choose") ||
+    normalizedMessage.includes("please") ||
+    normalizedMessage.includes("reopened") ||
+    normalizedMessage.includes("resubmit");
+
+  const tone = isSuccess
+    ? {
+        wrapper: "border-emerald-200 bg-emerald-50",
+        icon: "text-emerald-700",
+        title: "Saved",
+        text: "text-emerald-800",
+      }
+    : isAiInfo
+    ? {
+        wrapper: "border-violet-200 bg-violet-50",
+        icon: "text-violet-700",
+        title: "AI suggestion applied",
+        text: "text-violet-800",
+      }
+    : isWarning
+    ? {
+        wrapper: "border-amber-200 bg-amber-50",
+        icon: "text-amber-700",
+        title: "Review needed",
+        text: "text-amber-800",
+      }
+    : {
+        wrapper: "border-red-200 bg-red-50",
+        icon: "text-red-700",
+        title: "Action needed",
+        text: "text-red-800",
+      };
+
+  return (
+    <div className="shrink-0 border-t border-slate-100 bg-white p-3">
+      <div className={`rounded-xl border px-3 py-2.5 ${tone.wrapper}`}>
+        <div className="flex items-start gap-2.5">
+          <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-white/80">
+            {isAiInfo ? (
+              <Sparkles className={`h-3.5 w-3.5 ${tone.icon}`} />
+            ) : (
+              <CheckSquare className={`h-3.5 w-3.5 ${tone.icon}`} />
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <p className={`text-[10px] font-bold ${tone.text}`}>
+              {tone.title}
+            </p>
+
+            <p className={`mt-0.5 text-[10px] leading-relaxed ${tone.text}`}>
+              {saveMessage}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+function PlaybackCard({ icon: Icon, label, value, detail, hasAlert }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-4 flex items-start gap-3">
+      <div
+        className={`w-8 h-8 rounded-lg flex items-center justify-center border shrink-0 mt-0.5 ${
+          hasAlert
+            ? "bg-red-50 text-red-600 border-red-200"
+            : "bg-blue-50 text-blue-700 border-blue-100"
+        }`}
+      >
+        <Icon className="w-4 h-4" />
+      </div>
+
+      <div className="min-w-0 space-y-0.5">
+        <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 block truncate">
+          {label}
+        </span>
+
+        <p
+          className={`text-sm font-mono font-black ${
+            hasAlert ? "text-red-600" : "text-slate-800"
+          }`}
+        >
+          {value}
+        </p>
+
+        {detail && (
+          <p className="text-[11px] text-slate-500 leading-relaxed">
+            {detail}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default SubmissionDetails;

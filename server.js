@@ -64,6 +64,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// Render uses this endpoint to verify that the backend is running.
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    success: true,
+    service: "Praxis API",
+    environment: process.env.NODE_ENV || "development",
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use((req, res, next) => {
   const redirectPath = getSafeRedirectPath(req.originalUrl || req.url);
   const redirectTarget = getCanonicalRedirectTarget({
@@ -839,6 +849,42 @@ async function requireTeacherProfile(req) {
   return { user, profile, error: null, status: 200 };
 }
 
+function isLocalDevRequest(req) {
+  const requestHost = String(req.headers.host || "").split(":")[0];
+
+  return (
+    req.hostname === "localhost" ||
+    req.hostname === "127.0.0.1" ||
+    req.hostname === "::1" ||
+    requestHost === "localhost" ||
+    requestHost === "127.0.0.1" ||
+    requestHost === "::1" ||
+    req.ip === "::1" ||
+    req.ip === "127.0.0.1" ||
+    req.ip === "::ffff:127.0.0.1"
+  );
+}
+
+async function requireRubricTeacherProfile(req) {
+  const skipRubricAuthForLocalTest =
+    process.env.DEV_SKIP_RUBRIC_AUTH === "true" && isLocalDevRequest(req);
+
+  if (skipRubricAuthForLocalTest) {
+    return {
+      user: { id: "local-rubric-test-user" },
+      profile: {
+        id: "local-rubric-test-user",
+        role: "teacher",
+        name: "Local Teacher",
+      },
+      error: null,
+      status: 200,
+    };
+  }
+
+  return requireTeacherProfile(req);
+}
+
 async function ensureTeacherOwnsClass(classId, teacherId, client = supabase) {
   const { data, error } = await client
     .from('classes')
@@ -1353,39 +1399,71 @@ function checkAiVelocity(userId) {
 // ── Rubric parsing endpoints ────────────────────────────────
 // Multer failures (oversized file, malformed multipart, unexpected field) are
 // raised in connect middleware BEFORE the route handler runs, so the route's
-// try/catch never sees them and Express would emit a bare HTML 500 (which the
-// client can't even parse as JSON). Wrap the upload so those failures come back
-// as a clean, teacher-actionable JSON error.
+// try/catch never sees them and Express would emit a bare HTML 500. Wrap the
+// upload so those failures come back as a clean JSON error.
 function uploadRubricSingle(req, res, next) {
-  upload.single('rubric')(req, res, (err) => {
+  upload.single("rubric")(req, res, (err) => {
     if (err) {
-      const tooBig = err.code === 'LIMIT_FILE_SIZE';
+      const tooBig = err.code === "LIMIT_FILE_SIZE";
+
       return res.status(tooBig ? 413 : 400).json({
         success: false,
         error: tooBig
-          ? 'That file is too large (max 5 MB). Upload a smaller PDF / Word file, or paste the rubric text.'
+          ? "That file is too large (max 5 MB). Upload a smaller PDF / Word file, or paste the rubric text."
           : "We couldn't read that upload. Please use a PDF or Word file, or paste the rubric text.",
       });
     }
+
     return next();
   });
 }
 
 // A rubric the parser can't read (scanned/image PDF, empty, corrupt, or
-// password-protected file) is a client-side problem, not a server fault —
-// surface it as 422 with the parser's actionable message, not a bare 500.
+// password-protected file) is a client-side problem, not a server fault.
 function rubricParseErrorStatus(error) {
-  return error?.code === 'RUBRIC_UNREADABLE' ? 422 : 500;
+  return error?.code === "RUBRIC_UNREADABLE" ? 422 : 500;
 }
 
-app.post('/api/rubric/parse', uploadRubricSingle, async (req, res) => {
+async function handleRubricFileParse(req, res, { legacyShape = false } = {}) {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ success: false, error });
-    if (!checkRubricQuota(user.id)) {
-      return res.status(429).json({ success: false, error: 'Daily rubric parsing limit reached. Please try again tomorrow.' });
+    const { user, error, status } = await requireRubricTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json(
+        legacyShape
+          ? { error }
+          : {
+              success: false,
+              error,
+            }
+      );
     }
-    if (!req.file) return res.status(400).json({ success: false, error: 'No file uploaded' });
+
+    if (!checkRubricQuota(user.id)) {
+      return res.status(429).json(
+        legacyShape
+          ? {
+              error:
+                "Daily rubric parsing limit reached. Please try again tomorrow.",
+            }
+          : {
+              success: false,
+              error:
+                "Daily rubric parsing limit reached. Please try again tomorrow.",
+            }
+      );
+    }
+
+    if (!req.file) {
+      return res.status(400).json(
+        legacyShape
+          ? { error: "No file uploaded" }
+          : {
+              success: false,
+              error: "No file uploaded.",
+            }
+      );
+    }
 
     const { text, schema, rubricData } = await parseRubricBuffer(
       req.file.buffer,
@@ -1393,60 +1471,88 @@ app.post('/api/rubric/parse', uploadRubricSingle, async (req, res) => {
       req.file.originalname
     );
 
-    res.json({
+    if (legacyShape) {
+      return res.json({
+        text,
+        schema,
+        rubricData,
+      });
+    }
+
+    return res.json({
       success: true,
       text,
       schema,
       rubricData,
     });
   } catch (error) {
-    res.status(rubricParseErrorStatus(error)).json({ success: false, error: error.message });
-  }
-});
-
-app.post('/api/extract-rubric', uploadRubricSingle, async (req, res) => {
-  try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    if (!checkRubricQuota(user.id)) {
-      return res.status(429).json({ error: 'Daily rubric parsing limit reached. Please try again tomorrow.' });
-    }
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-    const { text, schema, rubricData } = await parseRubricBuffer(
-      req.file.buffer,
-      req.file.mimetype,
-      req.file.originalname
+    return res.status(rubricParseErrorStatus(error)).json(
+      legacyShape
+        ? { error: error.message }
+        : {
+            success: false,
+            error: error.message,
+          }
     );
-
-    res.json({ text, schema, rubricData });
-  } catch (error) {
-    res.status(rubricParseErrorStatus(error)).json({ error: error.message });
   }
+}
+
+app.post("/api/rubric/parse", uploadRubricSingle, async (req, res) => {
+  return handleRubricFileParse(req, res);
 });
 
-app.post('/api/rubric/parse-text', async (req, res) => {
-  try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ success: false, error });
-    if (!checkRubricQuota(user.id)) {
-      return res.status(429).json({ success: false, error: 'Daily rubric parsing limit reached. Please try again tomorrow.' });
-    }
-    const text = String(req.body?.text || '').trim();
-    if (!text) return res.status(400).json({ success: false, error: 'Text is required' });
+// Alias for the new React frontend naming.
+app.post("/api/rubrics/parse", uploadRubricSingle, async (req, res) => {
+  return handleRubricFileParse(req, res);
+});
 
-    const parsed = await parseRubricText(text, 'Pasted rubric');
-    res.json({
+// Legacy endpoint kept for compatibility with the old frontend.
+app.post("/api/extract-rubric", uploadRubricSingle, async (req, res) => {
+  return handleRubricFileParse(req, res, { legacyShape: true });
+});
+
+app.post("/api/rubric/parse-text", async (req, res) => {
+  try {
+    const { user, error, status } = await requireRubricTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json({
+        success: false,
+        error,
+      });
+    }
+
+    if (!checkRubricQuota(user.id)) {
+      return res.status(429).json({
+        success: false,
+        error: "Daily rubric parsing limit reached. Please try again tomorrow.",
+      });
+    }
+
+    const text = String(req.body?.text || "").trim();
+
+    if (!text) {
+      return res.status(400).json({
+        success: false,
+        error: "Text is required.",
+      });
+    }
+
+    const parsed = await parseRubricText(text, "Pasted rubric");
+
+    return res.json({
       success: true,
       text: parsed.text,
       schema: parsed.schema,
       rubricData: parsed.rubricData,
     });
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(rubricParseErrorStatus(error)).json({
+      success: false,
+      error: error.message,
+    });
   }
 });
-
 // ── AI endpoint ─────────────────────────────────────────────
 let aiRequestsInFlight = 0;
 // Server-wide cap on simultaneous in-flight AI calls. Sized to cover a full
@@ -1456,10 +1562,17 @@ let aiRequestsInFlight = 0;
 // When this trips, the client retries after a short backoff (the 429 below is
 // flagged retryable), so students see a brief pause rather than an error.
 const AI_MAX_CONCURRENT = 20;
+
 // ~50k tokens of input — far above any real chat/feedback/grading payload,
-// but well under the 10mb body limit, so a single request can't run up a
-// huge input-token bill.
 const MAX_AI_INPUT_CHARS = 200000;
+
+// Draft review can take longer because Claude reads the essay,
+// checks assignment context, returns JSON, and finds exact excerpts.
+const AI_TIMEOUT_MS = clampNumber(process.env.AI_TIMEOUT_MS, {
+  min: 20000,
+  max: 180000,
+  fallback: 120000,
+});
 
 function aiInputCharCount(prompt, messages, system) {
   let total = String(system || '').length + String(prompt || '').length;
@@ -1472,8 +1585,28 @@ function aiInputCharCount(prompt, messages, system) {
 }
 
 app.post('/api/generate', async (req, res) => {
-  const user = await getUser(req);
+  const requestHost = String(req.headers.host || "").split(":")[0];
+
+  const isLocalRequest =
+    req.hostname === "localhost" ||
+    req.hostname === "127.0.0.1" ||
+    req.hostname === "::1" ||
+    requestHost === "localhost" ||
+    requestHost === "127.0.0.1" ||
+    requestHost === "::1" ||
+    req.ip === "::1" ||
+    req.ip === "127.0.0.1" ||
+    req.ip === "::ffff:127.0.0.1";
+
+  const skipAiAuthForLocalTest =
+    process.env.DEV_SKIP_AI_AUTH === "true" && isLocalRequest;
+
+  const user = skipAiAuthForLocalTest
+    ? { id: "local-ai-test-user" }
+    : await getUser(req);
+
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
   const { prompt, messages, system, maxTokens, temperature } = req.body;
   if (messages && !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages must be an array.' });
@@ -1509,7 +1642,7 @@ app.post('/api/generate', async (req, res) => {
     if (safeTemperature !== null) requestBody.temperature = safeTemperature;
 
     const aiAbortController = new AbortController();
-    const aiTimeoutId = setTimeout(() => aiAbortController.abort(), 20000);
+    const aiTimeoutId = setTimeout(() => aiAbortController.abort(), AI_TIMEOUT_MS);
     let response;
     try {
       response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -3492,9 +3625,282 @@ app.get('/api/admin/process-analytics', async (req, res) => {
   }
 });
 
+// ── Teacher AI submission review endpoint ─────────────────────────────
+
+function buildTeacherAiReviewPrompt({
+  assignmentTitle,
+  studentEmail,
+  studentText,
+  wordCount,
+  rubricCriteria = [],
+  rubricTotal,
+  integritySignals = {},
+}) {
+  const rubricText =
+    Array.isArray(rubricCriteria) && rubricCriteria.length > 0
+      ? rubricCriteria
+          .map((criterion, index) => {
+            const bands = Array.isArray(criterion.bands)
+              ? criterion.bands
+                  .map(
+                    (band) =>
+                      `- ${band.label}: ${band.points} pts — ${
+                        band.description || ""
+                      }`
+                  )
+                  .join("\n")
+              : "";
+
+            return `${index + 1}. ${criterion.name} (${criterion.points} pts)
+${criterion.description || ""}
+${bands}`;
+          })
+          .join("\n\n")
+      : "No rubric was provided. Suggest a general score out of 100.";
+
+  return `
+You are helping a teacher review a student writing submission.
+
+Important rules:
+- You are NOT the final grader.
+- Give suggestions only.
+- The teacher must review and decide.
+- Be fair, concise, and rubric-based.
+- Do not accuse the student of cheating.
+- Integrity signals are context only, not automatic grades.
+- Return ONLY valid JSON. No markdown.
+
+Assignment:
+${assignmentTitle || "Untitled assignment"}
+
+Student:
+${studentEmail || "Unknown student"}
+
+Word count:
+${wordCount || "Unknown"}
+
+Integrity context:
+Paste attempts: ${integritySignals.pasteAttemptCount || 0}
+Focus loss / tab switching: ${integritySignals.focusLossCount || 0}
+AI/external flags: ${integritySignals.aiFlagCount || 0}
+Student AI feedback checks used: ${integritySignals.feedbackChecksUsed || 0}
+
+Rubric:
+${rubricText}
+
+Student submission:
+"""
+${studentText}
+"""
+
+Return JSON in this exact shape:
+{
+  "summary": "short teacher-facing summary",
+  "suggestedFeedback": "student-facing feedback the teacher may choose to use",
+  "strengths": ["strength 1", "strength 2"],
+  "improvements": ["improvement 1", "improvement 2"],
+  "criteria": [
+    {
+      "criterionId": "criterion id from rubric",
+      "criterionName": "criterion name",
+      "score": 0,
+      "bandLabel": "selected rubric level",
+      "comment": "short reason"
+    }
+  ],
+  "finalScore": 0
+}
+`;
+}
+
+function extractJsonFromAiText(text = "") {
+  const clean = String(text || "").trim();
+
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const match = clean.match(/\{[\s\S]*\}/);
+    if (!match) {
+      throw new Error("AI response was not valid JSON.");
+    }
+
+    return JSON.parse(match[0]);
+  }
+}
+
+app.post("/api/teacher/ai-review-submission", async (req, res) => {
+  const requestHost = String(req.headers.host || "").split(":")[0];
+
+  const isLocalRequest =
+    req.hostname === "localhost" ||
+    req.hostname === "127.0.0.1" ||
+    req.hostname === "::1" ||
+    requestHost === "localhost" ||
+    requestHost === "127.0.0.1" ||
+    requestHost === "::1" ||
+    req.ip === "::1" ||
+    req.ip === "127.0.0.1" ||
+    req.ip === "::ffff:127.0.0.1";
+
+  const skipAiAuthForLocalTest =
+    process.env.DEV_SKIP_AI_AUTH === "true" && isLocalRequest;
+
+  const user = skipAiAuthForLocalTest
+    ? { id: "local-ai-teacher-review-user" }
+    : await getUser(req);
+
+  if (!user) {
+    return res.status(401).json({
+      error: "Not authenticated",
+    });
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({
+      error: "ANTHROPIC_API_KEY is not configured on the backend.",
+    });
+  }
+
+  const {
+    submissionId,
+    assignmentId,
+    assignmentTitle,
+    studentEmail,
+    studentText,
+    wordCount,
+    rubricCriteria = [],
+    rubricTotal,
+    integritySignals = {},
+  } = req.body || {};
+
+  if (!studentText || !String(studentText).trim()) {
+    return res.status(400).json({
+      error: "Student text is required.",
+    });
+  }
+
+  const prompt = buildTeacherAiReviewPrompt({
+    assignmentTitle,
+    studentEmail,
+    studentText,
+    wordCount,
+    rubricCriteria,
+    rubricTotal,
+    integritySignals,
+  });
+
+  if (aiInputCharCount(prompt, [], "") > MAX_AI_INPUT_CHARS) {
+    return res.status(413).json({
+      error: "This submission is too large for AI review.",
+    });
+  }
+
+  if (aiRequestsInFlight >= AI_MAX_CONCURRENT) {
+    return res.status(429).json({
+      error: "AI is busy right now. Please try again in a moment.",
+      retryable: true,
+    });
+  }
+
+  const velocity = checkAiVelocity(user.id);
+
+  if (!velocity.allowed) {
+    res.set("Retry-After", String(velocity.retryAfter));
+    return res.status(429).json({
+      error: "Too many AI requests in a short time. Please wait and try again.",
+    });
+  }
+
+  aiRequestsInFlight += 1;
+
+  try {
+    const aiAbortController = new AbortController();
+    const aiTimeoutId = setTimeout(
+      () => aiAbortController.abort(),
+      AI_TIMEOUT_MS
+    );
+
+    let response;
+
+    try {
+      response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": process.env.ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: process.env.CLAUDE_MODEL || "claude-sonnet-4-6",
+          max_tokens: 1400,
+          temperature: 0.2,
+          messages: [
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+        }),
+        signal: aiAbortController.signal,
+      });
+    } finally {
+      clearTimeout(aiTimeoutId);
+    }
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      if (
+        response.status === 429 ||
+        response.status === 503 ||
+        response.status === 529
+      ) {
+        return res.status(429).json({
+          error: "AI is busy right now. Please try again in a moment.",
+          retryable: true,
+        });
+      }
+
+      return res.status(response.status).json({
+        error: data?.error?.message || "AI review request failed.",
+      });
+    }
+
+    const text = data?.content?.[0]?.text || "";
+
+    if (!text.trim()) {
+      return res.status(502).json({
+        error: "AI returned an empty response.",
+      });
+    }
+
+    const parsed = extractJsonFromAiText(text);
+
+    return res.json({
+      submissionId,
+      assignmentId,
+      review: parsed,
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return res.status(504).json({
+        error: "AI review timed out. Please try again.",
+      });
+    }
+
+    console.error("Teacher AI review error:", errorClassForLog(error));
+
+    return res.status(500).json({
+      error: error.message || "Teacher AI review failed.",
+    });
+  } finally {
+    aiRequestsInFlight -= 1;
+  }
+});
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
   if (canSendNotificationEmails()) {
     processUpcomingDeadlineReminders().catch((error) => {
       console.error('Initial deadline reminder check failed:', error);
@@ -3509,3 +3915,4 @@ app.listen(PORT, () => {
     console.log('Email notifications are disabled. Set RESEND_API_KEY and NOTIFY_FROM_EMAIL to enable publish/deadline emails.');
   }
 });
+
