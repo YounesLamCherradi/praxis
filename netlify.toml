@@ -1,0 +1,17 @@
+[build]
+  command = "npm --prefix frontend ci && npm --prefix frontend run build"
+  publish = "frontend/dist"
+
+# Send API requests to the Render backend.
+# Keep this rule before the React Router fallback.
+[[redirects]]
+  from = "/api/*"
+  to = "https://praxis-api-0yie.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# React Router fallback.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
