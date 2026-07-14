@@ -35,6 +35,40 @@ const app = express();
 app.disable("x-powered-by");
 app.use(compression());
 
+// Allow the deployed React frontend to call the Render API directly.
+app.use((req, res, next) => {
+  const requestOrigin = stripTrailingSlashes(
+    String(req.headers.origin || "")
+  );
+
+  const allowedOrigins = new Set(
+    [
+      stripTrailingSlashes(process.env.PUBLIC_APP_URL || ""),
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+    ].filter(Boolean)
+  );
+
+  if (requestOrigin && allowedOrigins.has(requestOrigin)) {
+    res.set("Access-Control-Allow-Origin", requestOrigin);
+    res.set("Vary", "Origin");
+    res.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization"
+    );
+    res.set(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    );
+  }
+
+  if (req.method === "OPTIONS") {
+    return res.status(204).end();
+  }
+
+  return next();
+});
+
 // Security headers applied to every response (static assets + API). HSTS,
 // X-Frame-Options, X-Content-Type-Options, Cross-Origin-Opener-Policy and
 // Referrer-Policy are safe to enforce. The Content-Security-Policy is sent
@@ -75,6 +109,11 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use((req, res, next) => {
+
+  // API requests must remain on the Render backend.
+  if (req.path.startsWith("/api/")) {
+    return next();
+  }
   const redirectPath = getSafeRedirectPath(req.originalUrl || req.url);
   const redirectTarget = getCanonicalRedirectTarget({
     method: req.method,
@@ -3785,24 +3824,17 @@ function extractJsonFromAiText(text = "") {
 }
 
 app.post("/api/teacher/ai-review-submission", async (req, res) => {
-  const requestHost = String(req.headers.host || "").split(":")[0];
+    const skipAiAuthForTest =
+    (
+      process.env.DEV_SKIP_AI_AUTH === "true" &&
+      isLocalDevRequest(req)
+    ) ||
+    isTrustedDemoRequest(req);
 
-  const isLocalRequest =
-    req.hostname === "localhost" ||
-    req.hostname === "127.0.0.1" ||
-    req.hostname === "::1" ||
-    requestHost === "localhost" ||
-    requestHost === "127.0.0.1" ||
-    requestHost === "::1" ||
-    req.ip === "::1" ||
-    req.ip === "127.0.0.1" ||
-    req.ip === "::ffff:127.0.0.1";
-
-  const skipAiAuthForLocalTest =
-    process.env.DEV_SKIP_AI_AUTH === "true" && isLocalRequest;
-
-  const user = skipAiAuthForLocalTest
-    ? { id: "local-ai-teacher-review-user" }
+  const user = skipAiAuthForTest
+    ? {
+        id: "demo-ai-teacher-review-user",
+      }
     : await getUser(req);
 
   if (!user) {
