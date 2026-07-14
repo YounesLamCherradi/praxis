@@ -865,18 +865,79 @@ function isLocalDevRequest(req) {
   );
 }
 
-async function requireRubricTeacherProfile(req) {
-  const skipRubricAuthForLocalTest =
-    process.env.DEV_SKIP_RUBRIC_AUTH === "true" && isLocalDevRequest(req);
 
-  if (skipRubricAuthForLocalTest) {
+function isTrustedDemoRequest(req) {
+  if (process.env.DEMO_SKIP_AUTH !== "true") {
+    return false;
+  }
+
+  const configuredUrl =
+    process.env.PUBLIC_APP_URL ||
+    process.env.APP_URL ||
+    process.env.SITE_URL ||
+    "";
+
+  if (!configuredUrl) {
+    return false;
+  }
+
+  let allowedHost = "";
+
+  try {
+    allowedHost = new URL(configuredUrl).host.toLowerCase();
+  } catch {
+    return false;
+  }
+
+  const requestOrigin = String(
+    req.headers.origin || ""
+  ).trim();
+
+  let originHost = "";
+
+  if (requestOrigin) {
+    try {
+      originHost = new URL(
+        requestOrigin
+      ).host.toLowerCase();
+    } catch {
+      originHost = "";
+    }
+  }
+
+  const forwardedHost = String(
+    req.headers["x-forwarded-host"] || ""
+  )
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+
+  return (
+    originHost === allowedHost ||
+    forwardedHost === allowedHost
+  );
+}
+ 
+async function requireRubricTeacherProfile(req) {
+  const skipRubricAuthForTest =
+    (
+      process.env.DEV_SKIP_RUBRIC_AUTH === "true" &&
+      isLocalDevRequest(req)
+    ) ||
+    isTrustedDemoRequest(req);
+
+  if (skipRubricAuthForTest) {
     return {
-      user: { id: "local-rubric-test-user" },
-      profile: {
-        id: "local-rubric-test-user",
-        role: "teacher",
-        name: "Local Teacher",
+      user: {
+        id: "demo-rubric-test-user",
       },
+
+      profile: {
+        id: "demo-rubric-test-user",
+        role: "teacher",
+        name: "Demo Teacher",
+      },
+
       error: null,
       status: 200,
     };
@@ -1587,23 +1648,18 @@ function aiInputCharCount(prompt, messages, system) {
 app.post('/api/generate', async (req, res) => {
   const requestHost = String(req.headers.host || "").split(":")[0];
 
-  const isLocalRequest =
-    req.hostname === "localhost" ||
-    req.hostname === "127.0.0.1" ||
-    req.hostname === "::1" ||
-    requestHost === "localhost" ||
-    requestHost === "127.0.0.1" ||
-    requestHost === "::1" ||
-    req.ip === "::1" ||
-    req.ip === "127.0.0.1" ||
-    req.ip === "::ffff:127.0.0.1";
+  const skipAiAuthForTest =
+  (
+    process.env.DEV_SKIP_AI_AUTH === "true" &&
+    isLocalDevRequest(req)
+  ) ||
+  isTrustedDemoRequest(req);
 
-  const skipAiAuthForLocalTest =
-    process.env.DEV_SKIP_AI_AUTH === "true" && isLocalRequest;
-
-  const user = skipAiAuthForLocalTest
-    ? { id: "local-ai-test-user" }
-    : await getUser(req);
+const user = skipAiAuthForTest
+  ? {
+      id: "demo-ai-test-user",
+    }
+  : await getUser(req);
 
   if (!user) return res.status(401).json({ error: 'Not authenticated' });
 
