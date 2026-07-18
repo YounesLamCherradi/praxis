@@ -15,6 +15,7 @@ import {
   Layers,
   LogOut,
   Megaphone,
+  Menu,
   Plus,
   RotateCcw,
   Send,
@@ -353,6 +354,9 @@ export default function StudentDashboard() {
     useState(0);
 
   const [isAccountMenuOpen, setIsAccountMenuOpen] =
+    useState(false);
+
+  const [isSidebarOpen, setIsSidebarOpen] =
     useState(false);
 
   const [isPasswordPanelOpen, setIsPasswordPanelOpen] =
@@ -762,6 +766,8 @@ export default function StudentDashboard() {
   ) {
     if (!notification) return;
 
+    setIsSidebarOpen(false);
+
     /*
      * One click performs the full expected action:
      * save/close any current assignment, select the correct course,
@@ -814,6 +820,7 @@ export default function StudentDashboard() {
   }
 
   function openBugReportForm() {
+    setIsSidebarOpen(false);
     resetBugReportForm();
     setIsBugReportOpen(true);
   }
@@ -1031,6 +1038,8 @@ export default function StudentDashboard() {
   function navigateToCourseWorkspace(
     nextClassId
   ) {
+    setIsSidebarOpen(false);
+
     /*
      * Course navigation is real navigation, not only a filter change:
      * save/close the active assignment, then show the requested course list.
@@ -1114,6 +1123,7 @@ export default function StudentDashboard() {
   }
 
   function openEnrollModal() {
+    setIsSidebarOpen(false);
     setCourseCodeInput("");
     setEnrollError("");
     setEnrollSuccess("");
@@ -1310,7 +1320,7 @@ export default function StudentDashboard() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#F8FAFC] flex font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900">
+    <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
       <style>{`
         .blueprint-grid {
           background-image:
@@ -1384,7 +1394,23 @@ export default function StudentDashboard() {
         }
       `}</style>
 
-      <aside className="w-68 h-screen sticky top-0 bg-slate-950 text-slate-200 flex flex-col justify-between shrink-0 shadow-2xl relative z-20">
+      {isSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close course menu"
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] md:hidden"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 h-screen w-[17rem] bg-slate-950 text-slate-200 shadow-2xl transition-transform duration-200 md:relative md:z-20 md:w-68 md:translate-x-0 ${
+          isSidebarOpen
+            ? "translate-x-0"
+            : "-translate-x-full"
+        }`}
+      >
+        <div className="flex h-full flex-col justify-between">
         <div className="flex-1 flex flex-col min-h-0">
           <div className="p-6 border-b border-slate-800/80 flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-white border border-blue-400/20 shadow-md shadow-blue-500/10 flex items-center justify-center shrink-0 overflow-hidden">
@@ -1737,16 +1763,32 @@ export default function StudentDashboard() {
             />
           </button>
         </div>
+
+        </div>
       </aside>
 
-      <main className="flex-1 h-screen flex flex-col min-w-0 overflow-hidden relative">
-        <header className="h-16 bg-white border-b border-slate-200/80 px-8 flex items-center justify-between shrink-0 relative z-10">
-          <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
-            <span>Workspace</span>
+      <main className="relative flex h-screen min-w-0 w-full flex-1 flex-col overflow-hidden">
+        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white px-4 sm:px-5 md:px-8">
+          <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen((current) => !current)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
+              aria-label="Open course menu"
+              aria-expanded={isSidebarOpen}
+            >
+              {isSidebarOpen ? (
+                <X className="h-4 w-4" />
+              ) : (
+                <Menu className="h-4 w-4" />
+              )}
+            </button>
 
-            <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+            <span className="hidden sm:inline">Workspace</span>
 
-            <span className="text-slate-950 font-bold">
+            <ChevronRight className="hidden h-3.5 w-3.5 text-slate-300 sm:inline" />
+
+            <span className="truncate font-bold text-slate-950">
               {currentClassId === "__all__"
                 ? "All Course Workspaces"
                 : classes.find(

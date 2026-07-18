@@ -32,6 +32,7 @@ import {
   Layers,
   LogOut,
   Megaphone,
+  Menu,
   RefreshCw,
   Search,
   Send,
@@ -1394,6 +1395,9 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] =
     useState("overview");
 
+  const [isSidebarOpen, setIsSidebarOpen] =
+    useState(false);
+
   const [data, setData] =
     useState(() =>
       getPraxisData()
@@ -2087,6 +2091,8 @@ export default function AdminDashboard() {
   }
 
   function openOverview() {
+    setIsSidebarOpen(false);
+
     setActiveTab(
       "overview"
     );
@@ -2095,6 +2101,8 @@ export default function AdminDashboard() {
   }
 
   function openTeachers() {
+    setIsSidebarOpen(false);
+
     setActiveTab(
       "teachers"
     );
@@ -2257,6 +2265,7 @@ export default function AdminDashboard() {
   }
 
   function openBugReportForm() {
+    setIsSidebarOpen(false);
     resetBugReportForm();
     setIsBugReportOpen(true);
   }
@@ -2975,7 +2984,7 @@ export default function AdminDashboard() {
       : "Teachers";
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+    <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900 md:flex">
       <style>{`
         .blueprint-grid {
           background-image:
@@ -3017,7 +3026,22 @@ export default function AdminDashboard() {
         }
       `}</style>
 
-      <aside className="relative z-20 flex h-full w-68 shrink-0 flex-col justify-between bg-slate-950 text-slate-200 shadow-2xl">
+      {isSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close admin menu"
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] md:hidden"
+        />
+      )}
+
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex h-full w-[17rem] shrink-0 flex-col justify-between bg-slate-950 text-slate-200 shadow-2xl transition-transform duration-200 md:relative md:z-20 md:w-68 md:translate-x-0 ${
+          isSidebarOpen
+            ? "translate-x-0"
+            : "-translate-x-full"
+        }`}
+      >
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center gap-3 border-b border-slate-800/80 p-6">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-400/20 bg-white shadow-md shadow-blue-500/10">
@@ -3096,6 +3120,8 @@ export default function AdminDashboard() {
                 }
                 badgeTone="indigo"
                 onClick={() => {
+                  setIsSidebarOpen(false);
+
                   setActiveTab(
                     "research"
                   );
@@ -3112,6 +3138,8 @@ export default function AdminDashboard() {
                 icon={Database}
                 label="System"
                 onClick={() => {
+                  setIsSidebarOpen(false);
+
                   setActiveTab(
                     "system"
                   );
@@ -3241,13 +3269,27 @@ export default function AdminDashboard() {
       </aside>
 
       <main className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white px-8">
+        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white px-4 sm:px-5 md:px-8">
           <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
-            <span>
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen((current) => !current)}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
+              aria-label="Open admin menu"
+              aria-expanded={isSidebarOpen}
+            >
+              {isSidebarOpen ? (
+                <X className="h-4 w-4" />
+              ) : (
+                <Menu className="h-4 w-4" />
+              )}
+            </button>
+
+            <span className="hidden sm:inline">
               Workspace
             </span>
 
-            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+            <ChevronRight className="hidden h-3.5 w-3.5 shrink-0 text-slate-300 sm:inline" />
 
             <span className="truncate font-mono font-bold uppercase tracking-wider text-slate-950">
               {activeTab ===
@@ -3260,7 +3302,10 @@ export default function AdminDashboard() {
           <button
             type="button"
             onClick={
-              refreshData
+              () => {
+                setIsSidebarOpen(false);
+                refreshData();
+              }
             }
             className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-700"
           >

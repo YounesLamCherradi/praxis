@@ -20,6 +20,27 @@ function getText(value) {
   return String(value || "").trim();
 }
 
+function getIdeaBulletText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (value && typeof value === "object") {
+    const textCandidate =
+      value.text ||
+      value.idea ||
+      value.bullet ||
+      value.content ||
+      value.message ||
+      value.title ||
+      "";
+
+    return String(textCandidate || "").trim();
+  }
+
+  return "";
+}
+
 function normalizeChatMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
 
@@ -642,7 +663,10 @@ export default function Step1IdeasChat() {
       const end = raw.lastIndexOf("]");
       const parsed = JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw);
       aiBullets = Array.isArray(parsed)
-        ? parsed.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 4)
+        ? parsed
+            .map((item) => getIdeaBulletText(item))
+            .filter(Boolean)
+            .slice(0, 4)
         : [];
 
       if (!aiBullets.length) throw new Error("No usable ideas returned.");
@@ -952,14 +976,14 @@ export default function Step1IdeasChat() {
                         {Array.isArray(response.aiBullets) &&
                           response.aiBullets.map((idea, ideaIndex) => (
                             <li
-                              key={`${idea}-${ideaIndex}`}
+                              key={`${getIdeaBulletText(idea) || "idea"}-${ideaIndex}`}
                               className="flex gap-2 rounded-lg bg-emerald-50/60 px-2.5 py-2"
                             >
                               <span className="mt-0.5 font-bold text-emerald-700">
                                 •
                               </span>
 
-                              <span>{idea}</span>
+                              <span>{getIdeaBulletText(idea)}</span>
                             </li>
                           ))}
                       </ul>

@@ -45,22 +45,32 @@ function countWords(text = "") {
 const STUDENT_STEP_STORAGE_KEY = "praxis_student_step_overrides";
 
 function getDraftText(submission = {}) {
+  const source =
+    submission && typeof submission === "object"
+      ? submission
+      : {};
+
   return String(
-    submission.draftText ??
-      submission.content ??
-      submission.text ??
+    source.draftText ??
+      source.content ??
+      source.text ??
       ""
   );
 }
 
 function getFinalText(submission = {}) {
+  const source =
+    submission && typeof submission === "object"
+      ? submission
+      : {};
+
   return String(
-    submission.finalText ??
-      submission.submittedText ??
-      submission.submissionText ??
-      submission.draftText ??
-      submission.content ??
-      submission.text ??
+    source.finalText ??
+      source.submittedText ??
+      source.submissionText ??
+      source.draftText ??
+      source.content ??
+      source.text ??
       ""
   );
 }
@@ -3328,12 +3338,11 @@ export function StudentWorkspaceProvider({
         activeSubmission?.finalText || ""
       );
 
-      /*
-        Exact old Praxis rule:
-        copy draftText into finalText only when finalText is empty.
-        Once finalText exists, later Step 2 edits never overwrite it.
-      */
+      // Keep Submit preview in sync with the latest Draft content.
+      // When the student enters Feedback from Draft, the current draft
+      // should become the working final text for that attempt.
       const shouldInitializeFinalText =
+        studentStep === 2 ||
         !savedFinalText.trim();
 
       const nextFinalText =
