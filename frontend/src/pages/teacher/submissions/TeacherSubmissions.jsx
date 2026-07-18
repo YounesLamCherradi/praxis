@@ -313,11 +313,50 @@ function tryParseJsonPayload(value = "") {
   }
 }
 
+function looksLikeStructuredJsonText(value = "") {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return false;
+  }
+
+  if (/^```(?:json)?/i.test(text)) {
+    return true;
+  }
+
+  return (
+    (text.startsWith("[") || text.startsWith("{")) &&
+    /"(lineNumber|excerpt|comment|issues|summary|overall)"/i.test(text)
+  );
+}
+
+function buildAiRevisionSummary(issueCount = 0) {
+  if (!issueCount) {
+    return "";
+  }
+
+  return `AI identified ${issueCount} revision point${issueCount === 1 ? "" : "s"}.`;
+}
+
 function getGradeSheetAiFeedbackStructured(item = {}) {
+  const directIssues = safeArray(item.issues);
+  const directSummaryRaw = String(item.overall || item.summary || "").trim();
+  const directSummaryFallback = buildAiRevisionSummary(directIssues.length);
+
+  const directSummary =
+    directSummaryFallback &&
+    (
+      !directSummaryRaw ||
+      !!tryParseJsonPayload(directSummaryRaw) ||
+      looksLikeStructuredJsonText(directSummaryRaw)
+    )
+      ? directSummaryFallback
+      : directSummaryRaw;
+
   const direct = {
-    summary: String(item.overall || item.summary || "").trim(),
+    summary: directSummary,
     strengths: safeArray(item.strengths),
-    issues: safeArray(item.issues),
+    issues: directIssues,
     nextSteps: safeArray(item.nextSteps),
   };
 
@@ -353,7 +392,7 @@ function getGradeSheetAiFeedbackStructured(item = {}) {
 
   if (Array.isArray(parsed)) {
     return {
-      summary: `AI identified ${parsed.length} revision point${parsed.length === 1 ? "" : "s"}.`,
+      summary: buildAiRevisionSummary(parsed.length),
       strengths: [],
       issues: parsed,
       nextSteps: [],
@@ -370,15 +409,25 @@ function getGradeSheetAiFeedbackStructured(item = {}) {
     nested.issues || nested.improvements || nested.areasToImprove || nested.items
   );
 
-  const summary = String(
+  const nestedSummaryRaw = String(
     nested.overall ||
       nested.summary ||
       nested.overallFeedback ||
       nested.feedbackSummary ||
-      (issues.length > 0
-        ? `AI identified ${issues.length} revision point${issues.length === 1 ? "" : "s"}.`
-        : "")
+      ""
   ).trim();
+
+  const nestedSummaryFallback = buildAiRevisionSummary(issues.length);
+
+  const summary =
+    nestedSummaryFallback &&
+    (
+      !nestedSummaryRaw ||
+      !!tryParseJsonPayload(nestedSummaryRaw) ||
+      looksLikeStructuredJsonText(nestedSummaryRaw)
+    )
+      ? nestedSummaryFallback
+      : nestedSummaryRaw;
 
   return {
     summary,

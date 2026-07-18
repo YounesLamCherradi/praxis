@@ -250,6 +250,23 @@ function tryParseJsonPayload(value = "") {
   }
 }
 
+function looksLikeStructuredJsonText(value = "") {
+  const text = String(value || "").trim();
+
+  if (!text) {
+    return false;
+  }
+
+  if (/^```(?:json)?/i.test(text)) {
+    return true;
+  }
+
+  return (
+    (text.startsWith("[") || text.startsWith("{")) &&
+    /"(lineNumber|excerpt|comment|issues|summary|overall)"/i.test(text)
+  );
+}
+
 function extractStructuredAiFeedback(payload) {
   if (!payload) {
     return {
@@ -848,8 +865,16 @@ function normalizeStudentAiFeedback(item, index = 0) {
       ? `AI identified ${finalIssues.length} revision point${finalIssues.length === 1 ? "" : "s"}.`
       : "";
 
+  const shouldReplaceOverallWithSummary =
+    !!parsedSummary &&
+    (
+      !sanitizedOverall ||
+      !!tryParseJsonPayload(sanitizedOverall) ||
+      looksLikeStructuredJsonText(sanitizedOverall)
+    );
+
   const finalOverall =
-    tryParseJsonPayload(sanitizedOverall) && parsedSummary
+    shouldReplaceOverallWithSummary
       ? parsedSummary
       : sanitizedOverall;
 
