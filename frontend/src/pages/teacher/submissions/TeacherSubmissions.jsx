@@ -84,7 +84,17 @@ function getSubmissionTime(submission) {
 }
 
 function getReadableDate(submission) {
-  return submission?.resubmittedAt?.slice(0, 10) || submission?.submittedAt || submission?.createdAt?.slice(0, 10) || "-";
+  const value = submission?.resubmittedAt || submission?.submittedAt || null;
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 10);
+  return date.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function mergeSubmissionSources(primary = [], secondary = []) {
@@ -128,25 +138,16 @@ function getSubmissionText(submission) {
   return String(
     submission?.submittedText ||
       submission?.submissionText ||
-      submission?.finalText ||
-      submission?.content ||
-      submission?.draftText ||
-      submission?.text ||
-      submission?.essay ||
-      submission?.response ||
-      submission?.finalSubmission ||
-      submission?.submission?.content ||
-      submission?.submission?.text ||
       ""
   ).trim();
 }
 
 function hasSubmissionEvidence(submission) {
-  return Boolean(
+  const submittedTimestamp =
     submission?.submittedAt ||
-      submission?.resubmittedAt ||
-      getSubmissionText(submission)
-  );
+    submission?.resubmittedAt ||
+    null;
+  return Boolean(submittedTimestamp && getSubmissionText(submission));
 }
 
 const QUICK_STATUS_CONTROLS = [
@@ -190,7 +191,7 @@ function CompactStatusActions({
     getSubmissionText(submission);
 
   const hasRealSubmission =
-    Boolean(submissionText);
+    hasSubmissionEvidence(submission);
 
   const currentStatus =
     normalizeStatus(
@@ -2391,6 +2392,8 @@ export default function TeacherSubmissions({
         studentEmail: enrollment.studentEmail || "student@aui.ma",
         assignment: selectedAssignment,
         submission: null,
+        progressSubmission: null,
+        progressRecords: [],
         attempts: [],
         status: "Not Started",
       });
@@ -2416,6 +2419,8 @@ export default function TeacherSubmissions({
         studentEmail: resolvedStudentEmail,
         assignment: selectedAssignment,
         submission: null,
+        progressSubmission: null,
+        progressRecords: [],
         attempts: [],
         status: "Not Started",
       };
@@ -2430,10 +2435,16 @@ export default function TeacherSubmissions({
         resolvedStudentEmail ||
         existingRow.studentEmail;
 
-      existingRow.attempts = [
-        ...(existingRow.attempts || []),
+      existingRow.progressRecords = [
+        ...(existingRow.progressRecords || []),
         submission,
       ];
+      if (hasSubmissionEvidence(submission)) {
+        existingRow.attempts = [
+          ...(existingRow.attempts || []),
+          submission,
+        ];
+      }
       rosterByEmail.set(email, existingRow);
     });
 
@@ -2454,12 +2465,27 @@ export default function TeacherSubmissions({
           getSubmissionTime(a)
         );
       });
-      const currentAttempt = sortedAttempts.find((attempt) => attempt.isCurrent === true) || sortedAttempts[0] || null;
+      const sortedProgressRecords = [...(row.progressRecords || [])].sort(
+        (a, b) => getSubmissionTime(b) - getSubmissionTime(a)
+      );
+      const currentAttempt =
+        sortedAttempts.find((attempt) => attempt.isCurrent === true) ||
+        sortedAttempts[0] || null;
+      const currentProgress =
+        sortedProgressRecords.find((record) => record.isCurrent === true) ||
+        sortedProgressRecords[0] || null;
+      const displayStatus = currentAttempt
+        ? normalizeStatus(currentAttempt.status)
+        : currentProgress
+        ? normalizeStatus(currentProgress.status || "draft")
+        : "Not Started";
       return {
         ...row,
+        progressRecords: sortedProgressRecords,
+        progressSubmission: currentProgress,
         attempts: sortedAttempts,
         submission: currentAttempt,
-        status: normalizeStatus(currentAttempt?.status),
+        status: displayStatus,
       };
     });
   }, [selectedAssignment, submissions, refreshKey]);
@@ -2541,14 +2567,13 @@ export default function TeacherSubmissions({
   }
 
   function openStudentReview(item) {
-    setSelectedRosterId(item.id);
-
     const current =
-      item.attempts?.find((attempt) => attempt.isCurrent === true) ||
-      item.attempts?.[0] ||
-      null;
-
-    setSelectedAttemptId(current?.id || null);
+      item.attempts?.find(
+        (attempt) => attempt.isCurrent === true && hasSubmissionEvidence(attempt)
+      ) || item.attempts?.find(hasSubmissionEvidence) || null;
+    if (!current) return;
+    setSelectedRosterId(item.id);
+    setSelectedAttemptId(current.id);
     setReviewSubmissionSnapshot(current);
     setReviewOpen(true);
   }
@@ -2767,7 +2792,7 @@ export default function TeacherSubmissions({
     const sourceSubmission =
       activeReviewSubmission || selectedSubmission;
 
-    if (!sourceSubmission) return null;
+    if (!sourceSubmission || !hasSubmissionEvidence(sourceSubmission)) return null;
 
     const txt = getSubmissionText(sourceSubmission);
 
@@ -2789,8 +2814,9 @@ export default function TeacherSubmissions({
         selectedAssignment?.rubricSchema?.title ||
         null,
       content: txt,
-      draftText: txt,
+      draftText: String(sourceSubmission.draftText || ""),
       submittedText: txt,
+      submissionText: txt,
       finalText: txt,
       text: txt,
     };
@@ -2930,6 +2956,7 @@ export default function TeacherSubmissions({
               const status = normalizeStatus(item.status);
               const latestSubmission = item.submission;
               const attemptsCount = item.attempts?.length || 0;
+              const hasActualSubmission = hasSubmissionEvidence(latestSubmission);
 
               return (
                 <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-3 lg:gap-4 px-5 py-4 items-center hover:bg-[#FBF9F6]/60 transition-colors">
@@ -2944,17 +2971,25 @@ export default function TeacherSubmissions({
                   </div>
                   <div className="text-xs text-slate-500">{attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}</div>
                   <div className="text-xs font-bold text-slate-700">
-                    {latestSubmission?.score !== null && latestSubmission?.score !== undefined ? latestSubmission.score : "-"}
+                    {hasActualSubmission && latestSubmission?.score !== null && latestSubmission?.score !== undefined
+                      ? latestSubmission.score : "—"}
                   </div>
-                  <div className="text-xs text-slate-500">{getReadableDate(latestSubmission)}</div>
+                  <div className="text-xs text-slate-500">
+                    {hasActualSubmission ? getReadableDate(latestSubmission) : "—"}
+                  </div>
                   <div className="lg:text-right">
                     <button
                       type="button"
+                      disabled={!hasActualSubmission}
                       onClick={() => openStudentReview(item)}
-                      className="inline-flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-slate-800 transition-all"
+                      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                        hasActualSubmission
+                          ? "bg-slate-900 text-white hover:bg-slate-800"
+                          : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                      }`}
                     >
                       <Eye className="w-4 h-4" />
-                      Review
+                      {hasActualSubmission ? "Review" : "No Submission"}
                     </button>
                   </div>
                 </div>

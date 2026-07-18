@@ -987,6 +987,7 @@ export default function Step3AIFeedback() {
     setTypedText,
     goToStudentStep,
     saveDraftProgress,
+    studentWorkflowNotice,
   } = useStudentWorkspace();
 
   const [isChecking, setIsChecking] = useState(false);
@@ -1015,6 +1016,13 @@ export default function Step3AIFeedback() {
   );
 
   const wordCount = countWords(draftText);
+
+  const feedbackTransitionNoticeOpen = Boolean(
+    studentWorkflowNotice &&
+      Number(
+        studentWorkflowNotice?.pendingTransition?.targetStep
+      ) === 4
+  );
 
   const assignmentTitle =
     activeAssignment?.title ||
@@ -1119,42 +1127,17 @@ export default function Step3AIFeedback() {
   useEffect(() => {
     if (!assignmentId) return;
 
-    const liveText = String(
-      typedText ?? ""
-    );
+    const savedFinal = String(activeSubmission?.finalText || "");
+    const savedDraft = String(activeSubmission?.draftText || "");
 
-    const savedFinal = String(
-      activeSubmission?.finalText || ""
-    );
-
-    const savedDraft = String(
-      activeSubmission?.draftText || ""
-    );
-
-    /*
-      Central navigation normally initializes Step 3. This is only a
-      compatibility fallback for an assignment opened directly at Step 3.
-      Never replace non-empty live transition text with an older snapshot.
-    */
-    if (
-      !liveText.trim() &&
-      !savedFinal.trim() &&
-      savedDraft.trim()
-    ) {
+    if (!savedFinal.trim() && savedDraft.trim()) {
       setTypedText(savedDraft);
-
       saveDraftProgress(assignmentId, {
         finalText: savedDraft,
-        finalInitializedAt:
-          new Date().toISOString(),
-        finalSourceDraftText:
-          savedDraft,
+        finalInitializedAt: new Date().toISOString(),
       });
     }
-  }, [
-    assignmentId,
-    activeSubmission?.id,
-  ]);
+  }, [assignmentId, activeSubmission?.id]);
 
   function handleFinalTextChange(event) {
     const nextText = event.target.value;
@@ -1345,6 +1328,8 @@ export default function Step3AIFeedback() {
       setSelectedIssueId("");
       saveFeedbackToProgress(feedbackToSave);
     } catch (error) {
+      console.error("AI draft review error:", error);
+
       const fallbackItems = generateLocalFeedback();
 
       const fallbackFeedback = {
@@ -1378,15 +1363,12 @@ export default function Step3AIFeedback() {
   }
 
   function handleContinueToFinalSubmission() {
-    if (
-      assignmentId &&
-      typeof saveDraftProgress === "function"
-    ) {
+    if (feedbackTransitionNoticeOpen) return;
+
+    if (assignmentId && typeof saveDraftProgress === "function") {
       saveDraftProgress(assignmentId, {
         finalText: draftText,
         wordCount,
-        finalSavedAt:
-          new Date().toISOString(),
       });
     }
 
@@ -1775,19 +1757,25 @@ export default function Step3AIFeedback() {
               Back to Draft
             </button>
 
-            <button
-              type="button"
-              onClick={handleContinueToFinalSubmission}
-              disabled={!draftText.trim()}
-              className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
-                draftText.trim()
-                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
-                  : "cursor-not-allowed bg-slate-100 text-slate-400"
-              }`}
-            >
-              Continue to Submit
-              <ArrowRight className="h-4 w-4" />
-            </button>
+            {feedbackTransitionNoticeOpen ? (
+              <div className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-xs font-bold text-blue-700">
+                Choose an option above
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleContinueToFinalSubmission}
+                disabled={!draftText.trim()}
+                className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
+                  draftText.trim()
+                    ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
+                    : "cursor-not-allowed bg-slate-100 text-slate-400"
+                }`}
+              >
+                Continue to Submit
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
       </div>

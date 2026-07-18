@@ -73,22 +73,23 @@ function getAssignmentSubmissions(assignment, submissions) {
   );
 }
 
-function getSubmissionText(submission = {}) {
+function getSubmittedText(submission = {}) {
   return String(
     submission.submittedText ||
       submission.submissionText ||
-      submission.finalText ||
-      submission.content ||
-      submission.draftText ||
       ""
   ).trim();
 }
 
 function hasSubmissionEvidence(submission = {}) {
-  return Boolean(
+  const submittedTimestamp =
     submission.submittedAt ||
-      submission.resubmittedAt ||
-      getSubmissionText(submission)
+    submission.resubmittedAt ||
+    null;
+
+  return Boolean(
+    submittedTimestamp &&
+      getSubmittedText(submission)
   );
 }
 
@@ -102,41 +103,34 @@ function getAssignmentSubmissionMetrics(
       submissions
     );
 
+  const actualSubmissions =
+    assignmentSubmissions.filter(
+      hasSubmissionEvidence
+    );
+
   const students = new Set();
   let pending = 0;
 
-  assignmentSubmissions.forEach((submission) => {
-    if (hasSubmissionEvidence(submission)) {
-      students.add(
-        String(
-          submission.studentEmail ||
-            submission.userEmail ||
-            submission.id ||
-            "student"
-        )
-          .trim()
-          .toLowerCase()
-      );
-    }
+  actualSubmissions.forEach((submission) => {
+    students.add(
+      String(
+        submission.studentEmail ||
+          submission.userEmail ||
+          submission.id ||
+          "student"
+      ).trim().toLowerCase()
+    );
 
-    const status =
-      normalizeSubmissionStatus(
-        submission
-      );
-
+    const status = normalizeSubmissionStatus(submission);
     if (
       submission.isCurrent !== false &&
-      (status === "submitted" ||
-        status === "late") &&
-      hasSubmissionEvidence(submission)
-    ) {
-      pending += 1;
-    }
+      (status === "submitted" || status === "late")
+    ) pending += 1;
   });
 
   return {
     students: students.size,
-    attempts: assignmentSubmissions.length,
+    attempts: actualSubmissions.length,
     pending,
   };
 }

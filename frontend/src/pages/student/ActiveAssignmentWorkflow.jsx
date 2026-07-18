@@ -396,10 +396,11 @@ export default function ActiveAssignmentWorkflow() {
 
         {studentWorkflowNotice && (
           <WorkflowNoticeBox
+            key={studentWorkflowNotice.id}
             notice={studentWorkflowNotice}
-            onPrimary={confirmStudentWorkflowNotice}
-            onSecondary={clearStudentWorkflowNotice}
-            onClose={clearStudentWorkflowNotice}
+            onPrimary={() => confirmStudentWorkflowNotice()}
+            onSecondary={() => clearStudentWorkflowNotice()}
+            onClose={() => clearStudentWorkflowNotice()}
           />
         )}
 

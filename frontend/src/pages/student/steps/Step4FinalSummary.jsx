@@ -1171,6 +1171,7 @@ export default function Step4FinalSummary() {
 
   const [submitMessage, setSubmitMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [attested, setAttested] = useState(false);
   const [showTeacherFeedback, setShowTeacherFeedback] =
     useState(false);
   const [showSelfGrade, setShowSelfGrade] =
@@ -1189,6 +1190,14 @@ export default function Step4FinalSummary() {
   }, [
     activeSubmission?.id,
     activeSubmission?.selfRubricScores,
+  ]);
+
+  useEffect(() => {
+    setAttested(false);
+  }, [
+    activeSubmission?.id,
+    activeSubmission?.attemptNumber,
+    activeSubmission?.reopenedAt,
   ]);
 
   const submissionStatus = String(
@@ -1579,6 +1588,7 @@ export default function Step4FinalSummary() {
     !wordCountIssue &&
     (!selfGradeRequired ||
       selfGradeComplete) &&
+    attested &&
     !isSubmitting;
 
   const workspaceUnavailable =
@@ -1756,12 +1766,25 @@ export default function Step4FinalSummary() {
       return;
     }
 
+    if (!attested) {
+      setSubmitMessage(
+        "Please confirm the Academic Honor statement before submitting."
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     saveFinalProgress();
 
+    const honorConfirmedAt = new Date().toISOString();
+
     const result = submitAssignment(
       activeAssignment.id,
-      finalText
+      finalText,
+      {
+        honorConfirmed: true,
+        honorConfirmedAt,
+      }
     );
 
     if (result) {
@@ -1917,6 +1940,8 @@ export default function Step4FinalSummary() {
             belowMinWords={belowMinWords}
             aboveMaxWords={aboveMaxWords}
             hasAiFeedback={Boolean(aiFeedback)}
+            attested={attested}
+            setAttested={setAttested}
             canSubmit={canSubmit}
             isSubmitting={isSubmitting}
             canResubmit={canResubmit}
@@ -2176,6 +2201,8 @@ function FinalCheckPanel({
   belowMinWords,
   aboveMaxWords,
   hasAiFeedback,
+  attested,
+  setAttested,
   canSubmit,
   isSubmitting,
   canResubmit,
@@ -2186,7 +2213,9 @@ function FinalCheckPanel({
   const wordCountReady =
     !belowMinWords && !aboveMaxWords;
 
-  const compactStatus = selfGradeRequired
+  const compactStatus = !attested
+    ? "Honor confirmation required"
+    : selfGradeRequired
     ? selfGradeComplete
       ? `Self-grade ${selfRubricTotal}/${rubricTotal}`
       : `${completedSelfCriteria}/${rubricCriteriaCount} rubric criteria`
@@ -2272,6 +2301,33 @@ function FinalCheckPanel({
         )}
 
 
+
+        <label
+          className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition-all ${
+            attested
+              ? "border-emerald-200 bg-emerald-50"
+              : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
+          }`}
+        >
+          <input
+            type="checkbox"
+            checked={attested}
+            onChange={(event) => setAttested(event.target.checked)}
+            className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className={`h-4 w-4 shrink-0 ${attested ? "text-emerald-700" : "text-amber-700"}`} />
+              <p className="text-xs font-bold text-slate-900">Academic Honor Confirmation</p>
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
+              I confirm that this submission represents my own work, that I reviewed the final draft, and that I am ready to submit it to my teacher.
+            </p>
+          </div>
+
+          {attested && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />}
+        </label>
 
         <div
           className={`rounded-xl border px-3 py-2.5 ${

@@ -274,14 +274,16 @@ function hasSubmissionEvidence(submission = {}) {
   const submittedText = String(
     submission.submittedText ||
       submission.submissionText ||
-      submission.response ||
-      submission.essay ||
       ""
   ).trim();
 
-  return Boolean(
+  const submittedTimestamp =
     submission.submittedAt ||
-      submission.resubmittedAt ||
+    submission.resubmittedAt ||
+    null;
+
+  return Boolean(
+    submittedTimestamp &&
       submittedText
   );
 }
@@ -664,11 +666,10 @@ function repairDraftSubmittedTextAliases(
         submission.finalText || ""
       );
 
-      const looksLikeLegacyAlias =
-        Boolean(submittedText) &&
-        submittedText === finalText;
+      const hasPrematureSubmittedAlias =
+        Boolean(submittedText);
 
-      if (!looksLikeLegacyAlias) {
+      if (!hasPrematureSubmittedAlias) {
         return submission;
       }
 
@@ -678,6 +679,8 @@ function repairDraftSubmittedTextAliases(
         ...submission,
         submittedText: "",
         submissionText: "",
+        honorConfirmed: false,
+        honorConfirmedAt: null,
         repairedDraftSubmissionAliasAt:
           new Date().toISOString(),
       };
@@ -1078,10 +1081,8 @@ function buildDraftSubmission({
       ""
   );
 
-  const submittedText = String(
-    patch.submittedText ??
-      ""
-  );
+  /* Draft progress is not a real submission. */
+  const submittedText = "";
 
   const chatHistory =
     safeArray(
@@ -1131,6 +1132,8 @@ function buildDraftSubmission({
 
     submittedAt: null,
     resubmittedAt: null,
+    honorConfirmed: false,
+    honorConfirmedAt: null,
 
     status: "draft",
 
@@ -1149,6 +1152,7 @@ function buildDraftSubmission({
     content: draftText,
     draftText,
     submittedText,
+    submissionText: "",
     finalText,
     text: finalText || draftText,
 
@@ -1954,12 +1958,6 @@ export function StudentWorkspaceProvider({
           "finalText"
         );
 
-      const hasSubmittedText =
-        Object.prototype.hasOwnProperty.call(
-          cleanPatch,
-          "submittedText"
-        );
-
       const nextDraftText = hasDraftText
         ? String(cleanPatch.draftText ?? "")
         : getDraftText(existingDraft);
@@ -1968,9 +1966,17 @@ export function StudentWorkspaceProvider({
         ? String(cleanPatch.finalText ?? "")
         : String(existingDraft.finalText ?? "");
 
-      const nextSubmittedText = hasSubmittedText
-        ? String(cleanPatch.submittedText ?? "")
-        : String(existingDraft.submittedText ?? "");
+      const existingHasActualSubmission =
+        hasSubmissionEvidence(existingDraft);
+
+      const nextSubmittedText =
+        existingHasActualSubmission
+          ? String(
+              existingDraft.submittedText ||
+                existingDraft.submissionText ||
+                ""
+            )
+          : "";
 
       const nextContent = Object.prototype.hasOwnProperty.call(
         cleanPatch,
@@ -2007,8 +2013,27 @@ export function StudentWorkspaceProvider({
         content: nextContent,
         draftText: nextDraftText,
         submittedText: nextSubmittedText,
+        submissionText: nextSubmittedText,
         finalText: nextFinalText,
         text: nextText,
+
+        submittedAt:
+          existingDraft.submittedAt ||
+          null,
+
+        resubmittedAt:
+          existingDraft.resubmittedAt ||
+          null,
+
+        honorConfirmed:
+          existingHasActualSubmission
+            ? existingDraft.honorConfirmed === true
+            : false,
+
+        honorConfirmedAt:
+          existingHasActualSubmission
+            ? existingDraft.honorConfirmedAt || null
+            : null,
 
         wordCount:
           cleanPatch.wordCount ??
@@ -2243,7 +2268,8 @@ export function StudentWorkspaceProvider({
 
   function submitAssignment(
     assignmentId,
-    content
+    content,
+    submissionMeta = {}
   ) {
     const data =
       getRepairedPraxisData();
@@ -2267,6 +2293,17 @@ export function StudentWorkspaceProvider({
     if (!cleanContent) {
       return false;
     }
+
+    if (
+      submissionMeta.honorConfirmed !==
+      true
+    ) {
+      return false;
+    }
+
+    const honorConfirmedAt =
+      submissionMeta.honorConfirmedAt ||
+      new Date().toISOString();
 
     const profile =
       getCurrentStudentProfile();
@@ -2499,6 +2536,8 @@ export function StudentWorkspaceProvider({
 
         submittedAt: now,
         resubmittedAt: now,
+        honorConfirmed: true,
+        honorConfirmedAt,
 
         status:
           submittedStatus,
@@ -2661,6 +2700,8 @@ export function StudentWorkspaceProvider({
         attemptNumber > 1
           ? now
           : null,
+      honorConfirmed: true,
+      honorConfirmedAt,
 
       status:
         submittedStatus,
@@ -2981,12 +3022,23 @@ export function StudentWorkspaceProvider({
       return false;
     }
 
+    const transitionOptions = {
+      ...(pendingTransition.options || {}),
+      confirmedFromNotice: true,
+    };
+
+    if (
+      Number(pendingTransition.targetStep) === 4 &&
+      transitionOptions.currentText === undefined
+    ) {
+      transitionOptions.currentText = String(
+        transitionOptions.finalText ?? typedText ?? ""
+      );
+    }
+
     return goToStudentStep(
       pendingTransition.targetStep,
-      {
-        ...(pendingTransition.options || {}),
-        confirmedFromNotice: true,
-      }
+      transitionOptions
     );
   }
 
@@ -3335,53 +3387,6 @@ export function StudentWorkspaceProvider({
   }
 
   function closeStudentAssignment() {
-    /*
-     * Sidebar/course navigation can happen immediately after typing.
-     * Flush the live editor value before closing so course navigation
-     * never loses the latest Draft or Final Revision.
-     */
-    if (
-      activeAssignment &&
-      !isStudentSubmissionLocked(
-        activeSubmission
-      )
-    ) {
-      const liveText = String(
-        typedText ?? ""
-      );
-
-      if (studentStep === 2) {
-        saveDraftProgress(
-          activeAssignment.id,
-          {
-            draftText: liveText,
-            content: liveText,
-            wordCount:
-              countWords(liveText),
-            draftSavedAt:
-              new Date().toISOString(),
-            lastSavedAt:
-              new Date().toISOString(),
-          }
-        );
-      }
-
-      if (studentStep === 3) {
-        saveDraftProgress(
-          activeAssignment.id,
-          {
-            finalText: liveText,
-            wordCount:
-              countWords(liveText),
-            finalSavedAt:
-              new Date().toISOString(),
-            lastSavedAt:
-              new Date().toISOString(),
-          }
-        );
-      }
-    }
-
     clearStudentWorkflowNotice();
     pauseCoachSession();
     setSelectedAssignmentId(null);
