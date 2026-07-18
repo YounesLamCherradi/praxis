@@ -693,6 +693,81 @@ function repairDraftSubmittedTextAliases(
   };
 }
 
+function repairDuplicateCurrentRecords(
+  records = []
+) {
+  const list = safeArray(records).filter(Boolean);
+  const groupsByStudentAssignment = new Map();
+  let changed = false;
+
+  list.forEach((submission) => {
+    const key = `${String(
+      submission.assignmentId
+    )}:${String(
+      submission.studentEmail || ""
+    ).toLowerCase()}`;
+
+    if (!groupsByStudentAssignment.has(key)) {
+      groupsByStudentAssignment.set(
+        key,
+        []
+      );
+    }
+
+    groupsByStudentAssignment
+      .get(key)
+      .push(submission);
+  });
+
+  const repairedRecords = list.map(
+    (submission) => {
+      const key = `${String(
+        submission.assignmentId
+      )}:${String(
+        submission.studentEmail || ""
+      ).toLowerCase()}`;
+
+      const group =
+        groupsByStudentAssignment.get(
+          key
+        );
+
+      const currentRecords = group.filter(
+        (s) => s.isCurrent === true
+      );
+
+      if (currentRecords.length <= 1) {
+        return submission;
+      }
+
+      const mostRecent = currentRecords.sort(
+        (a, b) =>
+          getSubmissionTime(b) -
+          getSubmissionTime(a)
+      )[0];
+
+      if (
+        String(submission.id) ===
+        String(mostRecent.id)
+      ) {
+        return submission;
+      }
+
+      changed = true;
+
+      return {
+        ...submission,
+        isCurrent: false,
+      };
+    }
+  );
+
+  return {
+    submissions: repairedRecords,
+    changed,
+  };
+}
+
 function getRepairedPraxisData() {
   const originalData =
     getPraxisData();
@@ -718,13 +793,22 @@ function getRepairedPraxisData() {
       attemptRepairedData
     );
 
-  const nextData =
-    lateRepair.data;
+  const currentRepair =
+    repairDuplicateCurrentRecords(
+      lateRepair.data.submissions || []
+    );
+
+  const nextData = {
+    ...lateRepair.data,
+    submissions:
+      currentRepair.submissions,
+  };
 
   if (
     attemptRepair.changed ||
     aliasRepair.changed ||
-    lateRepair.changed
+    lateRepair.changed ||
+    currentRepair.changed
   ) {
     savePraxisData(nextData);
   }
@@ -1014,10 +1098,10 @@ function getSubmissionTime(
   submission = {}
 ) {
   return new Date(
-    submission.reopenedAt ||
-      submission.resubmittedAt ||
+    submission.resubmittedAt ||
       submission.submittedAt ||
       submission.updatedAt ||
+      submission.reopenedAt ||
       submission.createdAt ||
       0
   ).getTime();
@@ -1943,6 +2027,32 @@ export function StudentWorkspaceProvider({
         patch
       );
 
+    /*
+      CRITICAL STATE MACHINE CHECK:
+      After submission, reject new saves to prevent auto-creating Attempt 3.
+      saveDraftProgress() is only valid when:
+      1. There's an editable current draft, OR
+      2. This is the first-ever attempt (no sameStudentAttempts at all)
+      
+      If there's a submitted/graded current record, the save is invalid
+      and must be rejected.
+    */
+    if (!existingDraft && sameStudentAttempts.length > 0) {
+      const currentSubmitted =
+        sameStudentAttempts.find(
+          (submission) =>
+            submission.isCurrent === true &&
+            !isEditableStudentSubmission(
+              submission
+            )
+        );
+
+      if (currentSubmitted) {
+        /* Silently reject post-submission saves. */
+        return false;
+      }
+    }
+
     let nextRecord;
 
     if (existingDraft) {
@@ -2342,6 +2452,25 @@ export function StudentWorkspaceProvider({
               studentEmail
             ).toLowerCase()
       );
+
+    /*
+      CRITICAL VALIDATION:
+      Do not allow submission if there's already a current submitted/graded record.
+      This prevents duplicate submissions and the auto-create bug.
+    */
+    const currentlySubmitted =
+      sameStudentAttempts.find(
+        (submission) =>
+          submission.isCurrent === true &&
+          isStudentSubmissionLocked(
+            submission
+          )
+      );
+
+    if (currentlySubmitted) {
+      /* A submission already exists for this attempt. */
+      return false;
+    }
 
     const existingDraft =
       sameStudentAttempts

@@ -1120,8 +1120,6 @@ export default function Step3AIFeedback() {
     setSelectedIssueId("");
   }, [
     activeSubmission?.id,
-    activeSubmission?.lastFeedbackAt,
-    activeSubmission?.feedbackHistory,
   ]);
 
   useEffect(() => {

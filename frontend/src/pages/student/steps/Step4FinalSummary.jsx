@@ -1167,15 +1167,17 @@ export default function Step4FinalSummary() {
     saveDraftProgress,
     goToStudentStep,
     closeStudentAssignment,
+    rememberStudentStep,
   } = useStudentWorkspace();
 
   const [submitMessage, setSubmitMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [attested, setAttested] = useState(false);
   const [showTeacherFeedback, setShowTeacherFeedback] =
     useState(false);
   const [showSelfGrade, setShowSelfGrade] =
     useState(false);
+
+  const submitLockRef = useRef(false);
   const [selfRubricScores, setSelfRubricScores] =
     useState(
       activeSubmission?.selfRubricScores || {}
@@ -1589,7 +1591,7 @@ export default function Step4FinalSummary() {
     (!selfGradeRequired ||
       selfGradeComplete) &&
     attested &&
-    !isSubmitting;
+    submitLockRef.current === false;
 
   const workspaceUnavailable =
     !activeAssignment ||
@@ -1725,12 +1727,20 @@ export default function Step4FinalSummary() {
   }
 
   function handleSubmit() {
+    /* Synchronous lock to prevent double-click race conditions. */
+    if (submitLockRef.current === true) {
+      return;
+    }
+
+    submitLockRef.current = true;
+
     setSubmitMessage("");
 
     if (!activeAssignment) {
       setSubmitMessage(
         "No active assignment selected."
       );
+      submitLockRef.current = false;
       return;
     }
 
@@ -1738,6 +1748,7 @@ export default function Step4FinalSummary() {
       setSubmitMessage(
         "Please write your assignment before submitting it."
       );
+      submitLockRef.current = false;
       return;
     }
 
@@ -1745,6 +1756,7 @@ export default function Step4FinalSummary() {
       setSubmitMessage(
         `Your submission has ${wordCount} words. Minimum required is ${minWords}.`
       );
+      submitLockRef.current = false;
       return;
     }
 
@@ -1752,6 +1764,7 @@ export default function Step4FinalSummary() {
       setSubmitMessage(
         `Your submission has ${wordCount} words. Maximum allowed is ${maxWords}.`
       );
+      submitLockRef.current = false;
       return;
     }
 
@@ -1763,6 +1776,7 @@ export default function Step4FinalSummary() {
         "Please complete your rubric self-assessment before submitting."
       );
       setShowSelfGrade(true);
+      submitLockRef.current = false;
       return;
     }
 
@@ -1770,11 +1784,9 @@ export default function Step4FinalSummary() {
       setSubmitMessage(
         "Please confirm the Academic Honor statement before submitting."
       );
+      submitLockRef.current = false;
       return;
     }
-
-    setIsSubmitting(true);
-    saveFinalProgress();
 
     const honorConfirmedAt = new Date().toISOString();
 
@@ -1791,15 +1803,14 @@ export default function Step4FinalSummary() {
       setSubmitMessage(
         "Assignment submitted successfully."
       );
-
-      window.setTimeout(() => {
-        closeStudentAssignment();
-      }, 1200);
+      /* Save that student is on Step 4 (success screen). */
+      rememberStudentStep(activeAssignment.id, 4);
+      /* Stay on success screen; do not auto-close. */
     } else {
       setSubmitMessage(
         "Submission could not be saved."
       );
-      setIsSubmitting(false);
+      submitLockRef.current = false;
     }
   }
 
@@ -1943,12 +1954,11 @@ export default function Step4FinalSummary() {
             attested={attested}
             setAttested={setAttested}
             canSubmit={canSubmit}
-            isSubmitting={isSubmitting}
+            isSubmitting={submitLockRef.current}
             canResubmit={canResubmit}
             submitMessage={submitMessage}
             handleSubmit={handleSubmit}
             onBack={() => {
-              saveFinalProgress();
               goToStudentStep(3);
             }}
           />
