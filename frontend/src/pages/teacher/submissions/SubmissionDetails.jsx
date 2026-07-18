@@ -216,6 +216,82 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function stripJsonFence(value = "") {
+  const text = String(value || "").trim();
+  const fenceMatch = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenceMatch ? fenceMatch[1].trim() : text;
+}
+
+function tryParseJsonPayload(value = "") {
+  const raw = stripJsonFence(value);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = Math.min(
+      ...[raw.indexOf("["), raw.indexOf("{")].filter((index) => index >= 0)
+    );
+
+    const end = Math.max(raw.lastIndexOf("]"), raw.lastIndexOf("}"));
+
+    if (!Number.isFinite(start) || start < 0 || end <= start) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function extractStructuredAiFeedback(payload) {
+  if (!payload) {
+    return {
+      summary: "",
+      strengths: [],
+      issues: [],
+      nextSteps: [],
+    };
+  }
+
+  if (Array.isArray(payload)) {
+    return {
+      summary: "",
+      strengths: [],
+      issues: payload,
+      nextSteps: [],
+    };
+  }
+
+  const nested =
+    (payload.review && typeof payload.review === "object" && payload.review) ||
+    (payload.feedback && typeof payload.feedback === "object" && payload.feedback) ||
+    (payload.response && typeof payload.response === "object" && payload.response) ||
+    null;
+
+  const source = nested || payload;
+
+  return {
+    summary:
+      source.overall ||
+      source.summary ||
+      source.overallFeedback ||
+      source.feedbackSummary ||
+      "",
+    strengths: safeArray(source.strengths || source.positivePoints),
+    issues: safeArray(
+      source.issues || source.improvements || source.areasToImprove || source.items
+    ),
+    nextSteps: safeArray(source.nextSteps || source.recommendations || source.actionItems),
+  };
+}
+
 
 function getSubmissionText(submission = {}) {
   return String(
@@ -658,11 +734,23 @@ function normalizeStudentAiFeedback(item, index = 0) {
       ? source.response
       : {};
 
+  const rawPayloadCandidate =
+    source.rawText ||
+    source.rawResponse ||
+    (typeof source.response === "string" ? source.response : "") ||
+    (typeof source.feedback === "string" ? source.feedback : "") ||
+    nestedResponse.rawText ||
+    "";
+
+  const parsedPayload = tryParseJsonPayload(rawPayloadCandidate);
+  const structuredFeedback = extractStructuredAiFeedback(parsedPayload);
+
   const overall =
     source.overall ||
     source.summary ||
     source.overallFeedback ||
     source.feedbackSummary ||
+    structuredFeedback.summary ||
     nestedResponse.overall ||
     nestedResponse.summary ||
     (typeof source.feedback === "string"
@@ -692,6 +780,14 @@ function normalizeStudentAiFeedback(item, index = 0) {
     )
     .filter(Boolean);
 
+  const parsedStrengths = safeArray(structuredFeedback.strengths)
+    .map((strength) =>
+      typeof strength === "string"
+        ? strength
+        : strength?.text || strength?.description || strength?.comment || ""
+    )
+    .filter(Boolean);
+
   const issues = safeArray(
     source.issues ||
       source.improvements ||
@@ -704,6 +800,12 @@ function normalizeStudentAiFeedback(item, index = 0) {
         issue.excerpt ||
         issue.problem ||
         issue.suggestion
+    );
+
+  const parsedIssues = safeArray(structuredFeedback.issues)
+    .map(normalizeStudentAiFeedbackIssue)
+    .filter(
+      (issue) => issue.excerpt || issue.problem || issue.suggestion
     );
 
   const nextSteps = safeArray(
@@ -722,21 +824,44 @@ function normalizeStudentAiFeedback(item, index = 0) {
     )
     .filter(Boolean);
 
+  const parsedNextSteps = safeArray(structuredFeedback.nextSteps)
+    .map((step) =>
+      typeof step === "string"
+        ? step
+        : step?.text || step?.description || step?.action || ""
+    )
+    .filter(Boolean);
+
   const rawText =
     source.rawText ||
     source.rawResponse ||
     nestedResponse.rawText ||
     "";
 
+  const finalStrengths = strengths.length > 0 ? strengths : parsedStrengths;
+  const finalIssues = issues.length > 0 ? issues : parsedIssues;
+  const finalNextSteps = nextSteps.length > 0 ? nextSteps : parsedNextSteps;
+
+  const sanitizedOverall = String(overall || "").trim();
+  const parsedSummary =
+    finalIssues.length > 0
+      ? `AI identified ${finalIssues.length} revision point${finalIssues.length === 1 ? "" : "s"}.`
+      : "";
+
+  const finalOverall =
+    tryParseJsonPayload(sanitizedOverall) && parsedSummary
+      ? parsedSummary
+      : sanitizedOverall;
+
   return {
     id:
       source.id ||
       item?.id ||
       `ai_feedback_${index}`,
-    overall,
-    strengths,
-    issues,
-    nextSteps,
+    overall: finalOverall,
+    strengths: finalStrengths,
+    issues: finalIssues,
+    nextSteps: finalNextSteps,
     rawText,
     request:
       source.request ||

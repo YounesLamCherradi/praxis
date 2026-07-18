@@ -279,6 +279,115 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function stripJsonFence(value = "") {
+  const text = String(value || "").trim();
+  const fenceMatch = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenceMatch ? fenceMatch[1].trim() : text;
+}
+
+function tryParseJsonPayload(value = "") {
+  const raw = stripJsonFence(value);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const start = Math.min(
+      ...[raw.indexOf("["), raw.indexOf("{")].filter((index) => index >= 0)
+    );
+
+    const end = Math.max(raw.lastIndexOf("]"), raw.lastIndexOf("}"));
+
+    if (!Number.isFinite(start) || start < 0 || end <= start) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+}
+
+function getGradeSheetAiFeedbackStructured(item = {}) {
+  const direct = {
+    summary: String(item.overall || item.summary || "").trim(),
+    strengths: safeArray(item.strengths),
+    issues: safeArray(item.issues),
+    nextSteps: safeArray(item.nextSteps),
+  };
+
+  if (
+    direct.summary ||
+    direct.strengths.length > 0 ||
+    direct.issues.length > 0 ||
+    direct.nextSteps.length > 0
+  ) {
+    return direct;
+  }
+
+  const rawText = String(
+    item.rawText ||
+      item.feedback ||
+      item.response ||
+      item.content ||
+      item.message ||
+      item.aiResponse ||
+      ""
+  ).trim();
+
+  const parsed = tryParseJsonPayload(rawText);
+
+  if (!parsed) {
+    return {
+      summary: rawText,
+      strengths: [],
+      issues: [],
+      nextSteps: [],
+    };
+  }
+
+  if (Array.isArray(parsed)) {
+    return {
+      summary: `AI identified ${parsed.length} revision point${parsed.length === 1 ? "" : "s"}.`,
+      strengths: [],
+      issues: parsed,
+      nextSteps: [],
+    };
+  }
+
+  const nested =
+    (parsed.review && typeof parsed.review === "object" && parsed.review) ||
+    (parsed.feedback && typeof parsed.feedback === "object" && parsed.feedback) ||
+    (parsed.response && typeof parsed.response === "object" && parsed.response) ||
+    parsed;
+
+  const issues = safeArray(
+    nested.issues || nested.improvements || nested.areasToImprove || nested.items
+  );
+
+  const summary = String(
+    nested.overall ||
+      nested.summary ||
+      nested.overallFeedback ||
+      nested.feedbackSummary ||
+      (issues.length > 0
+        ? `AI identified ${issues.length} revision point${issues.length === 1 ? "" : "s"}.`
+        : "")
+  ).trim();
+
+  return {
+    summary,
+    strengths: safeArray(nested.strengths || nested.positivePoints),
+    issues,
+    nextSteps: safeArray(nested.nextSteps || nested.recommendations || nested.actionItems),
+  };
+}
+
 function formatGradeSheetDate(value) {
   if (!value) return "—";
   const date = new Date(value);
@@ -365,17 +474,8 @@ function buildSelfAssessmentLabel(data = {}) {
 }
 
 function getGradeSheetAiFeedbackText(item = {}) {
-  return String(
-    item.overall ||
-      item.summary ||
-      item.rawText ||
-      item.feedback ||
-      item.response ||
-      item.content ||
-      item.message ||
-      item.aiResponse ||
-      ""
-  ).trim();
+  const structured = getGradeSheetAiFeedbackStructured(item);
+  return String(structured.summary || "").trim();
 }
 
 // ... Keep other static grade sheet helpers exactly as they are ...
@@ -1084,19 +1184,22 @@ function GradeSheetModal({ open, onClose, data }) {
                             item
                           );
 
+                        const structuredFeedback =
+                          getGradeSheetAiFeedbackStructured(item);
+
                         const strengths =
                           safeArray(
-                            item.strengths
+                            structuredFeedback.strengths
                           );
 
                         const issues =
                           safeArray(
-                            item.issues
+                            structuredFeedback.issues
                           );
 
                         const nextSteps =
                           safeArray(
-                            item.nextSteps
+                            structuredFeedback.nextSteps
                           );
 
                         return (
