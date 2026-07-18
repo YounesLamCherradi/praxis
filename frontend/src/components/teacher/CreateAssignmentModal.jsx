@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -12,7 +12,6 @@ import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext";
 
 import {
   DEFAULT_AI_SUPPORT_SETTINGS,
-  DEFAULT_INTEGRITY_SETTINGS,
   STEP_ITEMS,
 } from "./create-assignment/constants";
 
@@ -44,6 +43,25 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, ""
 const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
 const RUBRIC_PARSE_ENDPOINT = `${API_BASE_URL}/api/rubric/parse`;
 
+function getDefaultDueDateValue(daysFromNow = 7) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  date.setHours(23, 59, 0, 0);
+
+  const local = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60_000
+  );
+
+  return local.toISOString().slice(0, 16);
+}
+
+function normalizeCourseKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+}
+
 export default function CreateAssignmentModal({
   classes = [],
   assignments = [],
@@ -57,6 +75,44 @@ export default function CreateAssignmentModal({
   editingAssignment = null,
 }) {
   const { rubrics = [] } = useTeacherWorkspace() || {};
+
+  const activeClasses = useMemo(
+    () => classes.filter((course) => course?.archived !== true),
+    [classes]
+  );
+
+  const selectableClasses = useMemo(() => {
+    const options = [...activeClasses];
+
+    if (!editingAssignment) {
+      return options;
+    }
+
+    const editingClass =
+      classes.find((cls) => {
+        const sameId =
+          editingAssignment.classId !== null &&
+          editingAssignment.classId !== undefined &&
+          String(cls.id) === String(editingAssignment.classId);
+
+        const sameCode =
+          editingAssignment.classCode &&
+          cls.code &&
+          String(cls.code).toUpperCase() ===
+            String(editingAssignment.classCode).toUpperCase();
+
+        return sameId || sameCode;
+      }) || null;
+
+    if (
+      editingClass &&
+      !options.some((cls) => String(cls.id) === String(editingClass.id))
+    ) {
+      options.push(editingClass);
+    }
+
+    return options;
+  }, [activeClasses, classes, editingAssignment]);
 
   const savedRubricOptions = useMemo(() => {
     const merged = [...safeArray(rubrics), ...safeArray(reusableRubrics)];
@@ -72,23 +128,36 @@ export default function CreateAssignmentModal({
 
   const [step, setStep] = useState(1);
 
+  const modalScrollRef = useRef(null);
+
   const [creationMode, setCreationMode] = useState("ai");
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
-  const [course, setCourse] = useState(
-    defaultClass?.code ||
-      classes.find((cls) => String(cls.id) === String(defaultClassId))?.code ||
-      classes[0]?.code ||
-      ""
-  );
+  const [course, setCourse] = useState(() => {
+    const defaultCourse =
+      defaultClass?.archived !== true
+        ? defaultClass?.code ||
+          selectableClasses.find(
+            (cls) => String(cls.id) === String(defaultClassId)
+          )?.code ||
+          ""
+        : "";
+
+    if (defaultCourse) return defaultCourse;
+
+    return selectableClasses.length === 1
+      ? selectableClasses[0].code || selectableClasses[0].name || ""
+      : "";
+  });
 
   const [dueDate, setDueDate] = useState("");
 
   const [assignmentType, setAssignmentType] = useState("Response");
   const [studentLevel, setStudentLevel] = useState("B1");
   const [feedbackChecks, setFeedbackChecks] = useState(2);
+  const [ideaRequestLimit, setIdeaRequestLimit] = useState(3);
 
   const [aiTopic, setAiTopic] = useState("");
   const [aiBrief, setAiBrief] = useState("");
@@ -102,9 +171,6 @@ export default function CreateAssignmentModal({
   const [includeStudentAiSupportInPrompt, setIncludeStudentAiSupportInPrompt] =
     useState(true);
 
-  const [includeIntegritySettingsInPrompt, setIncludeIntegritySettingsInPrompt] =
-    useState(false);
-
   const [minWords, setMinWords] = useState(250);
   const [maxWords, setMaxWords] = useState(400);
 
@@ -116,21 +182,12 @@ export default function CreateAssignmentModal({
     DEFAULT_AI_SUPPORT_SETTINGS.coachTimeLimitMinutes
   );
 
-  const [aiFeedback, setAiFeedback] = useState(
-    DEFAULT_AI_SUPPORT_SETTINGS.aiDraftFeedback
-  );
-
-  const [writingPlayback, setWritingPlayback] = useState(
-    DEFAULT_AI_SUPPORT_SETTINGS.writingPlayback
-  );
-
   const [autoBuildOutlineFromCoach, setAutoBuildOutlineFromCoach] = useState(
     DEFAULT_AI_SUPPORT_SETTINGS.autoBuildOutlineFromCoach
   );
 
-  const [integritySettings, setIntegritySettings] = useState(
-    DEFAULT_INTEGRITY_SETTINGS
-  );
+  // Old logic: feedback is enabled by a positive request limit.
+  const aiFeedback = Number(feedbackChecks || 0) > 0;
 
   const [rubricMode, setRubricMode] = useState("");
   const [selectedRubricId, setSelectedRubricId] = useState("");
@@ -160,11 +217,15 @@ export default function CreateAssignmentModal({
 
   const selectedCourse = useMemo(() => {
     return (
-      classes.find((cls) => cls.code === course || cls.name === course) ||
-      classes.find((cls) => String(cls.id) === String(defaultClassId)) ||
+      selectableClasses.find(
+        (cls) => cls.code === course || cls.name === course
+      ) ||
+      selectableClasses.find(
+        (cls) => String(cls.id) === String(defaultClassId)
+      ) ||
       null
     );
-  }, [classes, course, defaultClassId]);
+  }, [selectableClasses, course, defaultClassId]);
 
   const rubricTotal = calculateTotal(criteria);
 
@@ -199,7 +260,7 @@ export default function CreateAssignmentModal({
             description.trim() &&
             course &&
             dueDate &&
-            aiTopic.trim() &&
+            aiBrief.trim() &&
             hasValidWordRange
         )
       : Boolean(
@@ -212,8 +273,16 @@ export default function CreateAssignmentModal({
 
   useEffect(() => {
     if (!editingAssignment) {
-      if (!course && classes[0]?.code) {
-        setCourse(classes[0].code);
+      const courseIsSelectable = selectableClasses.some(
+        (cls) => cls.code === course || cls.name === course
+      );
+
+      if (!courseIsSelectable) {
+        setCourse(
+          selectableClasses.length === 1
+            ? selectableClasses[0].code || selectableClasses[0].name || ""
+            : ""
+        );
       }
 
       return;
@@ -233,9 +302,16 @@ export default function CreateAssignmentModal({
     setAssignmentType(editingAssignment.assignmentType || "Response");
     setStudentLevel(editingAssignment.studentLevel || "B1");
     setFeedbackChecks(editingAssignment.feedbackRequestLimit ?? 2);
+    setIdeaRequestLimit(editingAssignment.ideaRequestLimit ?? 3);
 
     setAiTopic(editingAssignment.aiTopic || editingAssignment.topic || "");
-    setAiBrief(editingAssignment.aiBrief || "");
+    setAiBrief(
+      editingAssignment.teacherRequest ||
+        editingAssignment.aiBrief ||
+        editingAssignment.description ||
+        editingAssignment.instructions ||
+        ""
+    );
 
     const existingGeneratedDraft =
       editingAssignment.generatedDraft ||
@@ -257,41 +333,37 @@ export default function CreateAssignmentModal({
     setMinWords(editingAssignment.minWords || 250);
     setMaxWords(editingAssignment.maxWords || 400);
 
-    setAllowAI(
-      editingAssignment.aiIdeasCoach ??
-        editingAssignment.allowAI ??
-        DEFAULT_AI_SUPPORT_SETTINGS.aiIdeasCoach
-    );
-
-    setCoachTimeLimitMinutes(
-      editingAssignment.coachTimeLimitMinutes ??
+    const storedChatTimeLimit = Number(
+      editingAssignment.chatTimeLimit ??
+        editingAssignment.coachTimeLimitMinutes ??
         editingAssignment.aiCoachTimeLimitMinutes ??
         DEFAULT_AI_SUPPORT_SETTINGS.coachTimeLimitMinutes
     );
 
-    setAiFeedback(
-      editingAssignment.aiDraftFeedback ??
-        editingAssignment.aiFeedback ??
-        DEFAULT_AI_SUPPORT_SETTINGS.aiDraftFeedback
+    const coachEnabled = Boolean(
+      editingAssignment.disableChatbot !== true &&
+        storedChatTimeLimit >= 0 &&
+        (editingAssignment.aiIdeasCoach ??
+          editingAssignment.allowAI ??
+          DEFAULT_AI_SUPPORT_SETTINGS.aiIdeasCoach)
     );
 
-    setWritingPlayback(
-      editingAssignment.saveWritingPlayback ??
-        editingAssignment.writingPlayback ??
-        DEFAULT_AI_SUPPORT_SETTINGS.writingPlayback
+    setAllowAI(coachEnabled);
+    setCoachTimeLimitMinutes(
+      coachEnabled && Number.isFinite(storedChatTimeLimit)
+        ? Math.max(0, storedChatTimeLimit)
+        : 0
     );
 
     setAutoBuildOutlineFromCoach(
-      editingAssignment.autoBuildOutlineFromCoach ??
-        editingAssignment.generateOutlineFromCoach ??
-        DEFAULT_AI_SUPPORT_SETTINGS.autoBuildOutlineFromCoach
+      Boolean(
+        coachEnabled &&
+          (editingAssignment.autoOutlineFromChat ??
+            editingAssignment.autoBuildOutlineFromCoach ??
+            editingAssignment.generateOutlineFromCoach ??
+            DEFAULT_AI_SUPPORT_SETTINGS.autoBuildOutlineFromCoach)
+      )
     );
-
-    setIntegritySettings({
-      ...DEFAULT_INTEGRITY_SETTINGS,
-      ...(editingAssignment.integritySettings || {}),
-      lockAfterSubmission: true,
-    });
 
     const existingRubric = editingAssignment.rubricSchema;
 
@@ -325,31 +397,61 @@ export default function CreateAssignmentModal({
       setRubricView("preview");
       setExpandedCriterionId("");
     }
-  }, [editingAssignment, classes, course]);
+  }, [editingAssignment, selectableClasses, course]);
 
-  function updateIntegritySetting(field, value) {
-    if (field === "lockAfterSubmission") return;
+  useEffect(() => {
+    const container =
+      modalScrollRef.current;
 
-    setIntegritySettings((prev) => ({
-      ...prev,
-      [field]: value,
-      lockAfterSubmission: true,
-    }));
-  }
+    if (!container) return;
+
+    container.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }, [step]);
 
   async function goNext() {
-    if (step === 1 && !canContinueRubric) return;
-    if (step === 2 && !canContinueDetails) return;
+    if (
+      step === 1 &&
+      !canContinueRubric
+    ) {
+      return;
+    }
 
-    if (step === 3 && rubricMode === "generated" && !criteria.length) {
-      const generatedSuccessfully = await handleGenerateRubric();
+    if (
+      step === 2 &&
+      !canContinueDetails
+    ) {
+      return;
+    }
+
+    if (
+      step === 3 &&
+      rubricMode === "generated" &&
+      !criteria.length
+    ) {
+      const generatedSuccessfully =
+        await handleGenerateRubric();
 
       if (!generatedSuccessfully) {
         return;
       }
     }
 
-    setStep((prev) => Math.min(prev + 1, 4));
+    if (step === 1) {
+      setStep(2);
+      return;
+    }
+
+    if (step === 2) {
+      setStep(3);
+      return;
+    }
+
+    if (step === 3) {
+      setStep(4);
+    }
   }
 
   function goBack() {
@@ -836,8 +938,12 @@ export default function CreateAssignmentModal({
     setGenerationError("");
     setGenerationSuccess("");
 
-    if (!aiTopic.trim()) {
-      setGenerationError("Please enter a topic or assignment idea first.");
+    const teacherRequest = aiBrief.trim();
+
+    if (!teacherRequest) {
+      setGenerationError(
+        "Describe the assignment in the plain-English box first."
+      );
       return;
     }
 
@@ -857,34 +963,17 @@ export default function CreateAssignmentModal({
             {
               role: "user",
               content: buildAssignmentGenerationUserPrompt({
-                aiTopic,
-                aiBrief,
-                assignmentType,
-                studentLevel,
-                minWords,
-                maxWords,
-                feedbackChecks,
-                dueDate,
-                includeRubricInPrompt,
+                teacherRequest,
+                availableCourses: selectableClasses,
+                currentDate: new Date().toISOString(),
                 rubricTitle,
                 criteria,
                 uploadedRubricText,
-                includeStudentAiSupportInPrompt,
-                allowAI,
-                coachTimeLimitMinutes,
-                aiFeedback,
-                writingPlayback,
-                autoBuildOutlineFromCoach,
-                includeIntegritySettingsInPrompt,
-                integritySettings: {
-                  ...integritySettings,
-                  lockAfterSubmission: true,
-                },
               }),
             },
           ],
-          maxTokens: 1000,
-          temperature: 0.35,
+          maxTokens: 1500,
+          temperature: 0.25,
         }),
       });
 
@@ -903,33 +992,131 @@ export default function CreateAssignmentModal({
 
       const generated = normalizeGeneratedAssignment(data);
 
+      const generatedTitle =
+        generated.title || "Generated Writing Assignment";
+
+      const generatedInstructions =
+        generated.instructions ||
+        generated.description ||
+        "";
+
+      if (!generatedInstructions.trim()) {
+        throw new Error(
+          "Claude did not return student-facing assignment instructions."
+        );
+      }
+
       setGeneratedDraft(generated);
+      setTitle(generatedTitle);
+      setDescription(generatedInstructions);
+      setAiTopic(generatedTitle);
 
-      if (generated.title) {
-        setTitle(generated.title);
+      setAssignmentType(
+        generated.assignmentType || "Response"
+      );
+
+      setStudentLevel(
+        generated.languageLevel || "B1"
+      );
+
+      setMinWords(
+        Math.max(1, Number(generated.minWords || 250))
+      );
+
+      setMaxWords(
+        Math.max(
+          Math.max(1, Number(generated.minWords || 250)),
+          Number(generated.maxWords || 400)
+        )
+      );
+
+      setFeedbackChecks(
+        Math.max(
+          0,
+          Number(generated.feedbackRequestLimit ?? 2)
+        )
+      );
+
+      setIdeaRequestLimit(
+        Math.max(
+          0,
+          Number(generated.ideaRequestLimit ?? 3)
+        )
+      );
+
+      setDueDate(
+        generated.dueDate || getDefaultDueDateValue(7)
+      );
+
+      const requestedCourseKey = normalizeCourseKey(
+        generated.classCode ||
+          generated.courseCode ||
+          generated.className ||
+          generated.classId
+      );
+
+      const generatedCourse =
+        selectableClasses.find((item) => {
+          const keys = [
+            item?.id,
+            item?.code,
+            item?.name,
+            `${item?.code || ""}${item?.name || ""}`,
+          ].map(normalizeCourseKey);
+
+          return (
+            requestedCourseKey &&
+            keys.includes(requestedCourseKey)
+          );
+        }) ||
+        selectedCourse ||
+        selectableClasses[0] ||
+        null;
+
+      if (generatedCourse) {
+        setCourse(
+          generatedCourse.code ||
+            generatedCourse.name ||
+            generatedCourse.id ||
+            ""
+        );
       }
 
-      if (generated.instructions) {
-        setDescription(generated.instructions);
-      }
+      const support = generated.aiSupport || {};
 
-      if (generated.suggestedMinWords) {
-        setMinWords(generated.suggestedMinWords);
-      }
+      const generatedTimeLimit = Number(
+        support.chatTimeLimit ?? 0
+      );
 
-      if (generated.suggestedMaxWords) {
-        setMaxWords(generated.suggestedMaxWords);
-      }
+      const generatedCoachEnabled = Boolean(
+        support.ideasCoach !== false &&
+          generatedTimeLimit >= 0
+      );
+
+      setAllowAI(generatedCoachEnabled);
+
+      setCoachTimeLimitMinutes(
+        generatedCoachEnabled && Number.isFinite(generatedTimeLimit)
+          ? Math.max(0, generatedTimeLimit)
+          : 0
+      );
+
+      setAutoBuildOutlineFromCoach(
+        Boolean(
+          generatedCoachEnabled &&
+            support.autoOutlineFromChat !== false
+        )
+      );
 
       setGenerationSuccess(
-        "Assignment draft generated. Review and edit it before continuing."
+        "Assignment generated from your description. Review the generated fields, then continue."
       );
     } catch (error) {
       console.error("Assignment generation error:", error);
 
       setGenerationError(
         error?.message ||
-          "Claude could not generate the assignment draft right now."
+          "Claude could not generate the assignment right now."
       );
     } finally {
       setIsGenerating(false);
@@ -996,42 +1183,42 @@ export default function CreateAssignmentModal({
     };
   }
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  function handleSubmit() {
+    /*
+      HARD GUARD:
+      Only the explicit action button rendered on Step 4 may create
+      or update an assignment. Steps 1–3 have no form submission path.
+    */
+    if (step !== 4) {
+      return;
+    }
 
     if (!canContinueDetails) return;
 
     const rubricSchema = buildRubricPayload();
 
-    const cleanedIntegritySettings = {
-      pastePolicy:
-        integritySettings.pastePolicy ||
-        DEFAULT_INTEGRITY_SETTINGS.pastePolicy ||
-        "warn",
-      logPasteAttempts:
-        integritySettings.logPasteAttempts ??
-        DEFAULT_INTEGRITY_SETTINGS.logPasteAttempts ??
-        true,
-      requireHonorConfirmation:
-        integritySettings.requireHonorConfirmation ??
-        DEFAULT_INTEGRITY_SETTINGS.requireHonorConfirmation ??
-        true,
-      enforceWordCount:
-        integritySettings.enforceWordCount ??
-        DEFAULT_INTEGRITY_SETTINGS.enforceWordCount ??
-        true,
-      lockAfterSubmission: true,
-    };
-
     const cleanTitle = title.trim();
     const cleanDescription = description.trim();
 
-    const normalizedCoachTimeLimit = Math.max(
-      1,
-      Number(coachTimeLimitMinutes || DEFAULT_AI_SUPPORT_SETTINGS.coachTimeLimitMinutes || 15)
-    );
+    const normalizedCoachTimeLimit = allowAI
+      ? Number.isFinite(Number(coachTimeLimitMinutes))
+        ? Math.max(0, Number(coachTimeLimitMinutes))
+        : 0
+      : -1;
 
     const outlineEnabled = Boolean(allowAI && autoBuildOutlineFromCoach);
+
+    const normalizedIdeaRequestLimit = Math.max(
+      0,
+      Number(ideaRequestLimit || 0)
+    );
+
+    const normalizedFeedbackRequestLimit = Math.max(
+      0,
+      Number(feedbackChecks || 0)
+    );
+
+    const aiFeedbackEnabled = normalizedFeedbackRequestLimit > 0;
 
     const assignment = {
       title: cleanTitle,
@@ -1041,12 +1228,14 @@ export default function CreateAssignmentModal({
 
       creationMode,
 
+      teacherRequest: aiBrief.trim(),
       aiTopic: aiTopic.trim(),
       aiBrief: aiBrief.trim(),
       generatedDraft,
 
       assignmentType,
       studentLevel,
+      languageLevel: studentLevel,
 
       classId: selectedCourse?.id || null,
       classCode: selectedCourse?.code || course,
@@ -1061,45 +1250,38 @@ export default function CreateAssignmentModal({
       wordCountMin: Number(minWords),
       wordCountMax: Number(maxWords),
 
-      feedbackRequestLimit: Number(feedbackChecks || 0),
+      ideaRequestLimit: normalizedIdeaRequestLimit,
+      feedbackRequestLimit: normalizedFeedbackRequestLimit,
 
       allowAI,
       aiIdeasCoach: allowAI,
       ideationAI: allowAI,
 
-      coachTimeLimitMinutes: normalizedCoachTimeLimit,
-      aiCoachTimeLimitMinutes: normalizedCoachTimeLimit,
+      disableChatbot: !allowAI,
+      chatTimeLimit: normalizedCoachTimeLimit,
+      coachTimeLimitMinutes:
+        normalizedCoachTimeLimit > 0 ? normalizedCoachTimeLimit : 0,
+      aiCoachTimeLimitMinutes:
+        normalizedCoachTimeLimit > 0 ? normalizedCoachTimeLimit : 0,
 
-      aiFeedback,
-      aiDraftFeedback: aiFeedback,
+      aiFeedback: aiFeedbackEnabled,
+      aiDraftFeedback: aiFeedbackEnabled,
 
-      writingPlayback,
-      saveWritingPlayback: writingPlayback,
-
+      autoOutlineFromChat: outlineEnabled,
       autoBuildOutlineFromCoach: outlineEnabled,
       generateOutlineFromCoach: outlineEnabled,
 
       aiSupportSettings: {
         aiIdeasCoach: allowAI,
-        coachTimeLimitMinutes: normalizedCoachTimeLimit,
-        aiDraftFeedback: aiFeedback,
-        writingPlayback,
+        chatTimeLimit: normalizedCoachTimeLimit,
+        coachTimeLimitMinutes:
+          normalizedCoachTimeLimit > 0 ? normalizedCoachTimeLimit : 0,
+        ideaRequestLimit: normalizedIdeaRequestLimit,
+        feedbackRequestLimit: normalizedFeedbackRequestLimit,
+        aiDraftFeedback: aiFeedbackEnabled,
+        autoOutlineFromChat: outlineEnabled,
         autoBuildOutlineFromCoach: outlineEnabled,
       },
-
-      integritySettings: cleanedIntegritySettings,
-
-      pastePolicy: cleanedIntegritySettings.pastePolicy,
-      logPasteAttempts: cleanedIntegritySettings.logPasteAttempts,
-      requireHonorConfirmation: cleanedIntegritySettings.requireHonorConfirmation,
-      enforceWordCount: cleanedIntegritySettings.enforceWordCount,
-      lockAfterSubmission: true,
-
-      // Legacy fields intentionally disabled because they are no longer part of
-      // the teacher-facing integrity settings.
-      detectLargeInsertions: false,
-      largeInsertionThreshold: null,
-      disableDragDrop: false,
 
       rubricSource: rubricMode,
       rubricId: rubricSchema?.id || null,
@@ -1132,7 +1314,10 @@ export default function CreateAssignmentModal({
         onClick={onClose}
       />
 
-      <div className="relative z-10 bg-white border border-slate-200 rounded-3xl shadow-2xl w-[calc(100vw-2rem)] max-w-[1500px] p-5 sm:p-6 my-6 max-h-[92vh] overflow-y-auto animate-fade-in-up">
+      <div
+        ref={modalScrollRef}
+        className="relative z-10 bg-white border border-slate-200 rounded-3xl shadow-2xl w-[calc(100vw-2rem)] max-w-[1500px] p-5 sm:p-6 my-6 max-h-[92vh] overflow-y-auto animate-fade-in-up"
+      >
         <div className="flex items-start justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
           <div className="space-y-1">
             <span className="text-[9px] font-mono font-bold tracking-widest text-blue-700 uppercase bg-blue-50 px-2 py-0.5 rounded border border-blue-100 inline-flex items-center gap-1.5">
@@ -1170,7 +1355,10 @@ export default function CreateAssignmentModal({
           ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <div
+          className="space-y-6"
+          data-assignment-builder-step={step}
+        >
           {step === 1 && (
             <RubricSetupStep
               creationMode={creationMode}
@@ -1214,7 +1402,7 @@ export default function CreateAssignmentModal({
           {step === 2 && (
             <AssignmentDetailsStep
               creationMode={creationMode}
-              classes={classes}
+              classes={selectableClasses}
               title={title}
               setTitle={setTitle}
               description={description}
@@ -1233,6 +1421,8 @@ export default function CreateAssignmentModal({
               setStudentLevel={setStudentLevel}
               feedbackChecks={feedbackChecks}
               setFeedbackChecks={setFeedbackChecks}
+              ideaRequestLimit={ideaRequestLimit}
+              setIdeaRequestLimit={setIdeaRequestLimit}
               aiTopic={aiTopic}
               setAiTopic={setAiTopic}
               aiBrief={aiBrief}
@@ -1241,14 +1431,10 @@ export default function CreateAssignmentModal({
               coachTimeLimitMinutes={coachTimeLimitMinutes}
               autoBuildOutlineFromCoach={autoBuildOutlineFromCoach}
               aiFeedback={aiFeedback}
-              writingPlayback={writingPlayback}
-              integritySettings={cleanedIntegritySettingsForPrompt(integritySettings)}
               includeRubricInPrompt={includeRubricInPrompt}
               setIncludeRubricInPrompt={setIncludeRubricInPrompt}
               includeStudentAiSupportInPrompt={includeStudentAiSupportInPrompt}
               setIncludeStudentAiSupportInPrompt={setIncludeStudentAiSupportInPrompt}
-              includeIntegritySettingsInPrompt={includeIntegritySettingsInPrompt}
-              setIncludeIntegritySettingsInPrompt={setIncludeIntegritySettingsInPrompt}
               isGenerating={isGenerating}
               generationError={generationError}
               generationSuccess={generationSuccess}
@@ -1263,42 +1449,43 @@ export default function CreateAssignmentModal({
               setAllowAI={setAllowAI}
               coachTimeLimitMinutes={coachTimeLimitMinutes}
               setCoachTimeLimitMinutes={setCoachTimeLimitMinutes}
+              ideaRequestLimit={ideaRequestLimit}
+              setIdeaRequestLimit={setIdeaRequestLimit}
               autoBuildOutlineFromCoach={autoBuildOutlineFromCoach}
               setAutoBuildOutlineFromCoach={setAutoBuildOutlineFromCoach}
-              aiFeedback={aiFeedback}
-              setAiFeedback={setAiFeedback}
-              writingPlayback={writingPlayback}
-              setWritingPlayback={setWritingPlayback}
-              integritySettings={{
-                ...integritySettings,
-                lockAfterSubmission: true,
-              }}
-              updateIntegritySetting={updateIntegritySetting}
+              feedbackChecks={feedbackChecks}
+              setFeedbackChecks={setFeedbackChecks}
             />
           )}
 
           {step === 4 && (
-            <ReviewStep
+            <div className="space-y-4">
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
+                <p className="font-mono text-[9px] font-black uppercase tracking-[0.16em] text-blue-700">
+                  Step 4 · Final Review
+                </p>
+                <p className="mt-1 text-xs text-blue-800">
+                  Review every value below. The assignment is not created until you select the final Create Assignment button.
+                </p>
+              </div>
+
+              <ReviewStep
               creationMode={creationMode}
               title={title}
               description={description}
               course={course}
-              classes={classes}
+              classes={selectableClasses}
               dueDate={dueDate}
               minWords={minWords}
               maxWords={maxWords}
               assignmentType={assignmentType}
               studentLevel={studentLevel}
               feedbackChecks={feedbackChecks}
+              ideaRequestLimit={ideaRequestLimit}
               allowAI={allowAI}
               coachTimeLimitMinutes={coachTimeLimitMinutes}
               autoBuildOutlineFromCoach={autoBuildOutlineFromCoach}
-              aiFeedback={aiFeedback}
-              writingPlayback={writingPlayback}
-              integritySettings={{
-                ...integritySettings,
-                lockAfterSubmission: true,
-              }}
+              aiFeedback={Number(feedbackChecks || 0) > 0}
               rubricMode={rubricMode}
               rubricTitle={rubricTitle}
               selectedSavedRubric={selectedSavedRubric}
@@ -1307,8 +1494,9 @@ export default function CreateAssignmentModal({
               parsedRubricMatrix={parsedRubricMatrix}
               criteria={criteria}
               rubricTotal={rubricTotal}
-              generatedDraft={generatedDraft}
-            />
+                generatedDraft={generatedDraft}
+              />
+            </div>
           )}
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100">
@@ -1346,12 +1534,15 @@ export default function CreateAssignmentModal({
               >
                 {isGeneratingRubric && step === 3
                   ? "Generating rubric..."
+                  : step === 3
+                  ? "Continue to Review"
                   : "Continue"}
                 {!isGeneratingRubric && <ArrowRight className="w-4 h-4" />}
               </button>
             ) : (
               <button
-                type="submit"
+                type="button"
+                onClick={handleSubmit}
                 className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs px-5 py-2.5 rounded-xl transition-all tracking-wide font-bold shadow-sm shadow-blue-600/20"
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -1362,34 +1553,12 @@ export default function CreateAssignmentModal({
               </button>
             )}
           </div>
-        </form>
+        </div>
       </div>
     </div>
   );
 
   return createPortal(modalContent, document.body);
-}
-
-function cleanedIntegritySettingsForPrompt(settings = {}) {
-  return {
-    pastePolicy:
-      settings.pastePolicy ||
-      DEFAULT_INTEGRITY_SETTINGS.pastePolicy ||
-      "warn",
-    logPasteAttempts:
-      settings.logPasteAttempts ??
-      DEFAULT_INTEGRITY_SETTINGS.logPasteAttempts ??
-      true,
-    requireHonorConfirmation:
-      settings.requireHonorConfirmation ??
-      DEFAULT_INTEGRITY_SETTINGS.requireHonorConfirmation ??
-      true,
-    enforceWordCount:
-      settings.enforceWordCount ??
-      DEFAULT_INTEGRITY_SETTINGS.enforceWordCount ??
-      true,
-    lockAfterSubmission: true,
-  };
 }
 
 function normalizeGeneratedRubricResponse(data) {

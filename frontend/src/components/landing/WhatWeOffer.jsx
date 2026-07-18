@@ -5,7 +5,6 @@ import {
   ClipboardCheck,
   FileText,
   Highlighter,
-  Layers,
   PenLine,
   ShieldCheck,
   Sparkles,
@@ -55,23 +54,23 @@ export default function WhatWeOffer() {
       desc: "Students move through ideas, drafting, feedback, and final submission while keeping ownership of their work.",
       gradient: "from-blue-500 to-sky-500",
       icon: PenLine,
-      points: ["Ideas chat", "Drafting canvas", "Autosave timeline"],
+      points: ["Ideas and planning", "Drafting and revision", "Saved writing progress"],
     },
     {
-      badge: "Instructor Console",
+      badge: "Instructor Workspace",
       title: "Review & Feedback Tools",
       desc: "Instructors manage courses, assignments, submissions, rubrics, annotations, grading, and resubmission paths.",
       gradient: "from-indigo-500 to-blue-600",
       icon: ClipboardCheck,
-      points: ["Rubric scoring", "Text annotations", "Submission attempts"],
+      points: ["Rubric scoring", "Text annotations", "Drafts and submissions"],
     },
     {
       badge: "Responsible AI",
-      title: "Process Evidence",
-      desc: "Praxis supports fair review conversations by showing writing activity, attempts, and process signals without replacing instructor judgment.",
+      title: "Process View",
+      desc: "Praxis supports fair review conversations by showing drafts, submissions, revision activity, and writing progress without replacing instructor judgment.",
       gradient: "from-sky-500 to-indigo-600",
       icon: ShieldCheck,
-      points: ["Process visibility", "AI support boundaries", "Instructor judgment"],
+      points: ["Writing process view", "Responsible AI boundaries", "Instructor judgment"],
     },
   ];
 
@@ -127,8 +126,8 @@ export default function WhatWeOffer() {
 
           <p className="mt-4 max-w-2xl mx-auto text-sm sm:text-base text-slate-400 leading-relaxed">
             Praxis brings the full academic writing workflow into one platform:
-            guided student writing, instructor review tools, and responsible
-            process visibility.
+            guided student writing, instructor review tools, and a clear view of
+            the writing process.
           </p>
         </div>
 
@@ -140,7 +139,7 @@ export default function WhatWeOffer() {
           }}
         >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6">
-            {offers.map((item, index) => {
+            {offers.map((item) => {
               const Icon = item.icon;
 
               return (
@@ -183,11 +182,7 @@ export default function WhatWeOffer() {
                       ))}
                     </div>
 
-                    <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-between text-xs font-mono">
-                      <span className="text-slate-500">
-                        PLATFORM MODULE
-                      </span>
-
+                    <div className="mt-6 pt-4 border-t border-slate-800 flex items-center justify-end text-xs font-mono">
                       <div className="flex items-center gap-1.5 text-blue-300 font-bold opacity-75 group-hover:opacity-100 group-hover:translate-x-0.5 transition-all">
                         Explore
                         <ArrowRight className="w-3.5 h-3.5" />
@@ -217,8 +212,8 @@ export default function WhatWeOffer() {
 
           <MiniCapability
             icon={FileText}
-            title="Transparent submissions"
-            text="Attempts and review states stay visible across the workflow."
+            title="Clear submission history"
+            text="Drafts, submissions, and review progress remain visible throughout the writing workflow."
           />
         </div>
       </div>

@@ -92,6 +92,118 @@ function assignmentMatchesSubmission(assignment, submission) {
   return String(submission.assignmentId) === String(assignment.id);
 }
 
+function getSubmissionText(submission = {}) {
+  return String(
+    submission.submittedText ||
+      submission.submissionText ||
+      submission.finalText ||
+      submission.content ||
+      submission.draftText ||
+      ""
+  ).trim();
+}
+
+function hasSubmissionEvidence(submission = {}) {
+  return Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      getSubmissionText(submission)
+  );
+}
+
+function getStudentKey(submission = {}) {
+  return String(
+    submission.studentEmail ||
+      submission.userEmail ||
+      submission.id ||
+      "student"
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function formatCoachLimit(value, allowAI) {
+  if (!allowAI) return "Disabled";
+
+  const numeric = Number(value);
+
+  if (numeric < 0) return "Disabled";
+  if (numeric === 0) return "Unlimited";
+
+  return `${numeric} minute${numeric === 1 ? "" : "s"}`;
+}
+
+function formatAssignmentDeadline(assignment = {}) {
+  const rawDate = String(
+    assignment.dueDate ||
+      assignment.deadline ||
+      assignment.dueAt ||
+      ""
+  ).trim();
+
+  if (!rawDate) return "No due date";
+
+  const explicitTime = String(
+    assignment.dueTime ||
+      assignment.deadlineTime ||
+      assignment.timeDue ||
+      ""
+  ).trim();
+
+  const match = rawDate.match(
+    /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))?/
+  );
+
+  if (!match) {
+    return formatDisplayDate(rawDate);
+  }
+
+  const [, year, month, day, embeddedHour, embeddedMinute] = match;
+  const date = new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day)
+  );
+
+  const dateLabel = new Intl.DateTimeFormat(
+    undefined,
+    {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }
+  ).format(date);
+
+  const timeText =
+    explicitTime ||
+    (embeddedHour !== undefined
+      ? `${embeddedHour}:${embeddedMinute}`
+      : "");
+
+  if (!timeText) return dateLabel;
+
+  const [hourText, minuteText = "00"] =
+    timeText.split(":");
+
+  const time = new Date(
+    2000,
+    0,
+    1,
+    Number(hourText),
+    Number(minuteText)
+  );
+
+  const timeLabel = new Intl.DateTimeFormat(
+    undefined,
+    {
+      hour: "numeric",
+      minute: "2-digit",
+    }
+  ).format(time);
+
+  return `${dateLabel} · ${timeLabel}`;
+}
+
 function getRubricSourceLabel(source) {
   if (source === "uploaded") return "Uploaded";
   if (source === "saved") return "Reused";
@@ -136,19 +248,51 @@ export default function TeacherAssignmentDetails({
 
   const assignment = selectedAssignment;
 
-  const submissionsCount = useMemo(() => {
-    if (!assignment) return 0;
-
-    if (
-      assignment.submissionsCount !== undefined &&
-      assignment.submissionsCount !== null
-    ) {
-      return assignment.submissionsCount;
+  const submissionMetrics = useMemo(() => {
+    if (!assignment) {
+      return {
+        students: 0,
+        attempts: 0,
+        pending: 0,
+      };
     }
 
-    return submissions.filter((submission) =>
-      assignmentMatchesSubmission(assignment, submission)
-    ).length;
+    const assignmentSubmissions = submissions.filter(
+      (submission) =>
+        assignmentMatchesSubmission(
+          assignment,
+          submission
+        )
+    );
+
+    const students = new Set();
+    let pending = 0;
+
+    assignmentSubmissions.forEach((submission) => {
+      if (hasSubmissionEvidence(submission)) {
+        students.add(getStudentKey(submission));
+      }
+
+      const status = String(
+        submission.status || ""
+      )
+        .trim()
+        .toLowerCase();
+
+      if (
+        submission.isCurrent !== false &&
+        ["submitted", "late"].includes(status) &&
+        hasSubmissionEvidence(submission)
+      ) {
+        pending += 1;
+      }
+    });
+
+    return {
+      students: students.size,
+      attempts: assignmentSubmissions.length,
+      pending,
+    };
   }, [assignment, submissions]);
 
   if (!assignment) return null;
@@ -157,7 +301,6 @@ export default function TeacherAssignmentDetails({
   const isPublished = status === "Published";
 
   const aiSupportSettings = assignment.aiSupportSettings || {};
-  const integritySettings = assignment.integritySettings || {};
 
   const minWords = valueFromAssignment(
     assignment.minWords,
@@ -181,31 +324,12 @@ export default function TeacherAssignmentDetails({
   );
 
   const coachTimeLimitMinutes = valueFromAssignment(
+    aiSupportSettings.chatTimeLimit,
+    assignment.chatTimeLimit,
     aiSupportSettings.coachTimeLimitMinutes,
     assignment.coachTimeLimitMinutes,
     assignment.aiCoachTimeLimitMinutes,
-    15
-  );
-
-  const aiFeedback = boolFromAssignment(
-    aiSupportSettings.aiDraftFeedback,
-    assignment.aiDraftFeedback,
-    assignment.aiFeedback
-  );
-
-  const writingPlayback = boolFromAssignment(
-    aiSupportSettings.writingPlayback,
-    assignment.writingPlayback,
-    assignment.saveWritingPlayback
-  );
-
-  const autoBuildOutlineFromCoach = Boolean(
-    allowAI &&
-      boolFromAssignment(
-        aiSupportSettings.autoBuildOutlineFromCoach,
-        assignment.autoBuildOutlineFromCoach,
-        assignment.generateOutlineFromCoach
-      )
+    0
   );
 
   const feedbackChecks = Number(
@@ -218,40 +342,46 @@ export default function TeacherAssignmentDetails({
     )
   );
 
-  const pastePolicy = valueFromAssignment(
-    integritySettings.pastePolicy,
-    assignment.pastePolicy,
-    "warn"
+  const ideaRequestLimit = Number(
+    valueFromAssignment(
+      aiSupportSettings.ideaRequestLimit,
+      assignment.ideaRequestLimit,
+      0
+    )
   );
 
-  const logPasteAttempts = boolFromAssignment(
-    integritySettings.logPasteAttempts,
-    assignment.logPasteAttempts
-  );
+  const aiFeedback = feedbackChecks > 0;
 
-  const requireHonorConfirmation = boolFromAssignment(
-    integritySettings.requireHonorConfirmation,
-    assignment.requireHonorConfirmation
-  );
-
-  const enforceWordCount = boolFromAssignment(
-    integritySettings.enforceWordCount,
-    assignment.enforceWordCount
+  const autoBuildOutlineFromCoach = Boolean(
+    allowAI &&
+      boolFromAssignment(
+        aiSupportSettings.autoOutlineFromChat,
+        assignment.autoOutlineFromChat,
+        aiSupportSettings.autoBuildOutlineFromCoach,
+        assignment.autoBuildOutlineFromCoach,
+        assignment.generateOutlineFromCoach
+      )
   );
 
   const rubricSchema = assignment.rubricSchema || null;
 
-  const rubricAttached = Boolean(
-    rubricSchema &&
-      assignment.rubricSkipped !== true &&
-      assignment.rubricSource !== "skip"
-  );
-
   const rubricCriteria =
     rubricSchema?.criteria ||
     assignment.rubricCriteria ||
-    assignment.rubric ||
+    (Array.isArray(assignment.rubric)
+      ? assignment.rubric
+      : assignment.rubric?.criteria) ||
     [];
+
+  const rubricAttached = Boolean(
+    assignment.rubricSkipped !== true &&
+      assignment.rubricSource !== "skip" &&
+      (
+        rubricSchema ||
+        rubricCriteria.length > 0 ||
+        assignment.rubricId
+      )
+  );
 
   const rubricCriteriaCount = rubricCriteria.length;
 
@@ -346,7 +476,7 @@ export default function TeacherAssignmentDetails({
           </span>
         </header>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-7">
           <InfoCard
             icon={BookOpen}
             label="Course"
@@ -358,9 +488,7 @@ export default function TeacherAssignmentDetails({
           <InfoCard
             icon={Calendar}
             label="Due date"
-            value={formatDisplayDate(
-              assignment.dueDate || assignment.deadline || "No due date"
-            )}
+            value={formatAssignmentDeadline(assignment)}
           />
 
           <InfoCard
@@ -377,8 +505,20 @@ export default function TeacherAssignmentDetails({
 
           <InfoCard
             icon={BarChart3}
-            label="Submissions"
-            value={submissionsCount}
+            label="Students"
+            value={submissionMetrics.students}
+          />
+
+          <InfoCard
+            icon={ListChecks}
+            label="Attempts"
+            value={submissionMetrics.attempts}
+          />
+
+          <InfoCard
+            icon={ClipboardCheck}
+            label="Pending review"
+            value={submissionMetrics.pending}
           />
         </div>
 
@@ -396,88 +536,55 @@ export default function TeacherAssignmentDetails({
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-          <section className="space-y-4 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-5">
-            <SectionHeading
-              icon={Bot}
-              title="Student AI Support"
-              description="Tools students can use while planning, drafting, and revising."
+        <section className="space-y-4 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-5">
+          <SectionHeading
+            icon={Bot}
+            title="Student Support"
+            description="Original Praxis assignment-level support controls."
+          />
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <SettingRow
+              icon={MessageSquareText}
+              label="AI ideas coach"
+              description="Conversational brainstorming and planning support."
+              enabled={allowAI}
             />
 
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <SettingRow
-                icon={MessageSquareText}
-                label="AI ideas coach"
-                description="Brainstorming and planning support before drafting."
-                enabled={allowAI}
-              />
-
-              <MetricRow
-                icon={Timer}
-                label="Coach chat time limit"
-                value={allowAI ? `${coachTimeLimitMinutes} minutes` : "Disabled"}
-              />
-
-              <SettingRow
-                icon={ListChecks}
-                label="Auto-build outline"
-                description="Convert coach notes into an editable notes-only outline."
-                enabled={autoBuildOutlineFromCoach}
-              />
-
-              <SettingRow
-                icon={ShieldCheck}
-                label="AI draft feedback"
-                description="Feedback on drafts without providing a full answer."
-                enabled={aiFeedback}
-              />
-
-              <SettingRow
-                icon={PlayCircle}
-                label="Writing playback"
-                description="Save writing-process events for teacher review."
-                enabled={writingPlayback}
-              />
-            </div>
-          </section>
-
-          <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-            <SectionHeading
-              icon={Lock}
-              title="Academic Integrity"
-              description="Paste, honor, word-count, and submission rules."
+            <MetricRow
+              icon={Timer}
+              label="Coach active-time limit"
+              value={formatCoachLimit(coachTimeLimitMinutes, allowAI)}
             />
 
-            <div className="space-y-2.5">
-              <PolicyRow
-                label="Paste policy"
-                value={formatPastePolicy(pastePolicy)}
-                tone={getPastePolicyTone(pastePolicy)}
-              />
+            <MetricRow
+              icon={ListChecks}
+              label="Idea-help requests"
+              value={
+                ideaRequestLimit > 0
+                  ? `${ideaRequestLimit} request${ideaRequestLimit === 1 ? "" : "s"}`
+                  : "Disabled"
+              }
+            />
 
-              <CompactSetting
-                label="Log paste attempts"
-                enabled={logPasteAttempts}
-              />
+            <SettingRow
+              icon={BookOpen}
+              label="Auto-build outline"
+              description="Convert Coach chat into editable notes."
+              enabled={autoBuildOutlineFromCoach}
+            />
 
-              <CompactSetting
-                label="Require academic honor confirmation"
-                enabled={requireHonorConfirmation}
-              />
-
-              <CompactSetting
-                label="Enforce word count before submission"
-                enabled={enforceWordCount}
-              />
-
-              <PolicyRow
-                label="Lock editing after submission"
-                value="Always ON"
-                tone="emerald"
-              />
-            </div>
-          </section>
-        </div>
+            <MetricRow
+              icon={ShieldCheck}
+              label="AI feedback requests"
+              value={
+                aiFeedback
+                  ? `${feedbackChecks} request${feedbackChecks === 1 ? "" : "s"}`
+                  : "Disabled"
+              }
+            />
+          </div>
+        </section>
 
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.15fr_0.85fr]">
           <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">

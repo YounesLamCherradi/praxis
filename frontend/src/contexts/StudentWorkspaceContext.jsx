@@ -42,6 +42,93 @@ function countWords(text = "") {
     .filter(Boolean).length;
 }
 
+const STUDENT_STEP_STORAGE_KEY = "praxis_student_step_overrides";
+
+function getDraftText(submission = {}) {
+  return String(
+    submission.draftText ??
+      submission.content ??
+      submission.text ??
+      ""
+  );
+}
+
+function getFinalText(submission = {}) {
+  return String(
+    submission.finalText ??
+      submission.submittedText ??
+      submission.submissionText ??
+      submission.draftText ??
+      submission.content ??
+      submission.text ??
+      ""
+  );
+}
+
+function getCanonicalChatTimeLimit(assignment = {}) {
+  if (assignment.disableChatbot === true) return -1;
+
+  const raw =
+    assignment.chatTimeLimit ??
+    assignment.coachTimeLimitMinutes ??
+    assignment.aiCoachTimeLimitMinutes ??
+    assignment.aiSupportSettings?.chatTimeLimit ??
+    assignment.aiSupportSettings?.coachTimeLimitMinutes ??
+    0;
+
+  const numeric = Number(raw);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function isCoachDisabledForAssignment(assignment = {}) {
+  return (
+    assignment.disableChatbot === true ||
+    assignment.aiIdeasCoach === false ||
+    assignment.allowAI === false ||
+    getCanonicalChatTimeLimit(assignment) < 0
+  );
+}
+
+function getAiFeedbackEntries(submission = {}) {
+  return safeArray(submission.feedbackHistory).filter((entry) => {
+    const role = String(entry?.role || "").toLowerCase();
+    const type = String(entry?.type || "").toLowerCase();
+    const source = String(entry?.source || "").toLowerCase();
+
+    return (
+      role === "ai" ||
+      type === "draft_review" ||
+      type === "ai_feedback" ||
+      source === "ai" ||
+      source === "claude" ||
+      (safeArray(entry?.items).length > 0 && role !== "teacher")
+    );
+  });
+}
+
+function loadStudentStepOverrides() {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(STUDENT_STEP_STORAGE_KEY) || "{}"
+    );
+
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveStudentStepOverrides(overrides = {}) {
+  try {
+    localStorage.setItem(
+      STUDENT_STEP_STORAGE_KEY,
+      JSON.stringify(overrides)
+    );
+  } catch {
+    // Step memory must never interrupt the writing workflow.
+  }
+}
+
 function notifyPraxisDataChanged() {
   if (typeof window !== "undefined") {
     window.dispatchEvent(
@@ -87,6 +174,21 @@ function getCurrentStudentProfile() {
 function normalizeAssignmentForStudent(
   assignment = {}
 ) {
+  const aiSupportSettings = assignment.aiSupportSettings || {};
+
+  const chatTimeLimit = getCanonicalChatTimeLimit(assignment);
+  const disableChatbot =
+    assignment.disableChatbot === true || chatTimeLimit < 0;
+
+  const autoOutlineFromChat = Boolean(
+    assignment.autoOutlineFromChat ??
+      assignment.autoBuildOutlineFromCoach ??
+      assignment.generateOutlineFromCoach ??
+      aiSupportSettings.autoOutlineFromChat ??
+      aiSupportSettings.autoBuildOutlineFromCoach ??
+      false
+  );
+
   return {
     ...assignment,
 
@@ -95,6 +197,23 @@ function normalizeAssignmentForStudent(
       assignment.description ||
       assignment.prompt ||
       "No instructions provided.",
+
+    assignmentType:
+      assignment.assignmentType ||
+      assignment.type ||
+      "response",
+
+    languageLevel:
+      assignment.languageLevel ||
+      assignment.studentLevel ||
+      assignment.level ||
+      "B1",
+
+    studentLevel:
+      assignment.studentLevel ||
+      assignment.languageLevel ||
+      assignment.level ||
+      "B1",
 
     wordCountMin:
       assignment.minWords ??
@@ -106,10 +225,25 @@ function normalizeAssignmentForStudent(
       assignment.wordCountMax ??
       0,
 
+    ideaRequestLimit:
+      assignment.ideaRequestLimit ??
+      assignment.ideaRequests ??
+      3,
+
     feedbackRequestLimit:
       assignment.feedbackRequestLimit ??
       assignment.feedbackChecks ??
       (assignment.aiFeedback ? 3 : 0),
+
+    disableChatbot,
+    chatTimeLimit,
+
+    coachTimeLimitMinutes:
+      chatTimeLimit > 0 ? chatTimeLimit : 0,
+
+    autoOutlineFromChat,
+    autoBuildOutlineFromCoach: autoOutlineFromChat,
+    generateOutlineFromCoach: autoOutlineFromChat,
   };
 }
 
@@ -136,15 +270,61 @@ function normalizeStudentStatus(status) {
   return "draft";
 }
 
-function isDraftLikeStatus(status) {
-  const value = normalizeStudentStatus(
-    status
+function hasSubmissionEvidence(submission = {}) {
+  const submittedText = String(
+    submission.submittedText ||
+      submission.submissionText ||
+      submission.response ||
+      submission.essay ||
+      ""
+  ).trim();
+
+  return Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      submittedText
+  );
+}
+
+function isEditableStudentSubmission(submission = {}) {
+  const status = normalizeStudentStatus(
+    submission.status
   );
 
-  return (
-    value === "draft" ||
-    value === "reopened"
+  if (
+    status === "draft" ||
+    status === "reopened" ||
+    status === "missing"
+  ) {
+    return true;
+  }
+
+  if (status === "late") {
+    return !hasSubmissionEvidence(submission);
+  }
+
+  return false;
+}
+
+function isStudentSubmissionLocked(submission = {}) {
+  if (!submission) return false;
+
+  const status = normalizeStudentStatus(
+    submission.status
   );
+
+  if (isEditableStudentSubmission(submission)) {
+    return false;
+  }
+
+  if (
+    status === "submitted" ||
+    status === "graded"
+  ) {
+    return true;
+  }
+
+  return hasSubmissionEvidence(submission);
 }
 
 function getSubmissionText(
@@ -450,6 +630,66 @@ function repairLegacyReopenedAttempts(
   };
 }
 
+function repairDraftSubmittedTextAliases(
+  records = []
+) {
+  let changed = false;
+
+  const submissions = safeArray(records).map(
+    (submission) => {
+      const status = normalizeStudentStatus(
+        submission.status
+      );
+
+      const editableWithoutSubmission =
+        (
+          status === "draft" ||
+          status === "missing" ||
+          status === "late"
+        ) &&
+        !submission.submittedAt &&
+        !submission.resubmittedAt;
+
+      if (!editableWithoutSubmission) {
+        return submission;
+      }
+
+      const submittedText = String(
+        submission.submittedText ||
+          submission.submissionText ||
+          ""
+      );
+
+      const finalText = String(
+        submission.finalText || ""
+      );
+
+      const looksLikeLegacyAlias =
+        Boolean(submittedText) &&
+        submittedText === finalText;
+
+      if (!looksLikeLegacyAlias) {
+        return submission;
+      }
+
+      changed = true;
+
+      return {
+        ...submission,
+        submittedText: "",
+        submissionText: "",
+        repairedDraftSubmissionAliasAt:
+          new Date().toISOString(),
+      };
+    }
+  );
+
+  return {
+    submissions,
+    changed,
+  };
+}
+
 function getRepairedPraxisData() {
   const originalData =
     getPraxisData();
@@ -459,10 +699,15 @@ function getRepairedPraxisData() {
       originalData.submissions || []
     );
 
+  const aliasRepair =
+    repairDraftSubmittedTextAliases(
+      attemptRepair.submissions
+    );
+
   const attemptRepairedData = {
     ...originalData,
     submissions:
-      attemptRepair.submissions,
+      aliasRepair.submissions,
   };
 
   const lateRepair =
@@ -475,6 +720,7 @@ function getRepairedPraxisData() {
 
   if (
     attemptRepair.changed ||
+    aliasRepair.changed ||
     lateRepair.changed
   ) {
     savePraxisData(nextData);
@@ -569,35 +815,65 @@ function normalizeFeedbackHistory(
 function normalizeSubmissionForStudent(
   submission = {}
 ) {
-  const draftText =
-    getSubmissionText(submission);
+  const status = normalizeStudentStatus(
+    submission.status
+  );
+
+  const draftText = getDraftText(submission);
+
+  const rawFinalText = String(
+    submission.finalText ??
+      ""
+  );
+
+  const rawSubmittedText = String(
+    submission.submittedText ??
+      submission.submissionText ??
+      ""
+  );
+
+  const hasActualSubmission = Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      status === "submitted" ||
+      status === "graded"
+  );
+
+  /*
+    finalText is an editable Step 3 value.
+    submittedText is immutable submission evidence.
+    Never copy finalText into submittedText for a draft.
+  */
+  const submittedText =
+    rawSubmittedText ||
+    (
+      hasActualSubmission
+        ? rawFinalText
+        : ""
+    );
+
+  const finalText =
+    rawFinalText ||
+    submittedText;
 
   return {
     ...submission,
 
-    status:
-      normalizeStudentStatus(
-        submission.status
-      ),
+    status,
 
     content:
-      submission.content ||
+      submission.content ??
       draftText,
 
-    draftText:
-      submission.draftText ||
-      draftText,
+    draftText,
 
-    submittedText:
-      submission.submittedText ||
-      draftText,
+    submittedText,
 
-    finalText:
-      submission.finalText ||
-      draftText,
+    finalText,
 
     text:
-      submission.text ||
+      submission.text ??
+      finalText ??
       draftText,
 
     chatHistory:
@@ -618,6 +894,21 @@ function normalizeSubmissionForStudent(
     coachChatHistory:
       safeArray(
         submission.coachChatHistory
+      ),
+
+    planningChatMessages:
+      safeArray(
+        submission.planningChatMessages
+      ),
+
+    planningCoachHistory:
+      safeArray(
+        submission.planningCoachHistory
+      ),
+
+    ideaResponses:
+      safeArray(
+        submission.ideaResponses
       ),
 
     outline:
@@ -707,6 +998,12 @@ function normalizeSubmissionForStudent(
     previousTeacherReview:
       submission.previousTeacherReview ||
       null,
+
+    chatStartedAt: submission.chatStartedAt || null,
+    chatSkippedAt: submission.chatSkippedAt || null,
+    chatExpiredAt: submission.chatExpiredAt || null,
+    chatElapsedMs: Number(submission.chatElapsedMs || 0),
+    chatResumedAt: submission.chatResumedAt || null,
   };
 }
 
@@ -773,7 +1070,16 @@ function buildDraftSubmission({
   const draftText = String(
     patch.draftText ??
       patch.content ??
-      patch.finalText ??
+      ""
+  );
+
+  const finalText = String(
+    patch.finalText ??
+      ""
+  );
+
+  const submittedText = String(
+    patch.submittedText ??
       ""
   );
 
@@ -833,7 +1139,7 @@ function buildDraftSubmission({
     reviewedAt: null,
 
     wordCount:
-      countWords(draftText),
+      countWords(finalText || draftText),
 
     aiFlags:
       Number(
@@ -842,11 +1148,21 @@ function buildDraftSubmission({
 
     content: draftText,
     draftText,
-    submittedText: draftText,
-    finalText: draftText,
-    text: draftText,
+    submittedText,
+    finalText,
+    text: finalText || draftText,
 
     chatHistory,
+    planningChatMessages: safeArray(patch.planningChatMessages),
+    planningCoachHistory: safeArray(patch.planningCoachHistory),
+    ideaResponses: safeArray(patch.ideaResponses),
+
+    chatStartedAt: patch.chatStartedAt || null,
+    chatSkippedAt: patch.chatSkippedAt || null,
+    chatExpiredAt: patch.chatExpiredAt || null,
+    chatElapsedMs: Number(patch.chatElapsedMs || 0),
+    chatResumedAt: patch.chatResumedAt || null,
+
     outline:
       patch.outline || {},
 
@@ -1157,6 +1473,11 @@ export function StudentWorkspaceProvider({
   ] = useState(1);
 
   const [
+    studentStepOverrides,
+    setStudentStepOverrides,
+  ] = useState(() => loadStudentStepOverrides());
+
+  const [
     viewingTray,
     setViewingTray,
   ] = useState(true);
@@ -1165,6 +1486,11 @@ export function StudentWorkspaceProvider({
     typedText,
     setTypedText,
   ] = useState("");
+
+  const [
+    studentWorkflowNotice,
+    setStudentWorkflowNotice,
+  ] = useState(null);
 
   const [
     studentProfile,
@@ -1440,26 +1766,29 @@ export function StudentWorkspaceProvider({
 
           status: "draft",
 
-          draftText:
-            typedText || "",
+          draftText: "",
 
-          content:
-            typedText || "",
+          content: "",
 
-          submittedText:
-            typedText || "",
+          submittedText: "",
 
-          finalText:
-            typedText || "",
+          finalText: "",
 
-          text:
-            typedText || "",
+          text: "",
 
           chatHistory: [
             buildWelcomeChatMessage(),
           ],
 
           outline: {},
+
+          ideaResponses: [],
+
+          chatStartedAt: null,
+          chatSkippedAt: null,
+          chatExpiredAt: null,
+          chatElapsedMs: 0,
+          chatResumedAt: null,
 
           feedbackHistory: [],
           aiFeedbackHistory: [],
@@ -1491,10 +1820,21 @@ export function StudentWorkspaceProvider({
       return;
     }
 
+    /*
+      Hydrate when the assignment or attempt changes.
+      Do not hydrate on every step change: goToStudentStep already places
+      the exact latest Draft/Final text into typedText.
+    */
+    if (studentStep >= 3) {
+      setTypedText(
+        getFinalText(activeSubmission) ||
+          getDraftText(activeSubmission)
+      );
+      return;
+    }
+
     setTypedText(
-      getSubmissionText(
-        activeSubmission
-      )
+      getDraftText(activeSubmission)
     );
   }, [
     selectedAssignmentId,
@@ -1584,8 +1924,8 @@ export function StudentWorkspaceProvider({
           (submission) =>
             submission.isCurrent !==
               false &&
-            isDraftLikeStatus(
-              submission.status
+            isEditableStudentSubmission(
+              submission
             )
         )
         .sort(
@@ -1602,41 +1942,53 @@ export function StudentWorkspaceProvider({
     let nextRecord;
 
     if (existingDraft) {
-      const patchHasText =
+      const hasDraftText =
         Object.prototype.hasOwnProperty.call(
           cleanPatch,
           "draftText"
-        ) ||
-        Object.prototype.hasOwnProperty.call(
-          cleanPatch,
-          "content"
-        ) ||
-        Object.prototype.hasOwnProperty.call(
-          cleanPatch,
-          "submittedText"
-        ) ||
+        );
+
+      const hasFinalText =
         Object.prototype.hasOwnProperty.call(
           cleanPatch,
           "finalText"
-        ) ||
-        Object.prototype.hasOwnProperty.call(
-          cleanPatch,
-          "text"
         );
 
-      const nextDraftText =
-        patchHasText
-          ? String(
-              cleanPatch.draftText ??
-                cleanPatch.content ??
-                cleanPatch.submittedText ??
-                cleanPatch.finalText ??
-                cleanPatch.text ??
-                ""
-            )
-          : getSubmissionText(
-              existingDraft
-            );
+      const hasSubmittedText =
+        Object.prototype.hasOwnProperty.call(
+          cleanPatch,
+          "submittedText"
+        );
+
+      const nextDraftText = hasDraftText
+        ? String(cleanPatch.draftText ?? "")
+        : getDraftText(existingDraft);
+
+      const nextFinalText = hasFinalText
+        ? String(cleanPatch.finalText ?? "")
+        : String(existingDraft.finalText ?? "");
+
+      const nextSubmittedText = hasSubmittedText
+        ? String(cleanPatch.submittedText ?? "")
+        : String(existingDraft.submittedText ?? "");
+
+      const nextContent = Object.prototype.hasOwnProperty.call(
+        cleanPatch,
+        "content"
+      )
+        ? String(cleanPatch.content ?? "")
+        : String(existingDraft.content ?? nextDraftText);
+
+      const nextText = Object.prototype.hasOwnProperty.call(
+        cleanPatch,
+        "text"
+      )
+        ? String(cleanPatch.text ?? "")
+        : String(
+            existingDraft.text ??
+              nextFinalText ??
+              nextDraftText
+          );
 
       nextRecord = {
         ...existingDraft,
@@ -1652,25 +2004,16 @@ export function StudentWorkspaceProvider({
             ? "Reopened"
             : "draft",
 
-        content:
-          nextDraftText,
-
-        draftText:
-          nextDraftText,
-
-        submittedText:
-          nextDraftText,
-
-        finalText:
-          nextDraftText,
-
-        text:
-          nextDraftText,
+        content: nextContent,
+        draftText: nextDraftText,
+        submittedText: nextSubmittedText,
+        finalText: nextFinalText,
+        text: nextText,
 
         wordCount:
           cleanPatch.wordCount ??
           countWords(
-            nextDraftText
+            nextFinalText || nextDraftText
           ),
 
         chatHistory:
@@ -1684,6 +2027,30 @@ export function StudentWorkspaceProvider({
             : safeArray(
                 existingDraft.chatHistory
               ),
+
+        planningChatMessages:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "planningChatMessages"
+          )
+            ? safeArray(cleanPatch.planningChatMessages)
+            : safeArray(existingDraft.planningChatMessages),
+
+        planningCoachHistory:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "planningCoachHistory"
+          )
+            ? safeArray(cleanPatch.planningCoachHistory)
+            : safeArray(existingDraft.planningCoachHistory),
+
+        ideaResponses:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "ideaResponses"
+          )
+            ? safeArray(cleanPatch.ideaResponses)
+            : safeArray(existingDraft.ideaResponses),
 
         outline:
           Object.prototype.hasOwnProperty.call(
@@ -1729,6 +2096,14 @@ export function StudentWorkspaceProvider({
                 existingDraft.copyPasteLogs
               ),
 
+        focusLossLogs:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "focusLossLogs"
+          )
+            ? safeArray(cleanPatch.focusLossLogs)
+            : safeArray(existingDraft.focusLossLogs),
+
         writingEvents:
           Object.prototype.hasOwnProperty.call(
             cleanPatch,
@@ -1740,6 +2115,22 @@ export function StudentWorkspaceProvider({
             : safeArray(
                 existingDraft.writingEvents
               ),
+
+        writingReplay:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "writingReplay"
+          )
+            ? safeArray(cleanPatch.writingReplay)
+            : safeArray(existingDraft.writingReplay),
+
+        writingHistory:
+          Object.prototype.hasOwnProperty.call(
+            cleanPatch,
+            "writingHistory"
+          )
+            ? safeArray(cleanPatch.writingHistory)
+            : safeArray(existingDraft.writingHistory),
 
         keystrokeLog:
           Object.prototype.hasOwnProperty.call(
@@ -1921,8 +2312,8 @@ export function StudentWorkspaceProvider({
           (submission) =>
             submission.isCurrent !==
               false &&
-            isDraftLikeStatus(
-              submission.status
+            isEditableStudentSubmission(
+              submission
             )
         )
         .sort(
@@ -2138,7 +2529,7 @@ export function StudentWorkspaceProvider({
           cleanContent,
 
         draftText:
-          cleanContent,
+          getDraftText(existingDraft) || cleanContent,
 
         submittedText:
           cleanContent,
@@ -2293,7 +2684,7 @@ export function StudentWorkspaceProvider({
         cleanContent,
 
       draftText:
-        cleanContent,
+        getDraftText(existingDraft || {}) || cleanContent,
 
       submittedText:
         cleanContent,
@@ -2461,6 +2852,543 @@ export function StudentWorkspaceProvider({
     return true;
   }
 
+  function rememberStudentStep(
+    assignmentId,
+    step
+  ) {
+    if (!assignmentId) return;
+
+    const safeStep = Math.min(
+      4,
+      Math.max(1, Number(step || 1))
+    );
+
+    setStudentStep(safeStep);
+
+    setStudentStepOverrides((current) => {
+      const next = {
+        ...current,
+        [String(assignmentId)]: safeStep,
+      };
+
+      saveStudentStepOverrides(next);
+      return next;
+    });
+  }
+
+  function pauseCoachSession() {
+    if (
+      !activeAssignment?.id ||
+      !activeSubmission?.chatResumedAt ||
+      isCoachDisabledForAssignment(activeAssignment)
+    ) {
+      return;
+    }
+
+    const resumedAt = Date.parse(
+      activeSubmission.chatResumedAt
+    );
+
+    const elapsed = Number(
+      activeSubmission.chatElapsedMs || 0
+    );
+
+    const nextElapsed = Number.isNaN(resumedAt)
+      ? elapsed
+      : elapsed + Math.max(0, Date.now() - resumedAt);
+
+    saveDraftProgress(activeAssignment.id, {
+      chatElapsedMs: nextElapsed,
+      chatResumedAt: null,
+    });
+  }
+
+  function resumeCoachSession() {
+    if (
+      !activeAssignment?.id ||
+      !activeSubmission?.chatStartedAt ||
+      activeSubmission?.chatSkippedAt ||
+      activeSubmission?.chatExpiredAt ||
+      activeSubmission?.chatResumedAt ||
+      isCoachDisabledForAssignment(activeAssignment)
+    ) {
+      return;
+    }
+
+    saveDraftProgress(activeAssignment.id, {
+      chatResumedAt: new Date().toISOString(),
+    });
+  }
+
+  function startCoachSession() {
+    if (
+      !activeAssignment?.id ||
+      isCoachDisabledForAssignment(activeAssignment)
+    ) {
+      return {};
+    }
+
+    const now = new Date().toISOString();
+
+    const patch = activeSubmission?.chatStartedAt
+      ? {
+          chatResumedAt:
+            activeSubmission.chatResumedAt || now,
+        }
+      : {
+          chatStartedAt: now,
+          chatElapsedMs: Number(
+            activeSubmission?.chatElapsedMs || 0
+          ),
+          chatResumedAt: now,
+          chatExpiredAt: null,
+        };
+
+    saveDraftProgress(activeAssignment.id, patch);
+    return patch;
+  }
+
+  function showStudentWorkflowNotice(notice = {}) {
+    const normalizedNotice = {
+      id:
+        notice.id ||
+        `student_notice_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
+      tone: notice.tone || "amber",
+      title: notice.title || "Check this step",
+      message: notice.message || "",
+      primaryLabel: notice.primaryLabel || "",
+      secondaryLabel: notice.secondaryLabel || "",
+      pendingTransition: notice.pendingTransition || null,
+    };
+
+    setStudentWorkflowNotice(normalizedNotice);
+    return normalizedNotice;
+  }
+
+  function clearStudentWorkflowNotice() {
+    setStudentWorkflowNotice(null);
+  }
+
+  function confirmStudentWorkflowNotice() {
+    const notice = studentWorkflowNotice;
+    const pendingTransition = notice?.pendingTransition;
+
+    setStudentWorkflowNotice(null);
+
+    if (!pendingTransition) {
+      return false;
+    }
+
+    return goToStudentStep(
+      pendingTransition.targetStep,
+      {
+        ...(pendingTransition.options || {}),
+        confirmedFromNotice: true,
+      }
+    );
+  }
+
+  function goToStudentStep(
+    targetStep,
+    options = {}
+  ) {
+    if (!activeAssignment) return false;
+
+    const nextStep = Math.min(
+      4,
+      Math.max(1, Number(targetStep || 1))
+    );
+
+    /*
+      `typedText` is the live editor value. It can be newer than the
+      debounced local-storage record when a student clicks a step button
+      immediately after typing. Always flush it before leaving Draft or
+      Feedback so the next step receives the exact latest text.
+    */
+    const liveTypedText = String(
+      options.currentText ??
+        typedText ??
+        ""
+    );
+
+    if (
+      studentStep === 2 &&
+      nextStep !== 2 &&
+      !isStudentSubmissionLocked(activeSubmission)
+    ) {
+      saveDraftProgress(activeAssignment.id, {
+        draftText: liveTypedText,
+        content: liveTypedText,
+        wordCount: countWords(liveTypedText),
+        draftSavedAt:
+          new Date().toISOString(),
+        lastSavedAt:
+          new Date().toISOString(),
+      });
+    }
+
+    if (
+      studentStep === 3 &&
+      nextStep !== 3 &&
+      !isStudentSubmissionLocked(activeSubmission)
+    ) {
+      saveDraftProgress(activeAssignment.id, {
+        finalText: liveTypedText,
+        wordCount: countWords(liveTypedText),
+        finalSavedAt:
+          new Date().toISOString(),
+        lastSavedAt:
+          new Date().toISOString(),
+      });
+    }
+
+    const locked =
+      isStudentSubmissionLocked(
+        activeSubmission
+      );
+
+    if (locked && nextStep !== 4) {
+      rememberStudentStep(activeAssignment.id, 4);
+      setTypedText(getFinalText(activeSubmission));
+
+      showStudentWorkflowNotice({
+        tone: "blue",
+        title: "Assignment already submitted",
+        message:
+          "This assignment is locked after submission. Open the Submit step to review your work.",
+      });
+
+      return false;
+    }
+
+    if (nextStep === 2 && !options.force) {
+      const chatDisabled =
+        isCoachDisabledForAssignment(activeAssignment);
+
+      const hasChat =
+        chatDisabled ||
+        Boolean(activeSubmission?.chatSkippedAt) ||
+        safeArray(
+          activeSubmission?.chatHistory
+        ).filter((message) =>
+          String(
+            message?.content ||
+              message?.text ||
+              ""
+          ).trim()
+        ).length >= 2;
+
+      if (
+        !hasChat &&
+        !options.confirmedPlanningSkip
+      ) {
+        showStudentWorkflowNotice({
+          tone: "amber",
+          title: "Continue without using the Ideas Coach?",
+          message:
+            "You have not used the Ideas Coach yet. You may stay in Brainstorm, or continue to the Draft step without a coaching conversation.",
+          primaryLabel: "Continue to Draft",
+          secondaryLabel: "Stay in Brainstorm",
+          pendingTransition: {
+            targetStep: 2,
+            options: {
+              ...options,
+              confirmedPlanningSkip: true,
+            },
+          },
+        });
+
+        return false;
+      }
+
+      if (
+        !hasChat &&
+        options.confirmedPlanningSkip
+      ) {
+        const skippedAt =
+          activeSubmission?.chatSkippedAt ||
+          new Date().toISOString();
+
+        saveDraftProgress(activeAssignment.id, {
+          chatSkippedAt: skippedAt,
+          chatResumedAt: null,
+        });
+      }
+    }
+
+    if (nextStep === 3) {
+      const savedDraftText = getDraftText(
+        activeSubmission
+      );
+
+      const latestDraftText = String(
+        options.draftText ??
+          (
+            studentStep === 2
+              ? liveTypedText
+              : savedDraftText
+          )
+      );
+
+      if (!latestDraftText.trim()) {
+        showStudentWorkflowNotice({
+          tone: "amber",
+          title: "Draft required",
+          message:
+            "Write part of your response in the Draft step before opening AI Feedback.",
+        });
+
+        return false;
+      }
+
+      const savedFinalText = String(
+        activeSubmission?.finalText || ""
+      );
+
+      /*
+        Exact old Praxis rule:
+        copy draftText into finalText only when finalText is empty.
+        Once finalText exists, later Step 2 edits never overwrite it.
+      */
+      const shouldInitializeFinalText =
+        !savedFinalText.trim();
+
+      const nextFinalText =
+        shouldInitializeFinalText
+          ? latestDraftText
+          : savedFinalText;
+
+      saveDraftProgress(activeAssignment.id, {
+        draftText: latestDraftText,
+        content: latestDraftText,
+        finalText: nextFinalText,
+        wordCount: countWords(nextFinalText),
+        finalInitializedAt:
+          activeSubmission?.finalInitializedAt ||
+          (
+            shouldInitializeFinalText
+              ? new Date().toISOString()
+              : null
+          ),
+      });
+
+      setTypedText(nextFinalText);
+    }
+
+    if (nextStep === 4) {
+      const savedFinalText = (
+        getFinalText(activeSubmission) ||
+        getDraftText(activeSubmission)
+      );
+
+      const finalText = String(
+        options.finalText ??
+          (
+            studentStep === 3
+              ? liveTypedText
+              : savedFinalText
+          )
+      ).trim();
+
+      if (!finalText) {
+        showStudentWorkflowNotice({
+          tone: "amber",
+          title: "Final revision required",
+          message:
+            "Write or revise your final version before moving to the Submit step.",
+        });
+
+        return false;
+      }
+
+      const feedbackLimit = Math.max(
+        0,
+        Number(
+          activeAssignment.feedbackRequestLimit ??
+            activeAssignment.feedbackChecks ??
+            0
+        )
+      );
+
+      const feedbackUsed = getAiFeedbackEntries(
+        activeSubmission
+      ).length;
+
+      const remaining = Math.max(
+        0,
+        feedbackLimit - feedbackUsed
+      );
+
+      if (
+        remaining > 0 &&
+        !options.skipFeedbackPrompt
+      ) {
+        showStudentWorkflowNotice({
+          tone: "blue",
+          title: "Feedback checks are still available",
+          message: `You still have ${remaining} feedback check${
+            remaining === 1 ? "" : "s"
+          } available. You may return to Feedback, or continue to Submit without using them.`,
+          primaryLabel: "Continue to Submit",
+          secondaryLabel: "Stay in Feedback",
+          pendingTransition: {
+            targetStep: 4,
+            options: {
+              ...options,
+              skipFeedbackPrompt: true,
+            },
+          },
+        });
+
+        rememberStudentStep(activeAssignment.id, 3);
+        setTypedText(finalText);
+        return false;
+      }
+
+      saveDraftProgress(activeAssignment.id, {
+        finalText,
+        wordCount: countWords(finalText),
+        finalSavedAt:
+          activeSubmission?.finalSavedAt ||
+          new Date().toISOString(),
+      });
+
+      setTypedText(finalText);
+    }
+
+    if (studentStep === 1 && nextStep !== 1) {
+      pauseCoachSession();
+    }
+
+    if (nextStep === 1) {
+      setTypedText(getDraftText(activeSubmission));
+      resumeCoachSession();
+    } else if (nextStep === 2) {
+      setTypedText(getDraftText(activeSubmission));
+    }
+
+    clearStudentWorkflowNotice();
+
+    rememberStudentStep(
+      activeAssignment.id,
+      nextStep
+    );
+
+    return true;
+  }
+
+  function openStudentAssignment(assignmentId) {
+    const assignment = assignments.find(
+      (item) =>
+        String(item.id) === String(assignmentId)
+    );
+
+    if (!assignment) return false;
+
+    const submission =
+      getCurrentSubmissionForAssignment(
+        submissions,
+        assignmentId
+      );
+
+    const status = normalizeStudentStatus(
+      submission?.status
+    );
+
+    let nextStep = 1;
+
+    if (
+      status === "submitted" ||
+      status === "graded" ||
+      (
+        status === "late" &&
+        isStudentSubmissionLocked(submission)
+      )
+    ) {
+      nextStep = 4;
+    } else if (status === "reopened") {
+      nextStep = 1;
+    } else {
+      nextStep = Number(
+        studentStepOverrides[
+          String(assignmentId)
+        ] || 1
+      );
+    }
+
+    clearStudentWorkflowNotice();
+    setSelectedAssignmentId(assignmentId);
+    setStudentStep(nextStep);
+
+    if (nextStep >= 3) {
+      setTypedText(
+        getFinalText(submission) ||
+          getDraftText(submission)
+      );
+    } else {
+      setTypedText(getDraftText(submission));
+    }
+
+    return true;
+  }
+
+  function closeStudentAssignment() {
+    /*
+     * Sidebar/course navigation can happen immediately after typing.
+     * Flush the live editor value before closing so course navigation
+     * never loses the latest Draft or Final Revision.
+     */
+    if (
+      activeAssignment &&
+      !isStudentSubmissionLocked(
+        activeSubmission
+      )
+    ) {
+      const liveText = String(
+        typedText ?? ""
+      );
+
+      if (studentStep === 2) {
+        saveDraftProgress(
+          activeAssignment.id,
+          {
+            draftText: liveText,
+            content: liveText,
+            wordCount:
+              countWords(liveText),
+            draftSavedAt:
+              new Date().toISOString(),
+            lastSavedAt:
+              new Date().toISOString(),
+          }
+        );
+      }
+
+      if (studentStep === 3) {
+        saveDraftProgress(
+          activeAssignment.id,
+          {
+            finalText: liveText,
+            wordCount:
+              countWords(liveText),
+            finalSavedAt:
+              new Date().toISOString(),
+            lastSavedAt:
+              new Date().toISOString(),
+          }
+        );
+      }
+    }
+
+    clearStudentWorkflowNotice();
+    pauseCoachSession();
+    setSelectedAssignmentId(null);
+    setStudentStep(1);
+    setTypedText("");
+  }
+
   function refreshStudentWorkspace() {
     loadStudentWorkspace();
   }
@@ -2490,6 +3418,18 @@ export function StudentWorkspaceProvider({
 
         studentStep,
         setStudentStep,
+        studentStepOverrides,
+        rememberStudentStep,
+        studentWorkflowNotice,
+        showStudentWorkflowNotice,
+        clearStudentWorkflowNotice,
+        confirmStudentWorkflowNotice,
+        goToStudentStep,
+        openStudentAssignment,
+        closeStudentAssignment,
+        startCoachSession,
+        pauseCoachSession,
+        resumeCoachSession,
 
         viewingTray,
         setViewingTray,

@@ -42,6 +42,63 @@ function countWords(text = "") {
   return clean.split(/\s+/).filter(Boolean).length;
 }
 
+function calculateFluencySummary(submission = {}) {
+  const events = safeArray(submission?.writingEvents);
+  const keystrokes = safeArray(submission?.keystrokeLog);
+
+  const insertionEvents = events.filter((event) =>
+    String(event?.type || "").toLowerCase().includes("insert")
+  );
+
+  const insertedWords = insertionEvents.map((event) =>
+    countWords(event?.insertedText || "")
+  );
+
+  const meanBurstLength = insertedWords.length
+    ? insertedWords.reduce((sum, value) => sum + value, 0) /
+      insertedWords.length
+    : 0;
+
+  const pauseCount = keystrokes.filter(
+    (entry) => Number(entry?.gap || 0) >= 2000
+  ).length;
+
+  const deletionEvents = events.filter((event) =>
+    String(event?.type || "").toLowerCase().includes("delete") ||
+    Number(event?.deletedChars || 0) > 0
+  );
+
+  const microCorrections = deletionEvents.filter(
+    (event) => Number(event?.deletedChars || String(event?.removedText || "").length) <= 3
+  ).length;
+
+  const substantiveRevisions = events.filter((event) =>
+    Number(event?.addedChars || 0) + Number(event?.deletedChars || 0) >= 20
+  ).length;
+
+  const localRevisions = Math.max(
+    0,
+    deletionEvents.length - substantiveRevisions
+  );
+
+  const sessionCount = Math.max(
+    1,
+    events.filter((event) =>
+      String(event?.type || "").toLowerCase().includes("session_start")
+    ).length || (events.length ? 1 : 0)
+  );
+
+  return {
+    meanBurstLength,
+    pauseFrequency: pauseCount,
+    microCorrections,
+    localRevisions,
+    substantiveRevisions,
+    sessionCount,
+    calculatedAt: new Date().toISOString(),
+  };
+}
+
 function formatDateTime(value) {
   if (!value) return "";
 
@@ -80,9 +137,9 @@ function getSubmissionText(submission, typedText = "") {
       : {};
 
   return String(
-    source.finalText ||
-      source.submittedText ||
+    source.submittedText ||
       source.submissionText ||
+      source.finalText ||
       source.content ||
       source.draftText ||
       source.text ||
@@ -1108,11 +1165,10 @@ export default function Step4FinalSummary() {
     typedText,
     submitAssignment,
     saveDraftProgress,
-    setStudentStep,
-    setSelectedAssignmentId,
+    goToStudentStep,
+    closeStudentAssignment,
   } = useStudentWorkspace();
 
-  const [attested, setAttested] = useState(false);
   const [submitMessage, setSubmitMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showTeacherFeedback, setShowTeacherFeedback] =
@@ -1139,29 +1195,44 @@ export default function Step4FinalSummary() {
     activeSubmission?.status || ""
   ).toLowerCase();
 
-  /*
-    Only an explicit teacher Reopen unlocks revision mode.
-    Late is still a completed submission awaiting teacher review.
-    Missing does not become editable unless the teacher explicitly reopens it.
-  */
   const canResubmit =
     submissionStatus === "reopened";
 
+  const submittedEvidence = Boolean(
+    activeSubmission?.submittedAt ||
+      activeSubmission?.resubmittedAt ||
+      String(
+        activeSubmission?.submittedText ||
+          activeSubmission?.submissionText ||
+          ""
+      ).trim()
+  );
+
+  /*
+    A late label alone does not mean the student already submitted.
+    Overdue-but-unsubmitted and missing work remain editable until a real
+    submitted timestamp/text exists.
+  */
   const isSubmitted =
     !canResubmit &&
-    (submissionStatus === "submitted" ||
-      submissionStatus === "late" ||
+    (
+      submissionStatus === "submitted" ||
       submissionStatus === "graded" ||
-      Boolean(activeSubmission?.submittedAt));
+      (
+        submissionStatus === "late" &&
+        submittedEvidence
+      ) ||
+      submittedEvidence
+    );
 
   const finalText = isSubmitted
     ? getSubmissionText(activeSubmission, typedText)
     : String(
-        typedText ||
-          activeSubmission?.draftText ||
-          activeSubmission?.content ||
-          activeSubmission?.finalText ||
-          activeSubmission?.submittedText ||
+        typedText ??
+          activeSubmission?.finalText ??
+          activeSubmission?.draftText ??
+          activeSubmission?.content ??
+          activeSubmission?.submittedText ??
           ""
       ).trim();
 
@@ -1506,7 +1577,6 @@ export default function Step4FinalSummary() {
     Boolean(activeAssignment) &&
     Boolean(finalText) &&
     !wordCountIssue &&
-    attested &&
     (!selfGradeRequired ||
       selfGradeComplete) &&
     !isSubmitting;
@@ -1532,7 +1602,7 @@ export default function Step4FinalSummary() {
 
           <button
             type="button"
-            onClick={() => setStudentStep(3)}
+            onClick={() => goToStudentStep(3)}
             className="mt-4 inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-slate-800"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -1624,15 +1694,11 @@ export default function Step4FinalSummary() {
     }
 
     saveDraftProgress(activeAssignment.id, {
-      draftText: finalText,
-      content: finalText,
-      submittedText: finalText,
       finalText,
-      text: finalText,
       wordCount,
       finalReviewedAt:
         new Date().toISOString(),
-      honorAttested: attested,
+      fluencySummary: calculateFluencySummary(activeSubmission),
       selfRubricAssessment:
         selfGradeComplete,
       selfAssessment: selfGradeComplete,
@@ -1679,13 +1745,6 @@ export default function Step4FinalSummary() {
       return;
     }
 
-    if (!attested) {
-      setSubmitMessage(
-        "Please confirm the academic honor affirmation before submitting."
-      );
-      return;
-    }
-
     if (
       selfGradeRequired &&
       !selfGradeComplete
@@ -1711,8 +1770,7 @@ export default function Step4FinalSummary() {
       );
 
       window.setTimeout(() => {
-        setSelectedAssignmentId(null);
-        setStudentStep(1);
+        closeStudentAssignment();
       }, 1200);
     } else {
       setSubmitMessage(
@@ -1777,8 +1835,7 @@ export default function Step4FinalSummary() {
           <button
             type="button"
             onClick={() => {
-              setSelectedAssignmentId(null);
-              setStudentStep(1);
+              closeStudentAssignment();
             }}
             className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-2.5 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
           >
@@ -1854,8 +1911,6 @@ export default function Step4FinalSummary() {
             onOpenSelfGrade={() =>
               setShowSelfGrade(true)
             }
-            attested={attested}
-            setAttested={setAttested}
             wordCount={wordCount}
             minWords={minWords}
             maxWords={maxWords}
@@ -1869,7 +1924,7 @@ export default function Step4FinalSummary() {
             handleSubmit={handleSubmit}
             onBack={() => {
               saveFinalProgress();
-              setStudentStep(3);
+              goToStudentStep(3);
             }}
           />
         </div>
@@ -2115,8 +2170,6 @@ function FinalCheckPanel({
   selfGradeComplete,
   selfGradeRequired,
   onOpenSelfGrade,
-  attested,
-  setAttested,
   wordCount,
   minWords,
   maxWords,
@@ -2218,32 +2271,7 @@ function FinalCheckPanel({
           </button>
         )}
 
-        <label
-          className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition-all ${
-            attested
-              ? "border-emerald-200 bg-emerald-50"
-              : "border-slate-200 bg-[#F8FAFC]"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={attested}
-            onChange={(event) =>
-              setAttested(event.target.checked)
-            }
-            className="mt-0.5 h-4 w-4 cursor-pointer accent-blue-600"
-          />
 
-          <div>
-            <p className="text-xs font-bold text-slate-900">
-              Academic Honor Confirmation
-            </p>
-
-            <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-              I confirm this submission is my own work and is ready to be sent.
-            </p>
-          </div>
-        </label>
 
         <div
           className={`rounded-xl border px-3 py-2.5 ${

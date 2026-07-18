@@ -24,6 +24,10 @@ function todayDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
 function roundToHalf(value) {
   return Math.round(Number(value || 0) * 2) / 2;
 }
@@ -270,6 +274,91 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function hasSubmissionEvidence(submission = {}) {
+  return Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      String(
+        submission.submittedText ||
+          submission.submissionText ||
+          submission.finalText ||
+          submission.content ||
+          ""
+      ).trim()
+  );
+}
+
+function getSubmissionStudentKey(submission = {}) {
+  return String(
+    submission.studentEmail ||
+      submission.userEmail ||
+      submission.student?.email ||
+      submission.id ||
+      "student"
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function countCurrentSubmittedStudents(
+  assignmentId,
+  records = []
+) {
+  const studentKeys = new Set();
+
+  safeArray(records).forEach((submission) => {
+    if (
+      String(submission.assignmentId) !==
+      String(assignmentId)
+    ) {
+      return;
+    }
+
+    if (submission.isCurrent === false) {
+      return;
+    }
+
+    const status = String(
+      submission.status || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (
+      !["submitted", "late", "graded"].includes(
+        status
+      ) ||
+      !hasSubmissionEvidence(submission)
+    ) {
+      return;
+    }
+
+    studentKeys.add(
+      getSubmissionStudentKey(submission)
+    );
+  });
+
+  return studentKeys.size;
+}
+
+function buildArchivedSubmissionRecord(
+  submission = {},
+  archivedAt
+) {
+  return {
+    ...clonePlainData(submission),
+    archivedAt,
+    archiveReason: "assignment_deleted",
+    originalStudentEmail:
+      submission.studentEmail || null,
+    studentName: "Archived Student",
+    studentEmail: null,
+    userEmail: null,
+    student: null,
+    profile: null,
+  };
+}
+
 function getSubmissionRecordText(submission = {}) {
   return String(
     submission.finalText ||
@@ -382,7 +471,6 @@ function mergeSubmissionCollections(
 
   return Array.from(recordsByKey.values());
 }
-
 
 
 function getAssignmentDeadlineDate(
@@ -1089,7 +1177,7 @@ export function TeacherWorkspaceProvider({ children }) {
       return null;
     }
 
-    const today = todayDate();
+    const now = nowIso();
     const assignmentId = createId();
 
     const attachedRubric = buildAttachedRubricSchema({
@@ -1154,12 +1242,12 @@ export function TeacherWorkspaceProvider({ children }) {
 
       submissionsCount: Number(assignmentData.submissionsCount || 0),
 
-      createdAt: today,
-      updatedAt: today,
+      createdAt: now,
+      updatedAt: now,
 
       publishedAt:
         normalizedStatus === "Published"
-          ? today
+          ? now
           : null,
 
       archived: false,
@@ -1210,7 +1298,7 @@ export function TeacherWorkspaceProvider({ children }) {
       return null;
     }
 
-    const today = todayDate();
+    const now = nowIso();
 
     const attachedRubric = buildAttachedRubricSchema({
       assignmentData: updatedAssignment,
@@ -1251,7 +1339,7 @@ export function TeacherWorkspaceProvider({ children }) {
         normalizedStatus === "Published"
           ? updatedAssignment.publishedAt ||
             existingAssignment?.publishedAt ||
-            today
+            now
           : null,
 
       rubricId: attachedRubric?.id || null,
@@ -1261,7 +1349,7 @@ export function TeacherWorkspaceProvider({ children }) {
       uploadedRubricName: attachedRubric?.uploadedRubricName || "",
       uploadedRubricText: attachedRubric?.uploadedRubricText || "",
 
-      updatedAt: today,
+      updatedAt: now,
     };
 
     setAssignments((prev) => {
@@ -1297,9 +1385,42 @@ export function TeacherWorkspaceProvider({ children }) {
 
   function deleteAssignment(id) {
     const currentData = getPraxisData();
+    const archivedAt = nowIso();
+
+    const assignmentToArchive =
+      assignments.find(
+        (assignment) =>
+          String(assignment.id) === String(id)
+      ) ||
+      safeArray(currentData.assignments).find(
+        (assignment) =>
+          String(assignment.id) === String(id)
+      ) ||
+      null;
+
+    const completeSubmissions = mergeSubmissionCollections(
+      currentData.submissions || [],
+      submissions
+    );
+
+    const relatedSubmissions =
+      completeSubmissions.filter(
+        (submission) =>
+          String(submission.assignmentId) ===
+          String(id)
+      );
+
+    const relatedRubrics = safeArray(
+      currentData.rubrics || rubrics
+    ).filter(
+      (rubric) =>
+        String(rubric.assignmentId) ===
+        String(id)
+    );
 
     const nextAssignments = assignments.filter(
-      (assignment) => String(assignment.id) !== String(id)
+      (assignment) =>
+        String(assignment.id) !== String(id)
     );
 
     const nextRubrics = rubrics.filter(
@@ -1307,15 +1428,42 @@ export function TeacherWorkspaceProvider({ children }) {
         String(rubric.assignmentId) !== String(id)
     );
 
-    const completeSubmissions = mergeSubmissionCollections(
-      currentData.submissions || [],
-      submissions
-    );
-
     const nextSubmissions = completeSubmissions.filter(
       (submission) =>
         String(submission.assignmentId) !== String(id)
     );
+
+    const assignmentArchive = [
+      ...safeArray(currentData.assignmentArchive),
+      ...(assignmentToArchive
+        ? [
+            {
+              ...clonePlainData(assignmentToArchive),
+              archivedAt,
+              archiveReason: "teacher_deleted",
+            },
+          ]
+        : []),
+    ];
+
+    const submissionArchive = [
+      ...safeArray(currentData.submissionArchive),
+      ...relatedSubmissions.map((submission) =>
+        buildArchivedSubmissionRecord(
+          submission,
+          archivedAt
+        )
+      ),
+    ];
+
+    const rubricArchive = [
+      ...safeArray(currentData.rubricArchive),
+      ...relatedRubrics.map((rubric) => ({
+        ...clonePlainData(rubric),
+        archivedAt,
+        archiveReason: "assignment_deleted",
+      })),
+    ];
 
     setAssignments(nextAssignments);
     setRubrics(nextRubrics);
@@ -1326,22 +1474,31 @@ export function TeacherWorkspaceProvider({ children }) {
       assignments: nextAssignments,
       rubrics: nextRubrics,
       submissions: nextSubmissions,
+      assignmentArchive,
+      submissionArchive,
+      rubricArchive,
     });
 
     notifyPraxisDataChanged();
 
-    if (String(selectedAssignment?.id) === String(id)) {
+    if (
+      String(selectedAssignment?.id) ===
+      String(id)
+    ) {
       setSelectedAssignment(null);
       setView("list");
     }
 
-    if (String(submissionFilterAssignment?.id) === String(id)) {
+    if (
+      String(submissionFilterAssignment?.id) ===
+      String(id)
+    ) {
       setSubmissionFilterAssignment(null);
     }
   }
 
   function toggleAssignmentStatus(id) {
-    const today = todayDate();
+    const now = nowIso();
 
     setAssignments((prev) => {
       const nextAssignments = prev.map((assignment) => {
@@ -1355,8 +1512,8 @@ export function TeacherWorkspaceProvider({ children }) {
         return {
           ...assignment,
           status: isPublished ? "Draft" : "Published",
-          publishedAt: isPublished ? null : today,
-          updatedAt: today,
+          publishedAt: isPublished ? null : now,
+          updatedAt: now,
         };
       });
 
@@ -1381,8 +1538,8 @@ export function TeacherWorkspaceProvider({ children }) {
       return {
         ...prev,
         status: isPublished ? "Draft" : "Published",
-        publishedAt: isPublished ? null : today,
-        updatedAt: today,
+        publishedAt: isPublished ? null : now,
+        updatedAt: now,
       };
     });
   }
@@ -1622,18 +1779,35 @@ export function TeacherWorkspaceProvider({ children }) {
     });
 
     setAssignments((prev) => {
+      const currentData = getPraxisData();
+      const completeSubmissions = mergeSubmissionCollections(
+        currentData.submissions || [],
+        submissions
+      );
+
+      const nextCompleteSubmissions =
+        mergeSubmissionCollections(
+          [newSubmission],
+          completeSubmissions
+        );
+
+      const currentStudentCount =
+        countCurrentSubmittedStudents(
+          submissionData.assignmentId,
+          nextCompleteSubmissions
+        );
+
       const nextAssignments = prev.map((item) =>
         String(item.id) ===
         String(submissionData.assignmentId)
           ? {
               ...item,
               submissionsCount:
-                Number(item.submissionsCount || 0) + 1,
+                currentStudentCount,
+              updatedAt: now,
             }
           : item
       );
-
-      const currentData = getPraxisData();
 
       savePraxisData({
         ...currentData,

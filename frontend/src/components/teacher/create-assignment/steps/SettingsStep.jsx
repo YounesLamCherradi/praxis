@@ -1,13 +1,64 @@
 import React from "react";
 import {
   Bot,
-  Lock,
-  PlayCircle,
+  Clock3,
+  ListChecks,
   ShieldCheck,
 } from "lucide-react";
 
 import ToggleRow from "../shared/ToggleRow";
-import IntegrityToggleRow from "../shared/IntegrityToggleRow";
+
+function NumberSetting({
+  icon: Icon,
+  label,
+  description,
+  value,
+  onChange,
+  disabled = false,
+  maximum = 120,
+}) {
+  return (
+    <label
+      className={`space-y-2 rounded-xl border p-4 transition-colors ${
+        disabled
+          ? "border-slate-100 bg-slate-50 opacity-60"
+          : "border-slate-200 bg-[#F8FAFC]"
+      }`}
+    >
+      <span className="flex items-center gap-2 text-xs font-bold text-slate-900">
+        <Icon className="h-4 w-4 text-blue-600" />
+        {label}
+      </span>
+
+      <input
+        type="number"
+        min="0"
+        max={maximum}
+        step="1"
+        value={value}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange(
+            Math.max(
+              0,
+              Math.min(
+                maximum,
+                Number(event.target.value || 0)
+              )
+            )
+          )
+        }
+        className={`w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs font-bold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 ${
+          disabled ? "cursor-not-allowed" : ""
+        }`}
+      />
+
+      <p className="text-[11px] leading-relaxed text-slate-500">
+        {description}
+      </p>
+    </label>
+  );
+}
 
 export default function SettingsStep({
   allowAI,
@@ -16,19 +67,18 @@ export default function SettingsStep({
   coachTimeLimitMinutes,
   setCoachTimeLimitMinutes,
 
+  ideaRequestLimit,
+  setIdeaRequestLimit,
+
   autoBuildOutlineFromCoach,
   setAutoBuildOutlineFromCoach,
 
-  aiFeedback,
-  setAiFeedback,
-
-  writingPlayback,
-  setWritingPlayback,
-
-  integritySettings,
-  updateIntegritySetting,
+  feedbackChecks,
+  setFeedbackChecks,
 }) {
-  const outlineEnabled = Boolean(allowAI && autoBuildOutlineFromCoach);
+  const outlineEnabled = Boolean(
+    allowAI && autoBuildOutlineFromCoach
+  );
 
   function handleCoachToggle(value) {
     setAllowAI(value);
@@ -42,107 +92,81 @@ export default function SettingsStep({
     <div className="space-y-5">
       <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-5">
         <h3 className="font-serif text-lg font-bold text-slate-950">
-          Step 3: Student Support & Integrity
+          Step 3: Student Support
         </h3>
 
-        <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-          Configure student AI support, coach limits, outline generation, and
-          core academic integrity rules before saving the assignment.
+        <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
+          Configure the original Praxis Coach, separate Idea Help, notes-only outline, and AI feedback request limits.
         </p>
       </div>
 
-      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+      <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
         <div>
           <h4 className="font-serif text-sm font-bold text-slate-950">
-            Student AI support
+            Original student-support controls
           </h4>
 
           <p className="mt-1 text-xs text-slate-500">
-            These settings control what support students can access during the
-            writing process.
+            A value of 0 keeps the original special meaning shown below.
           </p>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          <ToggleRow
-            icon={Bot}
-            label="AI ideas coach"
-            description="Students can ask the coach for brainstorming and planning support before drafting."
-            checked={allowAI}
-            onChange={handleCoachToggle}
-          />
-
-          <ToggleRow
-            icon={ShieldCheck}
-            label="AI draft feedback"
-            description="Students can request feedback on drafts without receiving a full answer."
-            checked={aiFeedback}
-            onChange={setAiFeedback}
-          />
-
-          <ToggleRow
-            icon={PlayCircle}
-            label="Writing playback"
-            description="Save writing process events for teacher review."
-            checked={writingPlayback}
-            onChange={setWritingPlayback}
-          />
-        </div>
+        <ToggleRow
+          icon={Bot}
+          label="AI ideas coach"
+          description="Students can brainstorm and plan before drafting. Turning this off stores disableChatbot=true and chatTimeLimit=-1."
+          checked={allowAI}
+          onChange={handleCoachToggle}
+        />
 
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Coach chat time limit
-            </span>
+          <NumberSetting
+            icon={Clock3}
+            label="Coach active-time limit"
+            description="0 = unlimited active Coach time. A positive value limits active Coach time in minutes."
+            value={coachTimeLimitMinutes}
+            onChange={setCoachTimeLimitMinutes}
+            disabled={!allowAI}
+          />
 
-            <input
-              type="number"
-              min="1"
-              max="120"
-              value={coachTimeLimitMinutes}
-              disabled={!allowAI}
-              onChange={(event) =>
-                setCoachTimeLimitMinutes(Number(event.target.value || 15))
-              }
-              className={`w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs font-bold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 ${
-                !allowAI ? "cursor-not-allowed opacity-50" : ""
-              }`}
-            />
-
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              Limit how long students can talk to the ideas coach. Example: 15
-              minutes.
-            </p>
-          </label>
+          <NumberSetting
+            icon={ListChecks}
+            label="Idea-help requests"
+            description="0 disables separate Idea Help. This limit is independent from the conversational Ideas Coach."
+            value={ideaRequestLimit}
+            onChange={setIdeaRequestLimit}
+            maximum={20}
+          />
 
           <div
             className={`flex items-start justify-between gap-4 rounded-xl border p-4 ${
               allowAI
                 ? "border-slate-200 bg-[#F8FAFC]"
-                : "border-slate-100 bg-slate-50 opacity-70"
+                : "border-slate-100 bg-slate-50 opacity-60"
             }`}
           >
             <div>
               <p className="text-xs font-bold text-slate-900">
-                Auto-build outline from coach chat
+                Auto-build outline from Coach chat
               </p>
 
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                When the student reaches the draft page, convert the coach chat
-                into an editable idea-outline with notes only. No full
-                sentences. Requires AI ideas coach.
+                Convert planning chat into editable notes when the student reaches the drafting step. Requires the Ideas Coach.
               </p>
             </div>
 
             <button
               type="button"
               disabled={!allowAI}
+              aria-pressed={outlineEnabled}
               onClick={() =>
-                setAutoBuildOutlineFromCoach(!autoBuildOutlineFromCoach)
+                setAutoBuildOutlineFromCoach(
+                  !autoBuildOutlineFromCoach
+                )
               }
               className={`h-5 w-10 shrink-0 rounded-full p-0.5 transition-all ${
                 outlineEnabled ? "bg-blue-600" : "bg-slate-300"
-              } ${!allowAI ? "cursor-not-allowed" : ""}`}
+              } ${!allowAI ? "cursor-not-allowed" : "cursor-pointer"}`}
             >
               <span
                 className={`block h-4 w-4 rounded-full bg-white transition-transform ${
@@ -151,101 +175,25 @@ export default function SettingsStep({
               />
             </button>
           </div>
+
+          <NumberSetting
+            icon={ShieldCheck}
+            label="AI feedback requests"
+            description="0 disables AI draft feedback. A positive value is the maximum number of feedback checks available to the student."
+            value={feedbackChecks}
+            onChange={setFeedbackChecks}
+            maximum={20}
+          />
         </div>
 
         {!allowAI && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-            <p className="text-xs leading-relaxed text-amber-800">
-              Auto-build outline is disabled because the AI ideas coach is
-              disabled.
-            </p>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+            The conversational Ideas Coach, its timer, and automatic Coach outline are disabled. Separate Idea Help and AI draft feedback remain available according to their own request limits.
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-            <Lock className="h-4 w-4" />
-          </div>
 
-          <div>
-            <h4 className="font-serif text-sm font-bold text-slate-950">
-              Academic integrity settings
-            </h4>
-
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">
-              These rules control paste behavior, academic honor confirmation,
-              word-count requirements, and submission locking.
-            </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          <label className="space-y-1.5 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Paste policy
-            </span>
-
-            <select
-              value={integritySettings.pastePolicy}
-              onChange={(event) =>
-                updateIntegritySetting("pastePolicy", event.target.value)
-              }
-              className="w-full rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-            >
-              <option value="allow">Allow paste</option>
-              <option value="warn">Warn students</option>
-              <option value="block">Block paste</option>
-            </select>
-
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              Decide whether students can paste text into the writing editor.
-            </p>
-          </label>
-
-          <IntegrityToggleRow
-            label="Log paste attempts"
-            description="Record paste events for teacher review."
-            checked={integritySettings.logPasteAttempts}
-            onChange={(value) =>
-              updateIntegritySetting("logPasteAttempts", value)
-            }
-          />
-
-          <IntegrityToggleRow
-            label="Require honor confirmation"
-            description="Ask students to confirm academic honesty before submission."
-            checked={integritySettings.requireHonorConfirmation}
-            onChange={(value) =>
-              updateIntegritySetting("requireHonorConfirmation", value)
-            }
-          />
-
-          <IntegrityToggleRow
-            label="Enforce word count"
-            description="Require submissions to respect the configured word range."
-            checked={integritySettings.enforceWordCount}
-            onChange={(value) =>
-              updateIntegritySetting("enforceWordCount", value)
-            }
-          />
-
-          <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-            <p className="text-xs font-bold text-emerald-900">
-              Lock editing after submission
-            </p>
-
-            <p className="mt-1 text-[11px] leading-relaxed text-emerald-800">
-              Always enabled by default. Students cannot edit after submitting.
-            </p>
-
-            <span className="mt-3 inline-flex rounded-lg border border-emerald-200 bg-emerald-100 px-2 py-1 font-mono text-[10px] font-bold text-emerald-800">
-              Always ON
-            </span>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

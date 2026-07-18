@@ -1,10 +1,15 @@
-import { getText, safeArray } from "./rubricUtils";
+function getText(value) {
+  return String(value || "").trim();
+}
 
-const MAX_INSTRUCTION_WORDS = 170;
-const MAX_DESCRIPTION_WORDS = 28;
+function safeArray(value) {
+  return Array.isArray(value) ? value : [];
+}
 
-export function extractJsonFromText(text) {
+function extractJsonFromText(text) {
   const raw = String(text || "").trim();
+
+  if (!raw) return null;
 
   try {
     return JSON.parse(raw);
@@ -12,305 +17,423 @@ export function extractJsonFromText(text) {
     // Continue below.
   }
 
-  const firstBrace = raw.indexOf("{");
-  const lastBrace = raw.lastIndexOf("}");
-
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    return null;
-  }
+  const withoutFence = raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
 
   try {
-    return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    return JSON.parse(withoutFence);
   } catch {
-    return null;
+    // Continue below.
   }
+
+  const firstBrace = withoutFence.indexOf("{");
+  const lastBrace = withoutFence.lastIndexOf("}");
+
+  if (
+    firstBrace !== -1 &&
+    lastBrace > firstBrace
+  ) {
+    try {
+      return JSON.parse(
+        withoutFence.slice(firstBrace, lastBrace + 1)
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
-function stripMarkdown(text) {
-  return String(text || "")
-    .replace(/\*\*(.*?)\*\*/g, "$1")
-    .replace(/\*(.*?)\*/g, "$1")
-    .replace(/#{1,6}\s?/g, "")
-    .replace(/^\s*[-*]\s+/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+function toBoolean(value, fallback) {
+  if (typeof value === "boolean") return value;
+
+  const clean = String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (["true", "yes", "on", "enabled", "1"].includes(clean)) {
+    return true;
+  }
+
+  if (["false", "no", "off", "disabled", "0"].includes(clean)) {
+    return false;
+  }
+
+  return fallback;
 }
 
-function limitWords(text, maxWords) {
-  const clean = stripMarkdown(text);
-  const words = clean.split(/\s+/).filter(Boolean);
+function toNumber(value, fallback, minimum = null, maximum = null) {
+  const parsed = Number(value);
+  let result = Number.isFinite(parsed) ? parsed : fallback;
 
-  if (words.length <= maxWords) return clean;
+  if (minimum !== null) {
+    result = Math.max(minimum, result);
+  }
 
-  return `${words.slice(0, maxWords).join(" ")}...`;
+  if (maximum !== null) {
+    result = Math.min(maximum, result);
+  }
+
+  return result;
 }
 
-function buildShortDescription(text) {
-  const clean = stripMarkdown(text);
-  const firstSentence = clean.match(/[^.!?]+[.!?]/)?.[0] || clean;
+function normalizeAssignmentType(value) {
+  const clean = getText(value).toLowerCase();
 
-  return limitWords(firstSentence, MAX_DESCRIPTION_WORDS);
+  if (clean.includes("compare")) return "Compare and Contrast";
+  if (clean.includes("process")) return "Process Paragraph";
+  if (clean.includes("narrative")) return "Narrative";
+  if (clean.includes("argument")) return "Argument";
+  if (clean.includes("definition")) return "Definition";
+  if (clean.includes("reflection")) return "Reflection";
+  if (clean.includes("summary")) return "Summary";
+  if (clean.includes("analysis")) return "Analysis";
+  if (clean.includes("response")) return "Response";
+  if (clean.includes("other")) return "Other";
+
+  return "Response";
 }
 
-export function formatCriteriaForPrompt(criteria = []) {
-  if (!Array.isArray(criteria) || criteria.length === 0) return "";
+function normalizeLanguageLevel(value) {
+  const clean = getText(value).toUpperCase();
 
-  return criteria
+  if (clean.includes("MIXED")) return "Mixed level";
+
+  const match = clean.match(/\b(A1|A2|B1|B2|C1|C2)\b/);
+  return match?.[1] || "B1";
+}
+
+function normalizeDueDate(value) {
+  const clean = getText(value);
+
+  if (!clean) return "";
+
+  const date = new Date(clean);
+
+  if (Number.isNaN(date.getTime())) {
+    return clean.slice(0, 16);
+  }
+
+  const local = new Date(
+    date.getTime() - date.getTimezoneOffset() * 60_000
+  );
+
+  return local.toISOString().slice(0, 16);
+}
+
+function formatCriteriaForPrompt(criteria = []) {
+  return safeArray(criteria)
     .map((criterion, index) => {
-      const bands = safeArray(criterion.bands || criterion.levels)
-        .slice(0, 5)
+      const bands = safeArray(
+        criterion?.bands || criterion?.levels
+      )
         .map((band) => {
-          const label = band.label || "Level";
-          const points = band.points ?? band.score ?? 0;
-          const description = limitWords(band.description || "", 22);
+          const label =
+            band?.label ||
+            band?.name ||
+            "Level";
 
-          return `   - ${label} (${points} pts): ${description}`;
+          const points =
+            band?.points ??
+            band?.score ??
+            "";
+
+          const description =
+            band?.description ||
+            band?.descriptor ||
+            "";
+
+          return `  - ${label}${
+            points !== "" ? ` (${points} pts)` : ""
+          }: ${description}`;
         })
+        .filter(Boolean)
         .join("\n");
 
-      const criterionDescription = limitWords(
-        criterion.description || "No description",
-        24
-      );
-
-      return `${index + 1}. ${criterion.name || `Criterion ${index + 1}`} (${
-        criterion.points || criterion.maxScore || 0
-      } pts): ${criterionDescription}${bands ? `\n${bands}` : ""}`;
+      return `${index + 1}. ${
+        criterion?.name ||
+        criterion?.title ||
+        `Criterion ${index + 1}`
+      } (${criterion?.points ?? criterion?.maxPoints ?? 0} pts): ${
+        criterion?.description || ""
+      }${bands ? `\n${bands}` : ""}`;
     })
     .join("\n\n");
 }
 
-export function formatIntegritySettingsForPrompt(settings = {}) {
-  const enabledRules = [];
+function formatCourses(courses = []) {
+  const list = safeArray(courses);
 
-  if (settings.pastePolicy) {
-    enabledRules.push(`Paste policy: ${settings.pastePolicy}`);
+  if (!list.length) {
+    return "No courses are available.";
   }
 
-  if (settings.logPasteAttempts) {
-    enabledRules.push("Log paste attempts");
-  }
+  return list
+    .map((course) => {
+      const code =
+        course?.code ||
+        course?.classCode ||
+        "";
 
-  if (settings.trackFocusLoss) {
-    enabledRules.push("Track focus loss and tab switching");
-  }
+      const name =
+        course?.name ||
+        course?.title ||
+        "";
 
-  if (settings.requireHonorConfirmation) {
-    enabledRules.push("Require academic honor confirmation before submission");
-  }
-
-  if (settings.enforceWordCount) {
-    enabledRules.push("Enforce word count before submission");
-  }
-
-  enabledRules.push("Lock editing after submission");
-
-  return enabledRules.join("\n");
+      return `- id=${course?.id ?? ""}; code=${code}; name=${name}`;
+    })
+    .join("\n");
 }
 
 export function normalizeGeneratedAssignment(data) {
-  const responseText = data?.response || data?.reply || data?.message || "";
+  const responseText =
+    data?.response ||
+    data?.reply ||
+    data?.message ||
+    data?.content?.[0]?.text ||
+    data?.content ||
+    "";
 
-  const parsed = extractJsonFromText(responseText);
+  const parsed =
+    typeof responseText === "object"
+      ? responseText
+      : extractJsonFromText(responseText);
 
-  if (!parsed) {
-    const cleanInstructions = limitWords(responseText, MAX_INSTRUCTION_WORDS);
-
+  if (!parsed || typeof parsed !== "object") {
     return {
       title: "",
-      instructions: cleanInstructions,
-      description: buildShortDescription(cleanInstructions),
+      description: getText(responseText),
+      instructions: getText(responseText),
       requirements: [],
-      rawText: responseText,
+      assignmentType: "Response",
+      languageLevel: "B1",
+      minWords: 250,
+      maxWords: 400,
+      feedbackRequestLimit: 2,
+      ideaRequestLimit: 3,
+      dueDate: "",
+      classCode: "",
+      aiSupport: {
+        ideasCoach: true,
+        chatTimeLimit: 0,
+        autoOutlineFromChat: true,
+      },
+      rawText: getText(responseText),
     };
   }
 
-  const rawInstructions = getText(
-    parsed.instructions ||
-      parsed.studentInstructions ||
-      parsed.prompt ||
-      parsed.description ||
-      ""
+  const minWords = toNumber(
+    parsed.minWords ??
+      parsed.suggestedMinWords ??
+      parsed.wordCountMin,
+    250,
+    1
   );
 
-  const cleanInstructions = limitWords(rawInstructions, MAX_INSTRUCTION_WORDS);
-
-  const rawDescription = getText(
-    parsed.description ||
-      parsed.summary ||
-      cleanInstructions ||
-      ""
+  const maxWords = Math.max(
+    minWords,
+    toNumber(
+      parsed.maxWords ??
+        parsed.suggestedMaxWords ??
+        parsed.wordCountMax,
+      400,
+      1
+    )
   );
 
-  const requirements = Array.isArray(parsed.requirements)
-    ? parsed.requirements
-        .map(getText)
-        .map((item) => limitWords(item, 14))
-        .filter(Boolean)
-        .slice(0, 4)
-    : [];
+  const support =
+    parsed.aiSupport ||
+    parsed.studentAiSupport ||
+    parsed.aiSettings ||
+    {};
+
 
   return {
-    title: getText(parsed.title || parsed.assignmentTitle || ""),
-    instructions: cleanInstructions,
-    description: buildShortDescription(rawDescription),
-    requirements,
-    suggestedMinWords: parsed.minWords ?? parsed.suggestedMinWords ?? "",
-    suggestedMaxWords: parsed.maxWords ?? parsed.suggestedMaxWords ?? "",
-    rawText: responseText,
+    title: getText(
+      parsed.title ||
+      parsed.assignmentTitle
+    ),
+
+    description: getText(
+      parsed.description ||
+      parsed.summary ||
+      parsed.instructions ||
+      parsed.studentInstructions
+    ),
+
+    instructions: getText(
+      parsed.instructions ||
+      parsed.studentInstructions ||
+      parsed.prompt ||
+      parsed.description
+    ),
+
+    requirements: safeArray(parsed.requirements)
+      .map(getText)
+      .filter(Boolean),
+
+    assignmentType: normalizeAssignmentType(
+      parsed.assignmentType ||
+      parsed.type
+    ),
+
+    languageLevel: normalizeLanguageLevel(
+      parsed.languageLevel ||
+      parsed.studentLevel ||
+      parsed.level
+    ),
+
+    minWords,
+    maxWords,
+
+    feedbackRequestLimit: toNumber(
+      parsed.feedbackRequestLimit ??
+        parsed.feedbackChecks,
+      2,
+      0,
+      10
+    ),
+
+    ideaRequestLimit: toNumber(
+      parsed.ideaRequestLimit ??
+        parsed.ideaChecks,
+      3,
+      0,
+      10
+    ),
+
+    dueDate: normalizeDueDate(
+      parsed.dueDate ||
+      parsed.deadline ||
+      parsed.dueAt
+    ),
+
+    classId: parsed.classId ?? "",
+    classCode: getText(
+      parsed.classCode ||
+      parsed.courseCode
+    ),
+    className: getText(
+      parsed.className ||
+      parsed.courseName
+    ),
+
+    aiSupport: {
+      ideasCoach: toBoolean(
+        support.ideasCoach ??
+          support.aiIdeasCoach ??
+          parsed.allowAI,
+        true
+      ),
+
+      chatTimeLimit: toNumber(
+        support.chatTimeLimit ??
+          support.coachTimeLimitMinutes ??
+          parsed.chatTimeLimit,
+        0,
+        -1,
+        120
+      ),
+
+      autoOutlineFromChat: toBoolean(
+        support.autoOutlineFromChat ??
+          support.autoBuildOutlineFromCoach,
+        true
+      ),
+    },
+
+    rawText: getText(responseText),
   };
 }
 
 export function buildAssignmentGenerationSystemPrompt() {
-  return `
-You are Praxis Assignment Builder, an assistant for teachers.
+  return `You are Praxis Assignment Builder.
 
-You help teachers create student-ready writing assignments.
+A teacher will describe a writing assignment in one plain-English message.
+Infer and create the complete assignment configuration.
 
-Critical output rules:
-- Create only assignment instructions, not a student answer.
-- Do not write a sample essay.
-- Do not complete the assignment for students.
-- Keep the student instructions short: 120 to 160 words maximum.
-- Keep the teacher-facing description to one short sentence.
-- Do not use long section headings like "Introduction", "Body Paragraphs", "Conclusion", "Language and Style", or "Before you submit".
-- Do not create a long checklist.
-- Do not repeat the due date in the instructions unless it is necessary.
-- Do not repeat the full word count checklist if the word count is already provided.
-- Do not use markdown formatting such as **bold**, headings, or long bullet lists.
-- Use clear student-friendly wording.
-- Respect the teacher's selected English level, assignment type, word count, due date, AI support settings, and academic integrity settings.
-- If AI support is disabled, do not mention AI support in the student instructions.
-- If AI support is enabled, mention it in only one concise sentence.
-- If academic integrity settings are included, mention them in only one concise sentence.
-- If a rubric is provided, align the assignment with the rubric, but do not summarize the entire rubric.
-- If auto-build outline from coach chat is enabled, describe it only as notes/outline support, not sentence generation.
-- Do not tell students that AI will write paragraphs, sentences, or the assignment for them.
-- The final assignment should feel like a clean prompt, not a full lesson document.
+Important rules:
+- Create assignment instructions only. Never write a student answer or sample essay.
+- Preserve every explicit teacher requirement.
+- Infer sensible classroom defaults for omitted details.
+- Use the teacher's wording as the source of truth.
+- Keep student instructions clear, concise, and appropriate for the inferred CEFR level.
+- Select only a course from the provided available-course list.
+- If no course is mentioned, select the first available course.
+- If no due date is mentioned, set it seven days after the provided current date at 23:59 local time.
+- If no assignment type is clear, use "Response".
+- If no level is stated, use "B1".
+- If no word range is stated, use 250 to 400 words.
+- If no feedback limit is stated, use 2. feedbackRequestLimit=0 disables AI draft feedback.
+- If no idea-help limit is stated, use 3.
+- ideaRequestLimit is independent from the conversational Ideas Coach. Do not set it to 0 merely because the Coach is disabled.
+- Unless the teacher says otherwise, enable the Ideas Coach with unlimited active time (chatTimeLimit=0) and automatic outline.
+- chatTimeLimit meanings: -1 disabled, 0 unlimited, positive number limited minutes.
+- When the Ideas Coach is disabled, return ideasCoach=false, chatTimeLimit=-1, and autoOutlineFromChat=false. Keep ideaRequestLimit unchanged.
+- Do not generate writing playback, focus tracking, large-insertion detection, honor confirmation, paste policy, submission locking, or other integrity fields. They are not assignment-level fields in the restored old Praxis model.
+- Align the task with the provided rubric when a rubric is present.
+- Return ONLY valid JSON. No markdown and no commentary.
 
-Return ONLY valid JSON with this exact shape:
+Return this exact JSON shape:
 {
   "title": "assignment title",
-  "description": "one short teacher-facing summary sentence",
-  "instructions": "student-facing instructions in 120 to 160 words maximum, no markdown",
-  "requirements": ["short requirement 1", "short requirement 2", "short requirement 3"],
-  "suggestedMinWords": 120,
-  "suggestedMaxWords": 400
-}
-`;
+  "description": "short teacher-facing summary",
+  "instructions": "student-facing instructions",
+  "requirements": ["requirement 1", "requirement 2"],
+  "assignmentType": "Response | Definition | Argument | Narrative | Compare and Contrast | Process Paragraph | Reflection | Summary | Analysis | Other",
+  "languageLevel": "A1 | A2 | B1 | B2 | C1 | C2 | Mixed level",
+  "minWords": 250,
+  "maxWords": 400,
+  "feedbackRequestLimit": 2,
+  "ideaRequestLimit": 3,
+  "dueDate": "YYYY-MM-DDTHH:mm",
+  "classId": "available course id",
+  "classCode": "available course code",
+  "className": "available course name",
+  "aiSupport": {
+    "ideasCoach": true,
+    "chatTimeLimit": 0,
+    "autoOutlineFromChat": true
+  }
+}`;
 }
 
 export function buildAssignmentGenerationUserPrompt({
-  aiTopic,
-  aiBrief,
-  assignmentType,
-  studentLevel,
-  minWords,
-  maxWords,
-  feedbackChecks,
-  dueDate,
-  includeRubricInPrompt,
+  teacherRequest,
+  availableCourses = [],
+  currentDate,
   rubricTitle,
-  criteria,
-  uploadedRubricText,
-  includeStudentAiSupportInPrompt,
-  allowAI,
-  coachTimeLimitMinutes,
-  aiFeedback,
-  writingPlayback,
-  autoBuildOutlineFromCoach,
-  includeIntegritySettingsInPrompt,
-  integritySettings,
+  criteria = [],
+  uploadedRubricText = "",
 }) {
-  const rubricText = includeRubricInPrompt
-    ? [
-        rubricTitle ? `Rubric title: ${rubricTitle}` : "",
-        formatCriteriaForPrompt(criteria),
-        uploadedRubricText
-          ? `Uploaded rubric source text, use only for alignment and do not summarize it:\n${uploadedRubricText.slice(
-              0,
-              1800
-            )}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : "Do not use rubric context.";
+  const rubricContext = [
+    rubricTitle
+      ? `Rubric title: ${rubricTitle}`
+      : "",
+    formatCriteriaForPrompt(criteria),
+    uploadedRubricText
+      ? `Uploaded rubric source:\n${String(uploadedRubricText).slice(0, 4000)}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
-  const normalizedCoachLimit = Number(coachTimeLimitMinutes || 15);
-
-  const aiSupportText = includeStudentAiSupportInPrompt
-    ? [
-        allowAI
-          ? `AI ideas coach is enabled. Students can use it for up to ${normalizedCoachLimit} minutes for brainstorming and planning.`
-          : "AI ideas coach is disabled. Do not mention AI brainstorming support.",
-
-        allowAI && autoBuildOutlineFromCoach
-          ? "Auto-build outline from coach chat is enabled. Mention only that students can convert their coach chat into a notes-only outline before drafting."
-          : "Auto-build outline from coach chat is disabled.",
-
-        aiFeedback
-          ? `AI draft feedback is enabled. Students may request feedback up to ${feedbackChecks || 0} time(s).`
-          : "AI draft feedback is disabled. Do not mention AI feedback support.",
-
-        writingPlayback
-          ? "Writing playback is enabled for teacher review. Do not explain this in detail to students."
-          : "Writing playback is disabled.",
-      ].join("\n")
-    : "Do not mention platform AI support in the student-facing instructions.";
-
-  const integrityText = includeIntegritySettingsInPrompt
-    ? formatIntegritySettingsForPrompt({
-        ...integritySettings,
-        lockAfterSubmission: true,
-      })
-    : "Do not mention academic integrity settings in the student-facing instructions unless necessary.";
-
-  return `
-Teacher wants to create a writing assignment.
-
-Topic / prompt idea:
-${aiTopic || "No topic provided."}
-
-Teacher brief:
-${aiBrief || "No additional brief provided."}
-
-Assignment type:
-${assignmentType || "Not specified"}
-
-Student English level:
-${studentLevel || "Not specified"}
-
-Word count:
-Minimum words: ${minWords || "Not specified"}
-Maximum words: ${maxWords || "Not specified"}
-
-Feedback checks allowed:
-${feedbackChecks || 0}
-
-Due date:
-${dueDate || "Not specified"}
-
-Student AI support settings:
-${aiSupportText}
-
-Academic integrity settings:
-${integrityText}
-
-Rubric context:
-${rubricText}
-
-Now create a clean student-ready assignment draft.
-
-Very important:
-- The instructions must be short.
-- Maximum 160 words.
-- No markdown.
-- No long headings.
-- No long checklist.
-- Mention essay structure in one sentence only.
-- Mention AI support in one concise sentence only if enabled.
-- Mention integrity/submission rules in one concise sentence only if included.
-- The requirements array should contain only 3 or 4 short items.
-`;
+  return [
+    `Current date and time: ${currentDate || new Date().toISOString()}`,
+    "",
+    "Available courses:",
+    formatCourses(availableCourses),
+    "",
+    "Teacher's plain-English assignment description:",
+    `"""${getText(teacherRequest)}"""`,
+    "",
+    rubricContext
+      ? `Rubric context:\n${rubricContext}`
+      : "Rubric context: no rubric details were provided.",
+    "",
+    "Build the complete assignment configuration now.",
+  ].join("\n");
 }

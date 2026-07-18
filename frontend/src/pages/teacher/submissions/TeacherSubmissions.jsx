@@ -115,8 +115,6 @@ function mergeSubmissionSources(primary = [], secondary = []) {
 
     const previous = merged.get(key) || {};
 
-    // Live workspace data wins, but preserve any fields that only exist
-    // in the persisted/mock record.
     merged.set(key, {
       ...previous,
       ...submission,
@@ -128,9 +126,9 @@ function mergeSubmissionSources(primary = [], secondary = []) {
 
 function getSubmissionText(submission) {
   return String(
-    submission?.finalText ||
-      submission?.submittedText ||
+    submission?.submittedText ||
       submission?.submissionText ||
+      submission?.finalText ||
       submission?.content ||
       submission?.draftText ||
       submission?.text ||
@@ -141,6 +139,14 @@ function getSubmissionText(submission) {
       submission?.submission?.text ||
       ""
   ).trim();
+}
+
+function hasSubmissionEvidence(submission) {
+  return Boolean(
+    submission?.submittedAt ||
+      submission?.resubmittedAt ||
+      getSubmissionText(submission)
+  );
 }
 
 const QUICK_STATUS_CONTROLS = [
@@ -371,6 +377,7 @@ function getGradeSheetAiFeedbackText(item = {}) {
   ).trim();
 }
 
+// ... Keep other static grade sheet helpers exactly as they are ...
 function getGradeSheetEventType(event = {}) {
   return String(
     event.type ||
@@ -1417,9 +1424,7 @@ function GradeSheetModal({ open, onClose, data }) {
   );
 }
 
-// --- Isolated Review Modal Overlay ---
-
-
+// ... Keep other GradeSheet and Fallback data helper builders exactly as they are ...
 function buildFallbackGradeSheetData({
   selectedSubmission,
   selectedAssignment,
@@ -2029,6 +2034,9 @@ function ReviewModalOverlay({
   const isReopenedAttempt =
     selectedSubmissionStatus === "Reopened";
 
+  const isPreviousAttempt =
+    selectedSubmission?.isCurrent === false;
+
   return createPortal(
     <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden p-4 sm:p-5">
       <button
@@ -2049,8 +2057,8 @@ function ReviewModalOverlay({
                 <h3 className="font-serif text-base font-bold text-slate-900 truncate">
                   {selectedItem.studentName}
                 </h3>
-                <span className={`inline-flex min-w-[76px] items-center justify-center rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase leading-none ${getStatusStyles(selectedItem.status)}`}>
-                  {normalizeStatus(selectedItem.status)}
+                <span className={`inline-flex min-w-[76px] items-center justify-center rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase leading-none ${getStatusStyles(selectedSubmissionStatus)}`}>
+                  {selectedSubmissionStatus}
                 </span>
               </div>
               <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
@@ -2139,21 +2147,26 @@ function ReviewModalOverlay({
               disabled={
                 !selectedSubmission ||
                 !submissionText ||
-                isReopenedAttempt
+                isReopenedAttempt ||
+                isPreviousAttempt
               }
               onClick={() =>
                 submissionDetailsRef.current?.saveReview()
               }
               className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-blue-600 px-3.5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
               title={
-                isReopenedAttempt
+                isPreviousAttempt
+                  ? "Previous attempts are read-only"
+                  : isReopenedAttempt
                   ? "The student must resubmit this reopened attempt before a new review can be saved"
                   : "Save the current grade, feedback, annotations, and review"
               }
             >
               <CheckSquare className="h-4 w-4" />
               <span>
-                {isReopenedAttempt
+                {isPreviousAttempt
+                  ? "Previous Attempt"
+                  : isReopenedAttempt
                   ? "Awaiting Resubmission"
                   : "Save Review"}
               </span>
@@ -2286,6 +2299,7 @@ function ReviewModalOverlay({
               submission={submissionForReview}
               onBack={onClose}
               onSaveReview={onSaveReview}
+              readOnly={isPreviousAttempt}
             />
           )}
         </div>
@@ -2303,86 +2317,54 @@ function ReviewModalOverlay({
 
 // --- Main Root Workspace Dashboard Layout ---
 
-export default function TeacherSubmissions() {
+export default function TeacherSubmissions({
+  activeCourse,
+  activeAssignment,
+  requestedStatusFilter = "All",
+}) {
   const {
     assignments = [],
     submissions = [],
     addSubmission,
     updateSubmissionReview,
     reopenSubmission,
-    submissionFilterAssignment,
-    setSubmissionFilterAssignment,
     refreshTeacherWorkspace,
   } = useTeacherWorkspace();
-
-  const [selectedClassId, setSelectedClassId] = useState("__all__");
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState(
-    submissionFilterAssignment?.id || assignments[0]?.id || ""
-  );
 
   const [selectedRosterId, setSelectedRosterId] = useState(null);
   const [selectedAttemptId, setSelectedAttemptId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [reviewOpen, setReviewOpen] = useState(false);
-  const [reviewSubmissionSnapshot, setReviewSubmissionSnapshot] =
-    useState(null);
+  const [reviewSubmissionSnapshot, setReviewSubmissionSnapshot] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const dataSnapshot = useMemo(() => getPraxisData(), [refreshKey, assignments, submissions]);
-  const classes = dataSnapshot.classes || [];
 
-  useEffect(() => {
-    if (submissionFilterAssignment?.id) {
-      setSelectedAssignmentId(submissionFilterAssignment.id);
-      const relatedClass = classes.find((cls) => assignmentMatchesClass(submissionFilterAssignment, cls));
-      if (relatedClass) setSelectedClassId(String(relatedClass.id));
-      return;
-    }
-    if (!selectedAssignmentId && assignments.length > 0) {
-      setSelectedAssignmentId(assignments[0].id);
-    }
-  }, [submissionFilterAssignment, assignments, selectedAssignmentId, classes]);
-
-  const selectedClass = useMemo(() => {
-    if (selectedClassId === "__all__") return null;
-    return classes.find((cls) => String(cls.id) === String(selectedClassId)) || null;
-  }, [classes, selectedClassId]);
-
-  const classAssignments = useMemo(() => {
-    if (!selectedClass) return assignments;
-    return assignments.filter((assignment) => assignmentMatchesClass(assignment, selectedClass));
-  }, [assignments, selectedClass]);
-
-  useEffect(() => {
-    if (classAssignments.length === 0) {
-      setSelectedAssignmentId("");
-      setSelectedRosterId(null);
-      setSelectedAttemptId(null);
-      setReviewOpen(false);
-      return;
-    }
-    const selectedStillAvailable = classAssignments.some((assignment) => String(assignment.id) === String(selectedAssignmentId));
-    if (!selectedStillAvailable) {
-      setSelectedAssignmentId(classAssignments[0].id);
-      setSelectedRosterId(null);
-      setSelectedAttemptId(null);
-      setReviewOpen(false);
-    }
-  }, [classAssignments, selectedAssignmentId]);
-
+  // 1. Resolve selected assignment from the active selection passed down as a prop
   const selectedAssignment = useMemo(() => {
-    return assignments.find((assignment) => String(assignment.id) === String(selectedAssignmentId)) || submissionFilterAssignment || null;
-  }, [assignments, selectedAssignmentId, submissionFilterAssignment]);
+    return activeAssignment || null;
+  }, [activeAssignment]);
 
+  // Reset local interactive views and apply the requested filter whenever
+  // the selected assignment or shortcut request changes.
+  useEffect(() => {
+    setSelectedRosterId(null);
+    setSelectedAttemptId(null);
+    setReviewOpen(false);
+    setSearchTerm("");
+    setStatusFilter(requestedStatusFilter || "All");
+  }, [selectedAssignment?.id, requestedStatusFilter]);
+
+  // 2. Map and generate roster matching current selected active assignment
   const roster = useMemo(() => {
     if (!selectedAssignment) return [];
     const data = getPraxisData();
     const enrollments = data.enrollments || [];
 
     const latestSubmissions = mergeSubmissionSources(
-      submissions,
-      data.submissions
+      data.submissions,
+      submissions
     );
 
     const classEnrollments = enrollments.filter((enrollment) =>
@@ -2482,23 +2464,33 @@ export default function TeacherSubmissions() {
     });
   }, [selectedAssignment, submissions, refreshKey]);
 
+  // 3. Keep filters on the resulting list
   const filteredRoster = useMemo(() => {
     const cleanSearch = searchTerm.trim().toLowerCase();
     return roster.filter((item) => {
       const status = normalizeStatus(item.status);
-      const matchesStatus = statusFilter === "All" || status === statusFilter;
+      const matchesStatus =
+        statusFilter === "All" ||
+        (statusFilter === "Pending"
+          ? ["Submitted", "Late"].includes(status) &&
+            hasSubmissionEvidence(item.submission)
+          : status === statusFilter);
       const matchesSearch = !cleanSearch || item.studentName?.toLowerCase().includes(cleanSearch) || item.studentEmail?.toLowerCase().includes(cleanSearch);
       return matchesStatus && matchesSearch;
     });
   }, [roster, statusFilter, searchTerm]);
 
+  // 4. Compute active analytics indicators specifically for this assignment
   const submissionStats = useMemo(() => {
     const stats = { total: roster.length, submitted: 0, graded: 0, needsReview: 0, missing: 0 };
     roster.forEach((item) => {
       const status = normalizeStatus(item.status);
       if (status === "Submitted") stats.submitted += 1;
       if (status === "Graded") stats.graded += 1;
-      if (["Submitted", "Late"].includes(status)) {
+      if (
+        ["Submitted", "Late"].includes(status) &&
+        hasSubmissionEvidence(item.submission)
+      ) {
         stats.needsReview += 1;
       }
       if (["Missing", "Not Started"].includes(status)) stats.missing += 1;
@@ -2732,6 +2724,10 @@ export default function TeacherSubmissions() {
       return false;
     }
 
+    if (sourceSubmission.isCurrent === false) {
+      return false;
+    }
+
     if (
       normalizeStatus(sourceSubmission.status) ===
       "Reopened"
@@ -2761,8 +2757,6 @@ export default function TeacherSubmissions() {
 
     updateSubmissionReview(id, updatedSubmission);
 
-    // Preserve the complete submission text and the current attempt in the
-    // open review workspace, even if the persistence layer returns a partial object.
     setReviewSubmissionSnapshot(updatedSubmission);
     setSelectedAttemptId(id);
 
@@ -2806,69 +2800,43 @@ export default function TeacherSubmissions() {
     selectedAssignment,
   ]);
 
-  if (assignments.length === 0) {
+  // Fallback if no global active assignment is found
+  if (!selectedAssignment) {
     return (
-      <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
-        <FileText className="w-10 h-10 mx-auto text-slate-300 mb-3" />
-        <h2 className="font-serif text-xl font-bold text-slate-900">No assignments yet</h2>
-        <p className="text-sm text-slate-400 mt-1">Create an assignment first before reviewing submissions.</p>
+      <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center flex flex-col items-center justify-center max-w-xl mx-auto my-12">
+        <FileText className="w-12 h-12 text-slate-300 mb-4 animate-pulse" />
+        <h3 className="font-serif text-xl font-bold text-slate-800">No Active Assignment Selected</h3>
+        <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+          Please choose an assignment from your course sidebar above to load student drafts, submissions, behaviors, and grading tools.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Top Filter Bar Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-5">
-        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+      {/* Metrics Banner */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h2 className="font-serif text-xl font-bold text-slate-900">Student Submissions</h2>
-            <p className="text-xs text-slate-400 mt-1">Choose a course, choose an assignment, then open a student review workspace.</p>
+            <h2 className="font-serif text-xl font-bold text-slate-900">
+              {selectedAssignment.title || "Student Submissions"}
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Review individual draft metrics, edit statuses, provide custom feedback, or print grade reports.
+            </p>
           </div>
           <button
             type="button"
             onClick={refreshRoster}
-            className="inline-flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all self-start xl:self-center"
+            className="inline-flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all self-start sm:self-center"
           >
             <RefreshCw className="w-4 h-4" />
             Refresh
           </button>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <label className="space-y-1">
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Course / Class</span>
-            <select
-              value={selectedClassId}
-              onChange={(e) => { setSelectedClassId(e.target.value); setSelectedRosterId(null); setSelectedAttemptId(null); setReviewOpen(false); }}
-              className="w-full bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs font-bold rounded-xl px-4 py-3 focus:outline-none focus:border-slate-400"
-            >
-              <option value="__all__">All Courses</option>
-              {classes.map((cls) => (
-                <option key={cls.id} value={cls.id}>{cls.code ? `${cls.code} — ${cls.name}` : cls.name}</option>
-              ))}
-            </select>
-          </label>
-
-          <label className="space-y-1">
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Assignment</span>
-            <select
-              value={selectedAssignmentId}
-              onChange={(e) => {
-                setSelectedAssignmentId(e.target.value); setSelectedRosterId(null); setSelectedAttemptId(null); setReviewOpen(false);
-                if (typeof setSubmissionFilterAssignment === "function") setSubmissionFilterAssignment(null);
-              }}
-              className="w-full bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs font-bold rounded-xl px-4 py-3 focus:outline-none focus:border-slate-400"
-            >
-              {classAssignments.length === 0 ? (
-                <option value="">No assignments for this course</option>
-              ) : (
-                classAssignments.map((assignment) => <option key={assignment.id} value={assignment.id}>{assignment.title}</option>)
-              )}
-            </select>
-          </label>
-        </div>
-
+        {/* Dynamic Analytics Indicators */}
         <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-4 gap-3">
           <div className="rounded-xl border border-slate-200 bg-[#FBF9F6] p-3">
             <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Students</p>
@@ -2890,110 +2858,111 @@ export default function TeacherSubmissions() {
       </div>
 
       {/* Main Student List Table Container */}
-      {selectedAssignment ? (
-        <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-          <div className="p-5 border-b border-slate-100 space-y-4">
-            <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-slate-400" />
-                  <h3 className="font-serif text-lg font-bold text-slate-900">Student Submission List</h3>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">{selectedAssignment.title}{selectedAssignment.classCode ? ` · ${selectedAssignment.classCode}` : ""}</p>
+      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
+        <div className="p-5 border-b border-slate-100 space-y-4">
+          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Layers className="w-4 h-4 text-slate-400" />
+                <h3 className="font-serif text-lg font-bold text-slate-900">Student Submission List</h3>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                {selectedAssignment.title}
+                {selectedAssignment.classCode ? ` · ${selectedAssignment.classCode}` : ""}
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search student..."
+                  className="w-full sm:w-56 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
+                />
               </div>
 
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Search student..."
-                    className="w-full sm:w-56 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
-                  />
-                </div>
-
-                <div className="relative">
-                  <Filter className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="w-full sm:w-44 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs font-bold rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
-                  >
-                    <option value="All">All Statuses</option>
-                    <option value="Submitted">Submitted</option>
-                    <option value="Graded">Graded</option>
-                    <option value="Reopened">Reopened</option>
-                    <option value="Late">Late</option>
-                    <option value="Missing">Missing</option>
-                    <option value="Not Started">Not Started</option>
-                  </select>
-                </div>
+              <div className="relative">
+                <Filter className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="w-full sm:w-44 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs font-bold rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
+                >
+                  <option value="All">All Statuses</option>
+                  <option value="Pending">Pending Review</option>
+                  <option value="Submitted">Submitted</option>
+                  <option value="Graded">Graded</option>
+                  <option value="Reopened">Reopened</option>
+                  <option value="Late">Late</option>
+                  <option value="Missing">Missing</option>
+                  <option value="Not Started">Not Started</option>
+                </select>
               </div>
             </div>
           </div>
+        </div>
 
-          {filteredRoster.length === 0 ? (
-            <div className="p-10 text-center">
-              <Users className="w-10 h-10 mx-auto text-slate-300 mb-3" />
-              <h3 className="font-serif text-lg font-bold text-slate-900">No students found</h3>
-              <p className="text-sm text-slate-400 mt-1">Try changing criteria.</p>
+        {filteredRoster.length === 0 ? (
+          <div className="p-10 text-center">
+            <Users className="w-10 h-10 mx-auto text-slate-300 mb-3" />
+            <h3 className="font-serif text-lg font-bold text-slate-900">No students found</h3>
+            <p className="text-sm text-slate-400 mt-1">
+              {statusFilter === "Pending"
+                ? "There are no submitted or late attempts waiting for review."
+                : "Try changing the search or status filter."}
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            <div className="hidden lg:grid grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-4 px-5 py-3 bg-[#FBF9F6] text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+              <span>Student</span>
+              <span>Status</span>
+              <span>Attempts</span>
+              <span>Score</span>
+              <span>Last Activity</span>
+              <span className="text-right">Action</span>
             </div>
-          ) : (
-            <div className="divide-y divide-slate-100">
-              <div className="hidden lg:grid grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-4 px-5 py-3 bg-[#FBF9F6] text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                <span>Student</span>
-                <span>Status</span>
-                <span>Attempts</span>
-                <span>Score</span>
-                <span>Last Activity</span>
-                <span className="text-right">Action</span>
-              </div>
 
-              {filteredRoster.map((item) => {
-                const status = normalizeStatus(item.status);
-                const latestSubmission = item.submission;
-                const attemptsCount = item.attempts?.length || 0;
+            {filteredRoster.map((item) => {
+              const status = normalizeStatus(item.status);
+              const latestSubmission = item.submission;
+              const attemptsCount = item.attempts?.length || 0;
 
-                return (
-                  <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-3 lg:gap-4 px-5 py-4 items-center hover:bg-[#FBF9F6]/60 transition-colors">
-                    <div className="min-w-0">
-                      <p className="text-sm font-bold text-slate-900 truncate">{item.studentName}</p>
-                      <p className="text-[11px] text-slate-400 font-mono truncate mt-0.5">{item.studentEmail}</p>
-                    </div>
-                    <div>
-                      <span className={`inline-flex text-[9px] font-mono font-bold uppercase border px-2 py-1 rounded ${getStatusStyles(status)}`}>
-                        {status}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-500">{attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}</div>
-                    <div className="text-xs font-bold text-slate-700">
-                      {latestSubmission?.score !== null && latestSubmission?.score !== undefined ? latestSubmission.score : "-"}
-                    </div>
-                    <div className="text-xs text-slate-500">{getReadableDate(latestSubmission)}</div>
-                    <div className="lg:text-right">
-                      <button
-                        type="button"
-                        onClick={() => openStudentReview(item)}
-                        className="inline-flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-slate-800 transition-all"
-                      >
-                        <Eye className="w-4 h-4" />
-                        Review
-                      </button>
-                    </div>
+              return (
+                <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-3 lg:gap-4 px-5 py-4 items-center hover:bg-[#FBF9F6]/60 transition-colors">
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-slate-900 truncate">{item.studentName}</p>
+                    <p className="text-[11px] text-slate-400 font-mono truncate mt-0.5">{item.studentEmail}</p>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center">
-          <FileText className="w-10 h-10 mx-auto text-slate-300 mb-3" />
-          <h3 className="font-serif text-lg font-bold text-slate-900">Select an assignment</h3>
-        </div>
-      )}
+                  <div>
+                    <span className={`inline-flex text-[9px] font-mono font-bold uppercase border px-2 py-1 rounded ${getStatusStyles(status)}`}>
+                      {status}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500">{attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}</div>
+                  <div className="text-xs font-bold text-slate-700">
+                    {latestSubmission?.score !== null && latestSubmission?.score !== undefined ? latestSubmission.score : "-"}
+                  </div>
+                  <div className="text-xs text-slate-500">{getReadableDate(latestSubmission)}</div>
+                  <div className="lg:text-right">
+                    <button
+                      type="button"
+                      onClick={() => openStudentReview(item)}
+                      className="inline-flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2 rounded-xl hover:bg-slate-800 transition-all"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Review
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Portal Container Overlay modal anchor */}
       <ReviewModalOverlay

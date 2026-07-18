@@ -358,7 +358,7 @@ export default function RubricSetupStep({
                     <Link2 className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
 
                     <p className="text-[11px] text-blue-800 leading-relaxed">
-                      Saved with the assignment and used to guide Claude.
+                      Saved with the assignment and used to guide the AI feedback and grading tools.
                     </p>
                   </div>
                 </div>
@@ -452,13 +452,10 @@ export default function RubricSetupStep({
 
                 <div>
                   <h4 className="font-serif text-sm font-bold text-slate-950">
-                    Reading uploaded rubric
+                    Reading your rubric...
                   </h4>
 
-                  <p className="text-xs text-blue-800 mt-1 leading-relaxed">
-                    Praxis is extracting the rubric structure. The preview will
-                    appear here when parsing finishes.
-                  </p>
+                  
                 </div>
               </div>
             )}

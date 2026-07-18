@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import TeacherAssignments from "./TeacherAssignments";
 import TeacherCommunication from "./TeacherCommunication";
 import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext.jsx";
-import TeacherSubmissions from "./submissions/TeacherSubmissions";
-import TeacherRubrics from "./TeacherRubrics";
+
 import { useNavigate } from "react-router-dom";
 import {
   getPraxisData,
@@ -12,34 +11,173 @@ import {
 } from "../../services/praxisMockStore";
 
 import {
+  Home,
   BookOpen,
   Layers,
-  Activity,
+  Archive,
+  Bell,
+  Bug,
+  Clock3,
+  FileCheck2,
+  RotateCcw,
   LogOut,
+  ChevronDown,
   ChevronRight,
   Plus,
   X,
   Sparkle,
   ShieldAlert,
   CheckSquare,
-  FileText,
   ShieldCheck,
-  ClipboardList,
   Settings,
-  Calendar,
   Edit3,
   UserPlus,
   Trash2,
   Copy,
   Eye,
   EyeOff,
+  ImagePlus,
+  KeyRound,
+  Megaphone,
   MessageSquare,
+  Send,
   Info,
 } from "lucide-react";
 
+function getTeacherSubmissionText(submission = {}) {
+  return String(
+    submission.submittedText ||
+      submission.submissionText ||
+      submission.finalText ||
+      submission.content ||
+      submission.draftText ||
+      ""
+  ).trim();
+}
+
+function hasTeacherSubmissionEvidence(submission = {}) {
+  return Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      getTeacherSubmissionText(submission)
+  );
+}
+
+function formatRelativeTime(value) {
+  if (!value) return "Recently";
+
+  const timestamp = new Date(value).getTime();
+
+  if (Number.isNaN(timestamp)) {
+    return "Recently";
+  }
+
+  const elapsed = Math.max(0, Date.now() - timestamp);
+  const minutes = Math.floor(elapsed / 60000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+
+  const hours = Math.floor(minutes / 60);
+
+  if (hours < 24) return `${hours}h ago`;
+
+  const days = Math.floor(hours / 24);
+
+  if (days < 7) return `${days}d ago`;
+
+  return new Date(value).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+
+const BUG_SCREENSHOT_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+const BUG_SCREENSHOT_MAX_BYTES = 3 * 1024 * 1024;
+
+function formatBugFileSize(bytes = 0) {
+  const size = Number(bytes || 0);
+
+  if (size < 1024) {
+    return `${size} B`;
+  }
+
+  if (size < 1024 * 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readBugScreenshot(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      resolve({
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        dataUrl: String(reader.result || ""),
+      });
+    };
+
+    reader.onerror = () => {
+      reject(new Error("The screenshot could not be read."));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
+function getTeacherIdentity(authUser, authProfile) {
+  const email = String(
+    authProfile?.email ||
+      authUser?.email ||
+      "instructor@aui.ma"
+  ).trim();
+
+  const name = String(
+    authProfile?.full_name ||
+      authProfile?.fullName ||
+      authProfile?.name ||
+      authUser?.user_metadata?.full_name ||
+      authUser?.user_metadata?.name ||
+      "Teacher Account"
+  ).trim();
+
+  const initials = name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+
+  return {
+    email,
+    name,
+    initials: initials || "TR",
+  };
+}
+
 export default function TeacherDashboard() {
   const navigate = useNavigate();
-  const { signOut } = useAuth();
+  const {
+    signOut,
+    user: authUser,
+    profile: authProfile,
+  } = useAuth();
+
+  const teacherIdentity = useMemo(
+    () => getTeacherIdentity(authUser, authProfile),
+    [authUser, authProfile]
+  );
 
   const {
     classes = [],
@@ -48,17 +186,68 @@ export default function TeacherDashboard() {
     setAssignments,
     submissions = [],
     setSubmissions,
+    rubrics = [],
+    setRubrics,
+    setView,
   } = useTeacherWorkspace();
+
+  const activeCourses = useMemo(
+    () => classes.filter((course) => course?.archived !== true),
+    [classes]
+  );
+
+  const activeCourseIds = useMemo(
+    () => new Set(activeCourses.map((course) => String(course.id))),
+    [activeCourses]
+  );
+
+  const activeCourseCodes = useMemo(
+    () =>
+      new Set(
+        activeCourses
+          .map((course) => String(course?.code || "").toUpperCase())
+          .filter(Boolean)
+      ),
+    [activeCourses]
+  );
+
+  const activeAssignments = useMemo(
+    () =>
+      assignments.filter((assignment) => {
+        const matchesId =
+          assignment?.classId !== null &&
+          assignment?.classId !== undefined &&
+          activeCourseIds.has(String(assignment.classId));
+
+        const classCode = String(assignment?.classCode || "").toUpperCase();
+        const matchesCode = Boolean(
+          classCode && activeCourseCodes.has(classCode)
+        );
+
+        return matchesId || matchesCode;
+      }),
+    [assignments, activeCourseIds, activeCourseCodes]
+  );
+
+  const activeAssignmentIds = useMemo(
+    () => new Set(activeAssignments.map((assignment) => String(assignment.id))),
+    [activeAssignments]
+  );
 
   const [activeTab, setActiveTab] = useState("overview");
 
+  const [assignmentWorkspaceRequest, setAssignmentWorkspaceRequest] = useState({
+    mode: "browse",
+    courseId: null,
+    assignmentId: null,
+    statusFilter: "All",
+    requestId: 0,
+  });
+
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [classNameInput, setClassNameInput] = useState("");
-  const [courseCodeInput, setCourseCodeInput] = useState("");
   const [descriptionInput, setDescriptionInput] = useState("");
   const [semesterInput, setSemesterInput] = useState("Fall 2026");
-  const [startDate, setStartDate] = useState("");
-  const [finishDate, setFinishDate] = useState("");
 
   const [createError, setCreateError] = useState("");
   const [createSuccess, setCreateSuccess] = useState("");
@@ -69,11 +258,8 @@ export default function TeacherDashboard() {
 
   const [manageCourseForm, setManageCourseForm] = useState({
     name: "",
-    code: "",
     description: "",
     semester: "Fall 2026",
-    start: "",
-    finish: "",
   });
 
   const [studentNameToAdd, setStudentNameToAdd] = useState("");
@@ -81,10 +267,39 @@ export default function TeacherDashboard() {
 
   const [managerError, setManagerError] = useState("");
   const [managerSuccess, setManagerSuccess] = useState("");
+  const managerSuccessTimerRef = useRef(null);
 
   const [enrollments, setEnrollments] = useState(() => {
     return getPraxisData().enrollments || [];
   });
+
+
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [isPasswordPanelOpen, setIsPasswordPanelOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordUiMessage, setPasswordUiMessage] = useState("");
+
+  const [isBugReportOpen, setIsBugReportOpen] = useState(false);
+  const [bugDescription, setBugDescription] = useState("");
+  const [bugScreenshot, setBugScreenshot] = useState(null);
+  const [bugReportError, setBugReportError] = useState("");
+  const [bugReportSuccess, setBugReportSuccess] = useState("");
+  const [isSubmittingBugReport, setIsSubmittingBugReport] = useState(false);
+  const [bugFileInputKey, setBugFileInputKey] = useState(0);
+
+  function showManagerSuccess(message) {
+    if (managerSuccessTimerRef.current) {
+      window.clearTimeout(managerSuccessTimerRef.current);
+    }
+
+    setManagerSuccess(message);
+
+    managerSuccessTimerRef.current = window.setTimeout(() => {
+      setManagerSuccess("");
+      managerSuccessTimerRef.current = null;
+    }, 2600);
+  }
 
   function refreshEnrollments() {
     const data = getPraxisData();
@@ -110,10 +325,189 @@ export default function TeacherDashboard() {
     return () => {
       window.removeEventListener("storage", handleStorageChange);
       window.removeEventListener("focus", handleFocus);
+
+      if (managerSuccessTimerRef.current) {
+        window.clearTimeout(managerSuccessTimerRef.current);
+      }
     };
   }, []);
 
+  function toggleAccountMenu() {
+    setIsAccountMenuOpen((current) => !current);
+  }
+
+  function openPasswordPanel() {
+    setIsAccountMenuOpen(false);
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordUiMessage("");
+    setIsPasswordPanelOpen(true);
+  }
+
+  function closePasswordPanel() {
+    setIsPasswordPanelOpen(false);
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordUiMessage("");
+  }
+
+  function handlePasswordUiSubmit(event) {
+    event.preventDefault();
+
+    if (newPassword.length < 8) {
+      setPasswordUiMessage("Use at least 8 characters.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPasswordUiMessage("The passwords do not match.");
+      return;
+    }
+
+    setPasswordUiMessage(
+      "Password update is ready for backend connection."
+    );
+  }
+
+  function resetBugReportForm() {
+    setBugDescription("");
+    setBugScreenshot(null);
+    setBugReportError("");
+    setBugReportSuccess("");
+    setBugFileInputKey((current) => current + 1);
+  }
+
+  function openBugReportForm() {
+    resetBugReportForm();
+    setIsBugReportOpen(true);
+  }
+
+  function closeBugReportForm() {
+    if (isSubmittingBugReport) return;
+
+    setIsBugReportOpen(false);
+    resetBugReportForm();
+  }
+
+  async function handleBugScreenshotChange(event) {
+    const file = event.target.files?.[0] || null;
+
+    setBugReportError("");
+    setBugReportSuccess("");
+
+    if (!file) {
+      setBugScreenshot(null);
+      return;
+    }
+
+    if (!BUG_SCREENSHOT_TYPES.has(file.type)) {
+      setBugScreenshot(null);
+      setBugFileInputKey((current) => current + 1);
+      setBugReportError(
+        "Upload a PNG, JPG, or WebP picture only."
+      );
+      return;
+    }
+
+    if (file.size > BUG_SCREENSHOT_MAX_BYTES) {
+      setBugScreenshot(null);
+      setBugFileInputKey((current) => current + 1);
+      setBugReportError("The picture must be 3 MB or smaller.");
+      return;
+    }
+
+    try {
+      const screenshot = await readBugScreenshot(file);
+      setBugScreenshot(screenshot);
+    } catch (error) {
+      setBugScreenshot(null);
+      setBugFileInputKey((current) => current + 1);
+      setBugReportError(
+        error?.message || "The picture could not be uploaded."
+      );
+    }
+  }
+
+  function removeBugScreenshot() {
+    setBugScreenshot(null);
+    setBugFileInputKey((current) => current + 1);
+    setBugReportError("");
+  }
+
+  async function handleBugReportSubmit(event) {
+    event.preventDefault();
+
+    setBugReportError("");
+    setBugReportSuccess("");
+
+    const description = bugDescription.trim();
+
+    if (description.length < 10) {
+      setBugReportError(
+        "Please describe the issue in at least 10 characters."
+      );
+      return;
+    }
+
+    setIsSubmittingBugReport(true);
+
+    try {
+      const data = getPraxisData();
+      const bugReports = Array.isArray(data.bugReports)
+        ? data.bugReports
+        : [];
+      const now = new Date().toISOString();
+
+      const report = {
+        id: `bug_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
+        status: "open",
+        priority: "normal",
+        reporterRole: "teacher",
+        reporterName: teacherIdentity.name,
+        reporterEmail: teacherIdentity.email,
+        description,
+        screenshot: bugScreenshot ? { ...bugScreenshot } : null,
+        route:
+          typeof window !== "undefined"
+            ? window.location.pathname
+            : "/teacher",
+        teacherTab: activeTab,
+        courseId: assignmentWorkspaceRequest?.courseId || null,
+        assignmentId:
+          assignmentWorkspaceRequest?.assignmentId || null,
+        workspaceMode: assignmentWorkspaceRequest?.mode || null,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      savePraxisData({
+        ...data,
+        bugReports: [report, ...bugReports],
+      });
+
+      setBugReportSuccess("Your issue was reported successfully.");
+      setBugDescription("");
+      setBugScreenshot(null);
+      setBugFileInputKey((current) => current + 1);
+
+      window.setTimeout(() => {
+        setIsBugReportOpen(false);
+        setBugReportSuccess("");
+      }, 1100);
+    } catch {
+      setBugReportError(
+        "The report could not be saved. Try a smaller picture or submit without a picture."
+      );
+    } finally {
+      setIsSubmittingBugReport(false);
+    }
+  }
+
   async function handleLogout() {
+    setIsAccountMenuOpen(false);
+
     try {
       await signOut();
       navigate("/login");
@@ -122,37 +516,52 @@ export default function TeacherDashboard() {
     }
   }
 
-  const isCodeValid = /^[A-Z]{2,5}[0-9]{3,5}$/.test(courseCodeInput);
+  function buildCourseCodePrefix(courseName) {
+    const words =
+      String(courseName || "")
+        .toUpperCase()
+        .match(/[A-Z]+/g) || [];
+
+    if (words.length >= 3) {
+      return words
+        .slice(0, 3)
+        .map((word) => word[0])
+        .join("");
+    }
+
+    const combinedLetters = words.join("");
+    return `${combinedLetters}CRS`.slice(0, 3);
+  }
+
+  function generateUniqueCourseCode(courseName) {
+    const prefix = buildCourseCodePrefix(courseName);
+    const usedCodes = new Set(
+      classes.map((course) => String(course?.code || "").toUpperCase())
+    );
+
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      const numericPart = String(Math.floor(1000 + Math.random() * 9000));
+      const candidate = `${prefix}${numericPart}`;
+
+      if (!usedCodes.has(candidate)) {
+        return candidate;
+      }
+    }
+
+    return `${prefix}${String(Date.now()).slice(-5)}`;
+  }
 
   function computeCourseStatus(cls) {
+    if (cls?.archived === true) {
+      return {
+        text: "Archived",
+        styles: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+      };
+    }
+
     if (cls?.isPublished === false) {
       return {
         text: "Unpublished",
-        styles: "bg-slate-500/10 text-slate-500 border-slate-500/20",
-      };
-    }
-
-    if (!cls?.start || !cls?.finish) {
-      return {
-        text: "Published",
-        styles: "bg-blue-500/10 text-blue-600 border-blue-600/20",
-      };
-    }
-
-    const now = new Date();
-    const sDate = new Date(cls.start);
-    const fDate = new Date(cls.finish);
-
-    if (now < sDate) {
-      return {
-        text: "Upcoming",
-        styles: "bg-indigo-500/10 text-indigo-600 border-indigo-500/20",
-      };
-    }
-
-    if (now > fDate) {
-      return {
-        text: "Concluded",
         styles: "bg-slate-500/10 text-slate-500 border-slate-500/20",
       };
     }
@@ -169,71 +578,237 @@ export default function TeacherDashboard() {
     setCreateError("");
     setCreateSuccess("");
 
-    const code = courseCodeInput.trim().toUpperCase();
+    const cleanName = classNameInput.trim();
 
-    if (!classNameInput.trim()) {
-      setCreateError("Please enter a valid Course Name.");
-      return;
-    }
-
-    if (!/^[A-Z]{2,5}[0-9]{3,5}$/.test(code)) {
-      setCreateError("Course code must look like CSC9999, ENG1301, or SSC2400.");
-      return;
-    }
-
-    if (startDate && finishDate && new Date(startDate) > new Date(finishDate)) {
-      setCreateError("The finish date cannot occur prior to the start date.");
-      return;
-    }
-
-    const codeExists = classes.some((c) => c.code?.toUpperCase() === code);
-
-    if (codeExists) {
-      setCreateError("This course code is already active in your system.");
+    if (!cleanName) {
+      setCreateError("Please enter a course name.");
       return;
     }
 
     try {
+      const code = generateUniqueCourseCode(cleanName);
+
       const newClass = {
         id: "cls_" + Date.now(),
-        name: classNameInput.trim(),
+        name: cleanName,
         code,
         description:
           descriptionInput.trim() || "No course description specified.",
         semester: semesterInput,
-        start: startDate || null,
-        finish: finishDate || null,
         isPublished: true,
+        archived: false,
+        archivedAt: null,
       };
 
-      if (setClasses) {
+      if (typeof setClasses === "function") {
         setClasses([...classes, newClass]);
       }
 
-      setCreateSuccess(`Course ${code} created successfully.`);
+      setCreateSuccess(`Course created. Access code: ${code}`);
 
       setClassNameInput("");
-      setCourseCodeInput("");
       setDescriptionInput("");
-      setStartDate("");
-      setFinishDate("");
 
-      setTimeout(() => {
+      window.setTimeout(() => {
         setIsCreateOpen(false);
         setCreateSuccess("");
       }, 2500);
     } catch (err) {
+      console.error("Failed to create course:", err);
       setCreateError("Failed to create course.");
     }
   };
 
-  const totalClassesCount = classes.length;
-  const totalAssignmentsCount = assignments.length;
+  const totalClassesCount = activeCourses.length;
+  const totalAssignmentsCount = activeAssignments.length;
 
-  const pendingReviewsCount = submissions.filter((s) => {
-    const status = String(s?.status || "").toLowerCase();
-    return status === "submitted" || status === "late" || status === "reopened";
-  }).length;
+  const pendingReviews = useMemo(
+    () =>
+      submissions.filter((submission) => {
+        if (submission?.isCurrent === false) return false;
+
+        if (!activeAssignmentIds.has(String(submission?.assignmentId))) {
+          return false;
+        }
+
+        const status = String(submission?.status || "")
+          .trim()
+          .toLowerCase();
+
+        return (
+          (status === "submitted" || status === "late") &&
+          hasTeacherSubmissionEvidence(submission)
+        );
+      }),
+    [submissions, activeAssignmentIds]
+  );
+
+  const pendingReviewsCount = pendingReviews.length;
+
+  const sidebarNotifications = useMemo(() => {
+    return pendingReviews
+      .map((submission) => {
+        const assignment =
+          activeAssignments.find(
+            (item) =>
+              String(item?.id) ===
+              String(submission?.assignmentId)
+          ) || null;
+
+        if (!assignment) return null;
+
+        const studentLabel =
+          submission?.studentName ||
+          submission?.studentEmail ||
+          "A student";
+
+        const assignmentLabel =
+          assignment?.title ||
+          submission?.assignmentTitle ||
+          "an assignment";
+
+        const status = String(submission?.status || "")
+          .trim()
+          .toLowerCase();
+
+        const isResubmission =
+          Boolean(submission?.resubmittedAt) ||
+          Number(submission?.attemptNumber || 1) > 1;
+
+        const createdAt =
+          submission?.resubmittedAt ||
+          submission?.submittedAt ||
+          submission?.updatedAt ||
+          submission?.createdAt ||
+          null;
+
+        return {
+          id: String(
+            submission?.id ||
+              `${submission?.assignmentId || "assignment"}::${
+                submission?.studentEmail || "student"
+              }`
+          ),
+          type: isResubmission
+            ? "resubmission"
+            : status === "late"
+            ? "late"
+            : "submission",
+          title: isResubmission
+            ? "Assignment resubmitted"
+            : status === "late"
+            ? "Late submission"
+            : "New submission",
+          studentLabel,
+          assignmentLabel,
+          message: `${studentLabel} · ${assignmentLabel}`,
+          createdAt,
+          assignmentId: assignment.id,
+          courseId: assignment.classId || null,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aTime = a.createdAt
+          ? new Date(a.createdAt).getTime()
+          : 0;
+        const bTime = b.createdAt
+          ? new Date(b.createdAt).getTime()
+          : 0;
+
+        return bTime - aTime;
+      });
+  }, [pendingReviews, activeAssignments]);
+
+  function createWorkspaceRequest(overrides = {}) {
+    return {
+      mode: "browse",
+      courseId: null,
+      assignmentId: null,
+      statusFilter: "All",
+      requestId: Date.now(),
+      ...overrides,
+    };
+  }
+
+  function openAssignmentList() {
+    if (typeof setView === "function") {
+      setView("list");
+    }
+
+    setAssignmentWorkspaceRequest(createWorkspaceRequest());
+    setActiveTab("assignments");
+  }
+
+  function openCreateAssignment() {
+    if (activeCourses.length === 0) {
+      setCreateError(
+        "Create an active course before creating an assignment."
+      );
+      setIsCreateOpen(true);
+      return;
+    }
+
+    if (typeof setView === "function") {
+      setView("create");
+    }
+
+    setAssignmentWorkspaceRequest(
+      createWorkspaceRequest({ mode: "create" })
+    );
+    setActiveTab("assignments");
+  }
+
+  function openAssignmentReview(assignment) {
+    if (!assignment) {
+      openAssignmentList();
+      return;
+    }
+
+    if (typeof setView === "function") {
+      setView("list");
+    }
+
+    setAssignmentWorkspaceRequest(
+      createWorkspaceRequest({
+        mode: "review",
+        courseId: assignment.classId || null,
+        assignmentId: assignment.id,
+        statusFilter: "Pending",
+      })
+    );
+
+    setActiveTab("assignments");
+  }
+
+  function openPendingReviews() {
+    const firstPendingSubmission = pendingReviews[0] || null;
+
+    if (!firstPendingSubmission) {
+      openAssignmentList();
+      return;
+    }
+
+    const pendingAssignment =
+      activeAssignments.find(
+        (assignment) =>
+          String(assignment?.id) ===
+          String(firstPendingSubmission?.assignmentId)
+      ) || null;
+
+    openAssignmentReview(pendingAssignment);
+  }
+
+  function openSidebarNotification(notification) {
+    const assignment =
+      activeAssignments.find(
+        (item) =>
+          String(item?.id) ===
+          String(notification?.assignmentId)
+      ) || null;
+
+    openAssignmentReview(assignment);
+  }
 
   function getClassEnrollments(cls) {
     return enrollments.filter((enrollment) => {
@@ -247,16 +822,18 @@ export default function TeacherDashboard() {
   }
 
   function openCourseManager(cls) {
+    if (managerSuccessTimerRef.current) {
+      window.clearTimeout(managerSuccessTimerRef.current);
+      managerSuccessTimerRef.current = null;
+    }
+
     setManagedClass(cls);
     setManagerMode("details");
 
     setManageCourseForm({
       name: cls.name || "",
-      code: cls.code || "",
       description: cls.description || "",
       semester: cls.semester || "Fall 2026",
-      start: cls.start || "",
-      finish: cls.finish || "",
     });
 
     setStudentNameToAdd("");
@@ -266,21 +843,81 @@ export default function TeacherDashboard() {
   }
 
   function closeCourseManager() {
+    if (managerSuccessTimerRef.current) {
+      window.clearTimeout(managerSuccessTimerRef.current);
+      managerSuccessTimerRef.current = null;
+    }
+
     setManagedClass(null);
     setManagerMode("details");
     setManagerError("");
     setManagerSuccess("");
   }
 
-  function copyCourseCode(code) {
-    navigator.clipboard
-      ?.writeText(code)
-      .then(() => {
-        setManagerSuccess(`Course code ${code} copied.`);
-      })
-      .catch(() => {
-        setManagerError("Could not copy the course code.");
-      });
+  function buildCourseInvite(course) {
+    const lines = [
+      `You are invited to join ${course.name} on Praxis.`,
+      "",
+      `Course: ${course.name}`,
+      `Term: ${course.semester || "Course"}`,
+      `Access code: ${course.code}`,
+      "",
+      "To join:",
+      "1. Open Praxis and sign in to your student account.",
+      '2. Select "Join Course".',
+      `3. Enter the access code ${course.code}.`,
+    ];
+
+    if (course.isPublished === false) {
+      lines.push(
+        "",
+        "Note: The course must be published before students can join."
+      );
+    }
+
+    return lines.join("\n");
+  }
+
+  async function writeClipboardText(value) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = value;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+
+    if (!copied) {
+      throw new Error("Clipboard copy failed.");
+    }
+  }
+
+  async function copyCourseInvite(course) {
+    if (!course) return;
+
+    setManagerError("");
+    setManagerSuccess("");
+
+    if (course.archived === true) {
+      setManagerError("Restore the course before copying a student invite.");
+      return;
+    }
+
+    try {
+      await writeClipboardText(buildCourseInvite(course));
+      showManagerSuccess("Course invite copied. It is ready to paste into Canvas.");
+    } catch (error) {
+      console.error("Could not copy the course invite:", error);
+      setManagerError("Could not copy the invite. Please try again.");
+    }
   }
 
   function toggleManagedCoursePublication() {
@@ -289,7 +926,10 @@ export default function TeacherDashboard() {
     setManagerError("");
     setManagerSuccess("");
 
-    
+    if (managedClass.archived === true) {
+      setManagerError("Restore the course before changing publication status.");
+      return;
+    }
 
     const updatedClass = {
       ...managedClass,
@@ -313,10 +953,52 @@ export default function TeacherDashboard() {
 
     setManagedClass(updatedClass);
 
-    setManagerSuccess(
+    showManagerSuccess(
       updatedClass.isPublished === false
-        ? "Course unpublished. Students will no longer see or join this course, but existing course data is kept."
-        : "Course published successfully. Students can see and join this course again."
+        ? "Course unpublished."
+        : "Course published."
+    );
+  }
+
+  function toggleManagedCourseArchive() {
+    if (!managedClass) return;
+
+    setManagerError("");
+    setManagerSuccess("");
+
+    const willArchive = managedClass.archived !== true;
+    const now = new Date().toISOString();
+
+    const updatedClass = {
+      ...managedClass,
+      archived: willArchive,
+      archivedAt: willArchive ? now : null,
+      // Archived courses are removed from everyday teacher/student workflows.
+      // Restored courses remain unpublished until the teacher publishes them.
+      isPublished: willArchive ? false : managedClass.isPublished,
+    };
+
+    const updatedClasses = classes.map((cls) =>
+      String(cls.id) === String(managedClass.id) ? updatedClass : cls
+    );
+
+    const data = getPraxisData();
+
+    savePraxisData({
+      ...data,
+      classes: updatedClasses,
+    });
+
+    if (typeof setClasses === "function") {
+      setClasses(updatedClasses);
+    }
+
+    setManagedClass(updatedClass);
+
+    showManagerSuccess(
+      willArchive
+        ? "Course archived. It is now hidden from assignment and message selectors."
+        : "Course restored. Publish it when students should access it again."
     );
   }
 
@@ -324,12 +1006,13 @@ export default function TeacherDashboard() {
     if (!managedClass) return;
 
     const confirmed = window.confirm(
-      `Are you sure you want to remove ${managedClass.code}? This will also remove its enrollments, assignments, and related submissions from the mock workspace.`
+      `Remove ${managedClass.code} from the active workspace? Course, assignment, rubric, and de-identified submission evidence will be archived.`
     );
 
     if (!confirmed) return;
 
     const data = getPraxisData();
+    const archivedAt = new Date().toISOString();
 
     const updatedClasses = classes.filter(
       (cls) => String(cls.id) !== String(managedClass.id)
@@ -371,17 +1054,65 @@ export default function TeacherDashboard() {
       return !sameClassId && !sameClassCode;
     });
 
-    const updatedSubmissions = (data.submissions || []).filter((submission) => {
-      const belongsToDeletedAssignment = relatedAssignmentIds.includes(
-        String(submission.assignmentId)
+    const removedSubmissions =
+      (data.submissions || []).filter((submission) => {
+        const belongsToDeletedAssignment =
+          relatedAssignmentIds.includes(
+            String(submission.assignmentId)
+          );
+
+        const sameClassCode =
+          submission.classCode?.toUpperCase() ===
+          managedClass.code?.toUpperCase();
+
+        return belongsToDeletedAssignment || sameClassCode;
+      });
+
+    const updatedSubmissions =
+      (data.submissions || []).filter((submission) =>
+        !removedSubmissions.some(
+          (removed) =>
+            String(removed.id) ===
+            String(submission.id)
+        )
       );
 
-      const sameClassCode =
-        submission.classCode?.toUpperCase() ===
-        managedClass.code?.toUpperCase();
+    const removedRubrics =
+      (data.rubrics || []).filter((rubric) =>
+        relatedAssignmentIds.includes(
+          String(rubric.assignmentId)
+        )
+      );
 
-      return !belongsToDeletedAssignment && !sameClassCode;
-    });
+    const updatedRubrics =
+      (data.rubrics || []).filter((rubric) =>
+        !relatedAssignmentIds.includes(
+          String(rubric.assignmentId)
+        )
+      );
+
+    const courseArchive = [
+      ...(data.courseArchive || []),
+      {
+        ...managedClass,
+        archivedAt,
+        archiveReason: "teacher_deleted",
+        assignments: (data.assignments || []).filter((assignment) =>
+          relatedAssignmentIds.includes(
+            String(assignment.id)
+          )
+        ),
+        rubrics: removedRubrics,
+        submissions: removedSubmissions.map((submission) => ({
+          ...submission,
+          studentName: "Archived Student",
+          studentEmail: null,
+          userEmail: null,
+          archivedAt,
+          archiveReason: "course_deleted",
+        })),
+      },
+    ];
 
     savePraxisData({
       ...data,
@@ -389,6 +1120,8 @@ export default function TeacherDashboard() {
       enrollments: updatedEnrollments,
       assignments: updatedAssignments,
       submissions: updatedSubmissions,
+      rubrics: updatedRubrics,
+      courseArchive,
     });
 
     if (typeof setClasses === "function") {
@@ -401,6 +1134,10 @@ export default function TeacherDashboard() {
 
     if (typeof setSubmissions === "function") {
       setSubmissions(updatedSubmissions);
+    }
+
+    if (typeof setRubrics === "function") {
+      setRubrics(updatedRubrics);
     }
 
     setEnrollments(updatedEnrollments);
@@ -416,48 +1153,19 @@ export default function TeacherDashboard() {
     setManagerSuccess("");
 
     const cleanName = manageCourseForm.name.trim();
-    const cleanCode = manageCourseForm.code.trim().toUpperCase();
 
     if (!cleanName) {
       setManagerError("Course name is required.");
       return;
     }
 
-    if (!/^[A-Z]{2,5}[0-9]{3,5}$/.test(cleanCode)) {
-      setManagerError("Course code must look like CSC9999, ENG1301, or SSC2400.");
-      return;
-    }
-
-    if (
-      manageCourseForm.start &&
-      manageCourseForm.finish &&
-      new Date(manageCourseForm.start) > new Date(manageCourseForm.finish)
-    ) {
-      setManagerError("The finish date cannot occur before the start date.");
-      return;
-    }
-
-    const duplicateCode = classes.some(
-      (cls) =>
-        String(cls.id) !== String(managedClass.id) &&
-        cls.code?.toUpperCase() === cleanCode
-    );
-
-    if (duplicateCode) {
-      setManagerError("Another course already uses this course code.");
-      return;
-    }
-
     const updatedClass = {
       ...managedClass,
       name: cleanName,
-      code: cleanCode,
       description:
         manageCourseForm.description.trim() ||
         "No course description specified.",
       semester: manageCourseForm.semester,
-      start: manageCourseForm.start || null,
-      finish: manageCourseForm.finish || null,
       isPublished: managedClass.isPublished !== false,
     };
 
@@ -465,7 +1173,10 @@ export default function TeacherDashboard() {
       String(cls.id) === String(managedClass.id) ? updatedClass : cls
     );
 
-    setClasses(updatedClasses);
+    if (typeof setClasses === "function") {
+      setClasses(updatedClasses);
+    }
+
     setManagedClass(updatedClass);
 
     const data = getPraxisData();
@@ -543,7 +1254,7 @@ export default function TeacherDashboard() {
     }
 
     setEnrollments(updatedEnrollments);
-    setManagerSuccess("Course updated successfully.");
+    showManagerSuccess("Course updated.");
   }
 
   function handleAddStudentToManagedCourse(e) {
@@ -559,6 +1270,11 @@ export default function TeacherDashboard() {
 
     if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       setManagerError("Please enter a valid student email.");
+      return;
+    }
+
+    if (managedClass.archived === true) {
+      setManagerError("Restore the course before adding students.");
       return;
     }
 
@@ -599,7 +1315,7 @@ export default function TeacherDashboard() {
     setEnrollments(updatedEnrollments);
     setStudentNameToAdd("");
     setStudentEmailToAdd("");
-    setManagerSuccess(`${cleanEmail} added to ${managedClass.code}.`);
+    showManagerSuccess(`${cleanEmail} added to ${managedClass.code}.`);
   }
 
   function removeStudentFromManagedCourse(enrollmentId) {
@@ -623,8 +1339,14 @@ export default function TeacherDashboard() {
     });
 
     setEnrollments(updatedEnrollments);
-    setManagerSuccess("Student removed from the course.");
+    showManagerSuccess("Student removed from the course.");
   }
+
+  const pageTitles = {
+    overview: "Home",
+    assignments: "Assignments",
+    communication: "Messages",
+  };
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#F8FAFC] flex font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900">
@@ -689,7 +1411,7 @@ export default function TeacherDashboard() {
             <div className="space-y-1.5">
               <div className="flex justify-between items-center px-3 mb-2">
                 <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-500 block">
-                  Course Management
+                  Create Course
                 </span>
 
                 <button
@@ -703,8 +1425,8 @@ export default function TeacherDashboard() {
 
               <SidebarButton
                 active={activeTab === "overview"}
-                icon={ClipboardList}
-                label="Overview"
+                icon={Home}
+                label="Home"
                 onClick={() => setActiveTab("overview")}
               />
 
@@ -713,24 +1435,12 @@ export default function TeacherDashboard() {
                 icon={BookOpen}
                 label="Assignments"
                 badge={totalAssignmentsCount}
-                onClick={() => setActiveTab("assignments")}
+                onClick={openAssignmentList}
               />
 
-              <SidebarButton
-                active={activeTab === "submissions"}
-                icon={FileText}
-                label="Submissions"
-                badge={submissions.length}
-                badgeTone="blue"
-                onClick={() => setActiveTab("submissions")}
-              />
+              
 
-              <SidebarButton
-                active={activeTab === "rubrics"}
-                icon={Settings}
-                label="Rubrics"
-                onClick={() => setActiveTab("rubrics")}
-              />
+              
             </div>
 
             <div className="space-y-1.5">
@@ -741,63 +1451,255 @@ export default function TeacherDashboard() {
               <SidebarButton
                 active={activeTab === "communication"}
                 icon={MessageSquare}
-                label="Communication"
+                label="Messages"
                 onClick={() => setActiveTab("communication")}
               />
             </div>
 
-            <div className="pt-5 border-t border-slate-800/80 space-y-2">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-500 block px-3">
-                Review Status
-              </span>
-
-              <div className="bg-slate-950/45 border border-slate-800/60 rounded-2xl p-4 space-y-3 shadow-inner">
-                <div className="flex items-center justify-between text-[11px]">
-                  <span className="text-slate-400 font-medium flex items-center gap-1.5 font-mono">
-                    <Activity className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
-                    Platform Status
+            <div className="pt-5 border-t border-slate-800/80 space-y-2.5">
+              <div className="flex items-center justify-between px-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] text-slate-500">
+                    Notifications
                   </span>
 
-                  <span className="font-mono font-bold text-blue-600 text-[10px]">
-                    Active
-                  </span>
+                  {sidebarNotifications.length > 0 && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.9)]" />
+                  )}
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 pt-1.5 border-t border-slate-800/50">
-                  <span>Pending Reviews:</span>
-                  <span className="font-bold text-white">
-                    {pendingReviewsCount}
-                  </span>
+                <span
+                  className={`inline-flex min-w-6 items-center justify-center rounded-full border px-1.5 py-0.5 font-mono text-[9px] font-black ${
+                    sidebarNotifications.length > 0
+                      ? "border-blue-500/30 bg-blue-500/15 text-blue-300"
+                      : "border-slate-800 bg-slate-900 text-slate-600"
+                  }`}
+                >
+                  {sidebarNotifications.length > 9
+                    ? "9+"
+                    : sidebarNotifications.length}
+                </span>
+              </div>
+
+              <div className="overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/90 to-slate-950/70 shadow-[0_14px_34px_-24px_rgba(37,99,235,0.8)]">
+                <div className="flex items-center justify-between border-b border-slate-800/80 px-3.5 py-3">
+                  <div className="flex min-w-0 items-center gap-2.5">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10 text-blue-300">
+                      <Bell className="h-4 w-4" />
+                    </div>
+
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-slate-200">
+                        Review inbox
+                      </p>
+                      <p className="truncate text-[8px] text-slate-500">
+                        Current-course activity
+                      </p>
+                    </div>
+                  </div>
+
+                  {sidebarNotifications.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={openPendingReviews}
+                      className="rounded-lg border border-slate-700/80 bg-slate-900 px-2 py-1 font-mono text-[8px] font-bold uppercase tracking-wide text-blue-300 transition-colors hover:border-blue-500/40 hover:bg-blue-500/10"
+                    >
+                      Open
+                    </button>
+                  )}
                 </div>
+
+                {sidebarNotifications.length === 0 ? (
+                  <div className="flex flex-col items-center px-4 py-5 text-center">
+                    <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/80 text-slate-500">
+                      <Bell className="h-4 w-4" />
+                      <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-slate-700" />
+                    </div>
+
+                    <p className="mt-3 text-[10px] font-bold text-slate-300">
+                      You are all caught up
+                    </p>
+
+                    <p className="mt-1 max-w-[170px] text-[9px] leading-relaxed text-slate-600">
+                      New submissions and resubmissions from current courses will appear here.
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1.5 p-2">
+                      {sidebarNotifications.slice(0, 3).map((notification) => {
+                        const isResubmission =
+                          notification.type === "resubmission";
+                        const isLate = notification.type === "late";
+                        const NotificationIcon = isResubmission
+                          ? RotateCcw
+                          : isLate
+                          ? Clock3
+                          : FileCheck2;
+
+                        const tone = isResubmission
+                          ? {
+                              icon: "border-violet-500/25 bg-violet-500/10 text-violet-300",
+                              line: "bg-violet-400",
+                              chip: "border-violet-500/20 bg-violet-500/10 text-violet-300",
+                            }
+                          : isLate
+                          ? {
+                              icon: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+                              line: "bg-amber-400",
+                              chip: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+                            }
+                          : {
+                              icon: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+                              line: "bg-blue-400",
+                              chip: "border-blue-500/20 bg-blue-500/10 text-blue-300",
+                            };
+
+                        return (
+                          <button
+                            key={notification.id}
+                            type="button"
+                            onClick={() =>
+                              openSidebarNotification(notification)
+                            }
+                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-slate-700 hover:bg-slate-900 hover:shadow-lg"
+                          >
+                            <span
+                              className={`absolute bottom-2 left-0 top-2 w-0.5 rounded-r-full ${tone.line}`}
+                            />
+
+                            <div
+                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${tone.icon}`}
+                            >
+                              <NotificationIcon className="h-3.5 w-3.5" />
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-start gap-1.5">
+                                <p className="min-w-0 flex-1 truncate text-[9.5px] font-bold text-slate-200 group-hover:text-white">
+                                  {notification.title}
+                                </p>
+
+                                <span
+                                  className={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[7px] font-bold uppercase tracking-wide ${tone.chip}`}
+                                >
+                                  {formatRelativeTime(notification.createdAt)}
+                                </span>
+                              </div>
+
+                              <p className="mt-1 truncate text-[9px] font-semibold text-slate-400">
+                                {notification.studentLabel}
+                              </p>
+
+                              <div className="mt-0.5 flex items-center gap-1">
+                                <p className="min-w-0 flex-1 truncate text-[8px] text-slate-600">
+                                  {notification.assignmentLabel}
+                                </p>
+                                <ChevronRight className="h-3 w-3 shrink-0 text-slate-700 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-400" />
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={openPendingReviews}
+                      className="flex w-full items-center justify-between border-t border-slate-800/80 px-3.5 py-2.5 text-left transition-colors hover:bg-blue-500/5"
+                    >
+                      <span className="font-mono text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                        Review queue
+                      </span>
+
+                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-blue-300">
+                        {sidebarNotifications.length} pending
+                        <ChevronRight className="h-3 w-3" />
+                      </span>
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
         </div>
 
-        <div className="p-5 border-t border-slate-800/80 bg-slate-950/20 space-y-3">
-          <div className="flex items-center gap-3 px-1 py-0.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center text-xs font-mono font-black text-white shadow-md shadow-blue-600/10">
-              TR
-            </div>
+        <div className="relative border-t border-slate-800/80 bg-slate-950/20 p-4">
+          {isAccountMenuOpen && (
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-slate-700/90 bg-slate-950 shadow-[0_24px_55px_rgba(0,0,0,0.45)]">
+              <div className="border-b border-slate-800 px-3.5 py-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
+                    {teacherIdentity.initials}
+                  </div>
 
-            <div className="min-w-0 flex-1">
-              <h4 className="text-xs font-bold text-white truncate">
-                Teacher Account
-              </h4>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-white">
+                      {teacherIdentity.name}
+                    </p>
 
-              <p className="text-[9px] font-mono text-slate-400 truncate">
-                instructor@aui.ma
-              </p>
+                    <p className="mt-0.5 truncate text-[9px] font-mono text-slate-400">
+                      {teacherIdentity.email}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1 p-2">
+                <button
+                  type="button"
+                  onClick={openPasswordPanel}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-blue-500/10 hover:text-blue-200"
+                >
+                  <KeyRound className="h-4 w-4 text-blue-300" />
+                  <span className="flex-1">Change Password</span>
+                  <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[8px] font-mono text-slate-500">
+                    UI ready
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-rose-500/10 hover:text-rose-300"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Log Out
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <button
             type="button"
-            onClick={handleLogout}
-            className="w-full flex items-center gap-2 px-2.5 py-2 text-xs font-bold text-slate-400 hover:text-blue-700 hover:bg-blue-500/10 rounded-xl transition-all text-left cursor-pointer"
+            onClick={toggleAccountMenu}
+            className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
+              isAccountMenuOpen
+                ? "border-blue-500/40 bg-blue-500/10"
+                : "border-transparent hover:border-slate-800 hover:bg-slate-900/70"
+            }`}
+            aria-expanded={isAccountMenuOpen}
+            aria-label="Open teacher account menu"
           >
-            <LogOut className="w-4 h-4 stroke-[1.8]" />
-            Log Out
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
+              {teacherIdentity.initials}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <h4 className="truncate text-xs font-bold text-white">
+                {teacherIdentity.name}
+              </h4>
+
+              <p className="truncate text-[9px] font-mono text-slate-400">
+                {teacherIdentity.email}
+              </p>
+            </div>
+
+            <ChevronDown
+              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
+                isAccountMenuOpen ? "rotate-180 text-blue-300" : ""
+              }`}
+            />
           </button>
         </div>
       </aside>
@@ -808,7 +1710,7 @@ export default function TeacherDashboard() {
             <span>Workspace</span>
             <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
             <span className="text-slate-950 font-bold uppercase tracking-wider font-mono">
-              {activeTab} Panel
+              {pageTitles[activeTab] || "Teacher Workspace"}
             </span>
           </div>
 
@@ -818,7 +1720,7 @@ export default function TeacherDashboard() {
             className="bg-slate-950 hover:bg-slate-800 text-white font-sans text-xs font-bold px-4 py-2 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
           >
             <Plus className="w-4 h-4" />
-            Add Course
+            Create Course
           </button>
         </header>
 
@@ -835,19 +1737,16 @@ export default function TeacherDashboard() {
                 expandedClassId={expandedClassId}
                 setExpandedClassId={setExpandedClassId}
                 openCourseManager={openCourseManager}
-                setIsCreateOpen={setIsCreateOpen}
+                onCreateAssignment={openCreateAssignment}
+                onOpenReviews={openPendingReviews}
               />
             )}
 
             {activeTab === "assignments" && (
               <TeacherAssignments
-                onOpenSubmissions={() => setActiveTab("submissions")}
+                workspaceRequest={assignmentWorkspaceRequest}
               />
             )}
-
-            {activeTab === "submissions" && <TeacherSubmissions />}
-
-            {activeTab === "rubrics" && <TeacherRubrics />}
 
             {activeTab === "communication" && <TeacherCommunication />}
           </div>
@@ -858,19 +1757,12 @@ export default function TeacherDashboard() {
         <CreateCourseModal
           classNameInput={classNameInput}
           setClassNameInput={setClassNameInput}
-          courseCodeInput={courseCodeInput}
-          setCourseCodeInput={setCourseCodeInput}
           descriptionInput={descriptionInput}
           setDescriptionInput={setDescriptionInput}
           semesterInput={semesterInput}
           setSemesterInput={setSemesterInput}
-          startDate={startDate}
-          setStartDate={setStartDate}
-          finishDate={finishDate}
-          setFinishDate={setFinishDate}
           createError={createError}
           createSuccess={createSuccess}
-          isCodeValid={isCodeValid}
           handleCreateCourse={handleCreateCourse}
           onClose={() => setIsCreateOpen(false)}
         />
@@ -890,14 +1782,57 @@ export default function TeacherDashboard() {
           managerError={managerError}
           managerSuccess={managerSuccess}
           closeCourseManager={closeCourseManager}
-          copyCourseCode={copyCourseCode}
+          copyCourseInvite={copyCourseInvite}
           toggleManagedCoursePublication={toggleManagedCoursePublication}
+          toggleManagedCourseArchive={toggleManagedCourseArchive}
           removeManagedCourse={removeManagedCourse}
           handleUpdateManagedCourse={handleUpdateManagedCourse}
           handleAddStudentToManagedCourse={handleAddStudentToManagedCourse}
           removeStudentFromManagedCourse={removeStudentFromManagedCourse}
           computeCourseStatus={computeCourseStatus}
           getClassEnrollments={getClassEnrollments}
+        />
+      )}
+
+
+      <button
+        type="button"
+        onClick={openBugReportForm}
+        className="fixed bottom-6 right-4 z-40 inline-flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-[0_12px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 hover:shadow-[0_16px_40px_rgba(37,99,235,0.18)] focus:outline-none focus:ring-4 focus:ring-blue-500/15 sm:right-5 md:right-6 lg:right-8"
+        aria-label="Report a bug"
+      >
+        <Megaphone className="h-4 w-4" />
+        Report a Bug
+      </button>
+
+      {isPasswordPanelOpen && (
+        <TeacherPasswordModal
+          newPassword={newPassword}
+          setNewPassword={setNewPassword}
+          confirmPassword={confirmPassword}
+          setConfirmPassword={setConfirmPassword}
+          passwordUiMessage={passwordUiMessage}
+          setPasswordUiMessage={setPasswordUiMessage}
+          onSubmit={handlePasswordUiSubmit}
+          onClose={closePasswordPanel}
+        />
+      )}
+
+      {isBugReportOpen && (
+        <TeacherBugReportModal
+          bugDescription={bugDescription}
+          setBugDescription={setBugDescription}
+          bugScreenshot={bugScreenshot}
+          bugReportError={bugReportError}
+          setBugReportError={setBugReportError}
+          bugReportSuccess={bugReportSuccess}
+          setBugReportSuccess={setBugReportSuccess}
+          isSubmitting={isSubmittingBugReport}
+          bugFileInputKey={bugFileInputKey}
+          onScreenshotChange={handleBugScreenshotChange}
+          onRemoveScreenshot={removeBugScreenshot}
+          onSubmit={handleBugReportSubmit}
+          onClose={closeBugReportForm}
         />
       )}
     </div>
@@ -914,17 +1849,117 @@ function OverviewPanel({
   expandedClassId,
   setExpandedClassId,
   openCourseManager,
-  setIsCreateOpen,
+  onCreateAssignment,
+  onOpenReviews,
 }) {
+  const [courseFilter, setCourseFilter] = useState("current");
+
+  const currentCourses = useMemo(
+    () => classes.filter((course) => course?.archived !== true),
+    [classes]
+  );
+
+  const pastCourses = useMemo(
+    () => classes.filter((course) => course?.archived === true),
+    [classes]
+  );
+
+  const displayedCourses =
+    courseFilter === "past" ? pastCourses : currentCourses;
+
   return (
     <div className="space-y-8">
+      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-fade-in-up">
+        <button
+          type="button"
+          onClick={onCreateAssignment}
+          className="group text-left rounded-2xl border border-slate-950 bg-slate-950 p-5 text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-lg"
+        >
+          <div className="flex items-start justify-between gap-5">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10">
+                <Plus className="h-5 w-5" />
+              </div>
+
+              <div>
+                <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-blue-300">
+                  Primary Action
+                </p>
+
+                <h2 className="mt-1 text-lg font-bold">
+                  Create an assignment
+                </h2>
+
+                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-300">
+                  Build, configure, publish, and manage assignments for your
+                  courses.
+                </p>
+              </div>
+            </div>
+
+            <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-500 transition-transform group-hover:translate-x-1 group-hover:text-white" />
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenReviews}
+          disabled={pendingReviewsCount === 0}
+          className={`group text-left rounded-2xl border p-5 shadow-sm transition-all ${
+            pendingReviewsCount > 0
+              ? "border-blue-200 bg-white hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg"
+              : "cursor-not-allowed border-slate-200 bg-slate-50 opacity-75"
+          }`}
+        >
+          <div className="flex items-start justify-between gap-5">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+                <CheckSquare className="h-5 w-5" />
+              </div>
+
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-blue-700">
+                    Review Work
+                  </p>
+
+                  {pendingReviewsCount > 0 && (
+                    <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[9px] font-bold text-white">
+                      {pendingReviewsCount} pending
+                    </span>
+                  )}
+                </div>
+
+                <h2 className="mt-1 text-lg font-bold text-slate-950">
+                  Grade student work
+                </h2>
+
+                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
+                  {pendingReviewsCount > 0
+                    ? "Open the next assignment with pending submissions and continue grading."
+                    : "There are no student submissions waiting for review."}
+                </p>
+              </div>
+            </div>
+
+            <ChevronRight
+              className={`mt-1 h-5 w-5 shrink-0 transition-transform ${
+                pendingReviewsCount > 0
+                  ? "text-slate-300 group-hover:translate-x-1 group-hover:text-blue-600"
+                  : "text-slate-300"
+              }`}
+            />
+          </div>
+        </button>
+      </section>
+
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
         <MetricCard
           cardType="classes"
           icon={Layers}
           label="Active Courses"
           value={`${totalClassesCount} Courses`}
-          description="Course access codes routing student portals."
+          description="Current courses shown in everyday teacher workflows."
           tone="blue"
         />
 
@@ -948,35 +1983,77 @@ function OverviewPanel({
       </div>
 
       <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-4 animate-fade-in-up [animation-delay:150ms]">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h3 className="font-serif text-lg font-bold text-slate-900">
               Courses & Access Codes
             </h3>
 
             <p className="text-xs text-slate-400 font-medium">
-              Manage course details, access codes, publication status, and
-              student access.
+              Current courses are shown by default. Open Past to manage archived courses.
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setIsCreateOpen(true)}
-            className="inline-flex items-center justify-center gap-2 bg-slate-900 text-white text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-slate-800 transition-all self-start lg:self-center"
+          <div
+            className="inline-flex w-fit items-center rounded-xl border border-slate-200 bg-slate-50 p-1"
+            role="group"
+            aria-label="Filter courses"
           >
-            <Plus className="w-4 h-4" />
-            Add Course
-          </button>
+            <button
+              type="button"
+              onClick={() => setCourseFilter("current")}
+              aria-pressed={courseFilter === "current"}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+                courseFilter === "current"
+                  ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              Current
+              <span
+                className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] ${
+                  courseFilter === "current"
+                    ? "bg-blue-50 text-blue-700"
+                    : "bg-slate-200/70 text-slate-500"
+                }`}
+              >
+                {currentCourses.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCourseFilter("past")}
+              aria-pressed={courseFilter === "past"}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+                courseFilter === "past"
+                  ? "bg-white text-amber-700 shadow-sm ring-1 ring-slate-200"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              Past
+              <span
+                className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] ${
+                  courseFilter === "past"
+                    ? "bg-amber-50 text-amber-700"
+                    : "bg-slate-200/70 text-slate-500"
+                }`}
+              >
+                {pastCourses.length}
+              </span>
+            </button>
+          </div>
         </div>
 
-        {classes.length === 0 ? (
+        {displayedCourses.length === 0 ? (
           <div className="border border-dashed border-slate-200 rounded-xl p-10 text-center text-xs text-slate-400 font-mono">
-            No courses yet. Click "Add Course" to create your first course.
+            {courseFilter === "current"
+              ? 'No current courses. Use "Create Course" in the top-right corner to add one.'
+              : "No past courses yet. Archived courses will appear here."}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {classes.map((cls) => {
+            {displayedCourses.map((cls) => {
               const status = computeCourseStatus(cls);
               const classEnrollments = getClassEnrollments(cls);
               const isRosterOpen = expandedClassId === cls.id;
@@ -984,7 +2061,11 @@ function OverviewPanel({
               return (
                 <div
                   key={cls.id}
-                  className="p-5 bg-[#F8FAFC] border border-slate-200/80 rounded-2xl flex flex-col justify-between space-y-4 transition-all hover:bg-white hover:shadow-md group"
+                  className={`p-5 border rounded-2xl flex flex-col justify-between space-y-4 transition-all hover:bg-white hover:shadow-md group ${
+                    cls.archived === true
+                      ? "bg-amber-50/40 border-amber-200/80"
+                      : "bg-[#F8FAFC] border-slate-200/80"
+                  }`}
                 >
                   <div className="space-y-3">
                     <div className="flex items-start justify-between gap-2">
@@ -1015,29 +2096,6 @@ function OverviewPanel({
                       {cls.description}
                     </p>
 
-                    {(cls.start || cls.finish) && (
-                      <div className="grid grid-cols-2 gap-1 bg-white border border-slate-200/40 p-2 rounded-xl text-[10px] font-mono text-slate-500">
-                        <div>
-                          <span className="text-slate-400 text-[9px] block uppercase font-bold">
-                            Starts
-                          </span>
-
-                          <span className="font-semibold text-slate-700 truncate block">
-                            {cls.start || "Unset"}
-                          </span>
-                        </div>
-
-                        <div className="border-l border-slate-200/60 pl-2">
-                          <span className="text-slate-400 text-[9px] block uppercase font-bold">
-                            Ends
-                          </span>
-
-                          <span className="font-semibold text-slate-700 truncate block">
-                            {cls.finish || "Unset"}
-                          </span>
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   <div className="space-y-3 pt-2 border-t border-slate-200/50">
@@ -1107,22 +2165,17 @@ function OverviewPanel({
 function CreateCourseModal({
   classNameInput,
   setClassNameInput,
-  courseCodeInput,
-  setCourseCodeInput,
   descriptionInput,
   setDescriptionInput,
   semesterInput,
   setSemesterInput,
-  startDate,
-  setStartDate,
-  finishDate,
-  setFinishDate,
   createError,
   createSuccess,
-  isCodeValid,
   handleCreateCourse,
   onClose,
 }) {
+  const canCreateCourse = Boolean(classNameInput.trim());
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
       <div
@@ -1130,8 +2183,8 @@ function CreateCourseModal({
         className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs transition-opacity"
       />
 
-      <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-xl p-7 relative z-10 shadow-2xl flex flex-col gap-5 font-sans animate-fade-in-up my-8">
-        <div className="flex justify-between items-start">
+      <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-7 relative z-10 shadow-2xl flex flex-col gap-5 font-sans animate-fade-in-up my-8">
+        <div className="flex justify-between items-start gap-4">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 text-blue-600 font-mono font-bold text-[10px] tracking-widest uppercase bg-blue-600/5 px-2 py-0.5 rounded border border-blue-600/10">
               <Sparkle className="w-3 h-3 text-blue-600 fill-blue-600" />
@@ -1143,14 +2196,14 @@ function CreateCourseModal({
             </h3>
 
             <p className="text-xs text-slate-400 font-medium">
-              Add course details, access code, schedule dates, and a short
-              description.
+              Add the course name, semester, and an optional description.
             </p>
           </div>
 
           <button
             type="button"
             onClick={onClose}
+            aria-label="Close create course"
             className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-50 cursor-pointer"
           >
             <X className="w-5 h-5" />
@@ -1166,101 +2219,53 @@ function CreateCourseModal({
             <input
               type="text"
               required
+              autoFocus
               value={classNameInput}
               onChange={(e) => setClassNameInput(e.target.value)}
-              placeholder="e.g. MOROCCAN STUDIES & ARCHITECTURE"
-              className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 uppercase font-mono rounded-xl px-4 py-3 text-xs focus:outline-none transition-all shadow-inner"
+              placeholder="e.g. Moroccan Studies & Architecture"
+              className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 rounded-xl px-4 py-3 text-xs focus:outline-none transition-all shadow-inner"
             />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <div className="flex justify-between items-center px-1">
-                <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block">
-                  Course Code / Access Code
-                </label>
+          <div className="space-y-1.5">
+            <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block px-1">
+              Academic Semester
+            </label>
 
-                <span
-                  className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                    isCodeValid
-                      ? "bg-blue-600/10 text-blue-600"
-                      : "bg-blue-500/10 text-blue-700"
-                  }`}
-                >
-                  e.g. CSC9999
-                </span>
-              </div>
-
-              <input
-                value={courseCodeInput}
-                onChange={(e) =>
-                  setCourseCodeInput(e.target.value.toUpperCase())
-                }
-                placeholder="CSC9999"
-                className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 uppercase font-mono rounded-xl px-4 py-3.5 text-xs focus:outline-none transition-all shadow-inner"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block px-1">
-                Academic Semester
-              </label>
-
-              <select
-                value={semesterInput}
-                onChange={(e) => setSemesterInput(e.target.value)}
-                className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
-              >
-                <option value="Fall 2026">Fall 2026</option>
-                <option value="Spring 2027">Spring 2027</option>
-                <option value="Summer 2027">Summer 2027</option>
-                <option value="Fall 2027">Fall 2027</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#F8FAFC] border border-slate-200/60 p-4 rounded-2xl">
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-slate-400" />
-                Course Start Date
-              </label>
-
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-white border border-slate-200 text-slate-900 font-mono text-xs rounded-xl px-3 py-2.5 focus:outline-none focus:border-slate-400"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
-                <Calendar className="w-3 h-3 text-slate-400" />
-                Course End Date
-              </label>
-
-              <input
-                type="date"
-                value={finishDate}
-                onChange={(e) => setFinishDate(e.target.value)}
-                className="w-full bg-white border border-slate-200 text-slate-900 font-mono text-xs rounded-xl px-3 py-2.5 focus:outline-none focus:border-slate-400"
-              />
-            </div>
+            <select
+              value={semesterInput}
+              onChange={(e) => setSemesterInput(e.target.value)}
+              className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
+            >
+              <option value="Fall 2026">Fall 2026</option>
+              <option value="Spring 2027">Spring 2027</option>
+              <option value="Summer 2027">Summer 2027</option>
+              <option value="Fall 2027">Fall 2027</option>
+            </select>
           </div>
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block px-1">
               Course Description
+              <span className="normal-case tracking-normal font-sans font-medium text-slate-300 ml-1">
+                (optional)
+              </span>
             </label>
 
             <textarea
-              rows={2}
+              rows={3}
               value={descriptionInput}
               onChange={(e) => setDescriptionInput(e.target.value)}
-              placeholder="Add a short course description, writing guidelines, or important notes..."
+              placeholder="Add a short description or important note..."
               className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none transition-all resize-none shadow-inner"
             />
+          </div>
+
+          <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2.5 flex items-start gap-2">
+            <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+            <p className="text-[11px] leading-relaxed text-blue-800">
+              Praxis creates a unique student access code automatically.
+            </p>
           </div>
 
           {createError && (
@@ -1279,9 +2284,9 @@ function CreateCourseModal({
 
           <button
             type="submit"
-            disabled={!isCodeValid || !classNameInput}
+            disabled={!canCreateCourse}
             className={`w-full font-sans text-xs font-bold py-3.5 rounded-xl shadow-md transition-all ${
-              isCodeValid && classNameInput
+              canCreateCourse
                 ? "bg-slate-950 text-white hover:bg-slate-800 hover:scale-[1.01] cursor-pointer"
                 : "bg-slate-100 text-slate-400 cursor-not-allowed"
             }`}
@@ -1307,8 +2312,9 @@ function CourseManagerModal({
   managerError,
   managerSuccess,
   closeCourseManager,
-  copyCourseCode,
+  copyCourseInvite,
   toggleManagedCoursePublication,
+  toggleManagedCourseArchive,
   removeManagedCourse,
   handleUpdateManagedCourse,
   handleAddStudentToManagedCourse,
@@ -1318,8 +2324,8 @@ function CourseManagerModal({
 }) {
   const publicationTooltip =
     managedClass.isPublished === false
-      ? "Publishing this course makes it visible again to students and allows students to join using the access code."
-      : "Unpublishing hides this course from students and prevents new joins. Existing course data, assignments, submissions, and enrolled students are kept.";
+      ? "Make the course visible and allow students to join."
+      : "Hide the course from students. Existing work is kept.";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -1348,18 +2354,25 @@ function CourseManagerModal({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => copyCourseCode(managedClass.code)}
-              className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all"
+              disabled={managedClass.archived === true}
+              onClick={() => copyCourseInvite(managedClass)}
+              className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all disabled:cursor-not-allowed disabled:opacity-40"
+              title={
+                managedClass.archived === true
+                  ? "Restore the course before copying an invite"
+                  : "Copy a student course invitation"
+              }
             >
               <Copy className="w-4 h-4" />
-              Copy Code
+              Copy Invite
             </button>
 
             <div className="relative group">
               <button
-  type="button"
-  onClick={toggleManagedCoursePublication}
-  className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all ${
+                type="button"
+                disabled={managedClass.archived === true}
+                onClick={toggleManagedCoursePublication}
+                className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                   managedClass.isPublished === false
                     ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
                     : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-white"
@@ -1386,6 +2399,21 @@ function CourseManagerModal({
 
             <button
               type="button"
+              onClick={toggleManagedCourseArchive}
+              className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all ${
+                managedClass.archived === true
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                  : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+              }`}
+            >
+              <Archive className="w-4 h-4" />
+              {managedClass.archived === true
+                ? "Restore Course"
+                : "Archive Course"}
+            </button>
+
+            <button
+              type="button"
               onClick={removeManagedCourse}
               className="inline-flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-red-100 transition-all"
             >
@@ -1403,7 +2431,30 @@ function CourseManagerModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_420px] gap-0">
+        {(managerError || managerSuccess) && (
+          <div className="px-6 pt-4">
+            <div
+              role="status"
+              className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs ${
+                managerError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-blue-200 bg-blue-50 text-blue-700"
+              }`}
+            >
+              {managerError ? (
+                <ShieldAlert className="h-4 w-4 shrink-0" />
+              ) : (
+                <CheckSquare className="h-4 w-4 shrink-0" />
+              )}
+
+              <span className="font-semibold">
+                {managerError || managerSuccess}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-0">
           <div className="p-6 border-r border-slate-100">
             <div className="flex gap-2 mb-5">
               <button
@@ -1450,83 +2501,26 @@ function CourseManagerModal({
                   />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                      Course Code
-                    </label>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    Semester
+                  </label>
 
-                    <input
-                      value={manageCourseForm.code}
-                      onChange={(e) =>
-                        setManageCourseForm((prev) => ({
-                          ...prev,
-                          code: e.target.value.toUpperCase(),
-                        }))
-                      }
-                      className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 uppercase font-mono rounded-xl px-4 py-3 text-xs focus:outline-none transition-all shadow-inner"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                      Semester
-                    </label>
-
-                    <select
-                      value={manageCourseForm.semester}
-                      onChange={(e) =>
-                        setManageCourseForm((prev) => ({
-                          ...prev,
-                          semester: e.target.value,
-                        }))
-                      }
-                      className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
-                    >
-                      <option value="Fall 2026">Fall 2026</option>
-                      <option value="Spring 2027">Spring 2027</option>
-                      <option value="Summer 2027">Summer 2027</option>
-                      <option value="Fall 2027">Fall 2027</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-[#F8FAFC] border border-slate-200/60 p-4 rounded-2xl">
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">
-                      Course Start Date
-                    </label>
-
-                    <input
-                      type="date"
-                      value={manageCourseForm.start}
-                      onChange={(e) =>
-                        setManageCourseForm((prev) => ({
-                          ...prev,
-                          start: e.target.value,
-                        }))
-                      }
-                      className="w-full bg-white border border-slate-200 text-slate-900 font-mono text-xs rounded-xl px-3 py-2.5 focus:outline-none focus:border-slate-400"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500">
-                      Course End Date
-                    </label>
-
-                    <input
-                      type="date"
-                      value={manageCourseForm.finish}
-                      onChange={(e) =>
-                        setManageCourseForm((prev) => ({
-                          ...prev,
-                          finish: e.target.value,
-                        }))
-                      }
-                      className="w-full bg-white border border-slate-200 text-slate-900 font-mono text-xs rounded-xl px-3 py-2.5 focus:outline-none focus:border-slate-400"
-                    />
-                  </div>
+                  <select
+                    value={manageCourseForm.semester}
+                    onChange={(e) =>
+                      setManageCourseForm((prev) => ({
+                        ...prev,
+                        semester: e.target.value,
+                      }))
+                    }
+                    className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
+                  >
+                    <option value="Fall 2026">Fall 2026</option>
+                    <option value="Spring 2027">Spring 2027</option>
+                    <option value="Summer 2027">Summer 2027</option>
+                    <option value="Fall 2027">Fall 2027</option>
+                  </select>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1629,73 +2623,339 @@ function CourseManagerModal({
             )}
           </div>
 
-          <div className="bg-[#F8FAFC] p-6 space-y-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                Publication Status
-              </p>
+          <div className="bg-[#F8FAFC] p-6">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                  Course Access
+                </p>
 
-              <p
-                className={`inline-flex mt-2 text-[10px] font-mono font-bold uppercase border px-2 py-1 rounded ${
-                  computeCourseStatus(managedClass).styles
-                }`}
-              >
-                {computeCourseStatus(managedClass).text}
-              </p>
+                <span
+                  className={`inline-flex text-[9px] font-mono font-bold uppercase border px-2 py-1 rounded ${
+                    computeCourseStatus(managedClass).styles
+                  }`}
+                >
+                  {computeCourseStatus(managedClass).text}
+                </span>
+              </div>
 
-              <p className="text-xs text-slate-400 mt-2">
-                Unpublished courses are hidden from students and cannot be
-                joined with the access code. Existing data is kept.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
-                Access Code
-              </p>
-
-              <p className="text-2xl font-mono font-black text-blue-700 mt-1">
+              <p className="mt-4 text-3xl font-mono font-black tracking-wide text-blue-700">
                 {managedClass.code}
               </p>
 
-              <p className="text-xs text-slate-400 mt-2">
-                Students can use this code to join the course from the student
-                dashboard when the course is published.
+              <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                {managedClass.archived === true
+                  ? "Archived courses are kept for records but hidden from assignment and message course selectors."
+                  : "Students enter this code in Praxis to join the course."}
               </p>
+
             </div>
-
-            <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-              <div className="flex items-start gap-2">
-                <Info className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
-
-                <div>
-                  <p className="text-xs font-bold text-blue-900">
-                    Publish / Unpublish behavior
-                  </p>
-
-                  <p className="text-xs text-blue-800 mt-1 leading-relaxed">
-                    Publishing makes the course visible to students.
-                    Unpublishing hides it from students while keeping course
-                    records, assignments, submissions, and enrolled students.
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {managerError && (
-              <div className="p-3 bg-red-500/5 border border-red-200 rounded-xl flex items-center gap-2 text-xs text-red-700">
-                <ShieldAlert className="w-4 h-4 shrink-0" />
-                <span className="font-semibold">{managerError}</span>
-              </div>
-            )}
-
-            {managerSuccess && (
-              <div className="p-3 bg-blue-500/5 border border-blue-200 rounded-xl flex items-center gap-2 text-xs text-blue-600">
-                <CheckSquare className="w-4 h-4 shrink-0" />
-                <span className="font-semibold">{managerSuccess}</span>
-              </div>
-            )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TeacherPasswordModal({
+  newPassword,
+  setNewPassword,
+  confirmPassword,
+  setConfirmPassword,
+  passwordUiMessage,
+  setPasswordUiMessage,
+  onSubmit,
+  onClose,
+}) {
+  return (
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+      <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-7">
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          aria-label="Close password form"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600">
+          <KeyRound className="h-6 w-6" />
+        </div>
+
+        <div className="mt-4">
+          <h3 className="text-lg font-bold text-slate-900">
+            Change Password
+          </h3>
+
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">
+            The interface is ready. The password update will be connected to the backend later.
+          </p>
+        </div>
+
+        <form onSubmit={onSubmit} className="mt-5 space-y-4">
+          <div className="space-y-1.5">
+            <label
+              htmlFor="teacher-new-password"
+              className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400"
+            >
+              New password
+            </label>
+
+            <input
+              id="teacher-new-password"
+              type="password"
+              value={newPassword}
+              onChange={(event) => {
+                setNewPassword(event.target.value);
+                setPasswordUiMessage("");
+              }}
+              placeholder="At least 8 characters"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label
+              htmlFor="teacher-confirm-password"
+              className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400"
+            >
+              Confirm password
+            </label>
+
+            <input
+              id="teacher-confirm-password"
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => {
+                setConfirmPassword(event.target.value);
+                setPasswordUiMessage("");
+              }}
+              placeholder="Repeat the new password"
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+
+          {passwordUiMessage && (
+            <div className="rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-3 text-xs font-semibold text-blue-700">
+              {passwordUiMessage}
+            </div>
+          )}
+
+          <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700"
+            >
+              <KeyRound className="h-4 w-4" />
+              Update Password
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function TeacherBugReportModal({
+  bugDescription,
+  setBugDescription,
+  bugScreenshot,
+  bugReportError,
+  setBugReportError,
+  bugReportSuccess,
+  setBugReportSuccess,
+  isSubmitting,
+  bugFileInputKey,
+  onScreenshotChange,
+  onRemoveScreenshot,
+  onSubmit,
+  onClose,
+}) {
+  return (
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+      <div className="relative max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8">
+        <button
+          type="button"
+          onClick={onClose}
+          disabled={isSubmitting}
+          className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Close bug-report form"
+        >
+          <X className="h-5 w-5" />
+        </button>
+
+        <div className="space-y-5">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-600">
+            <Bug className="h-6 w-6" />
+          </div>
+
+          <div className="space-y-1">
+            <h3 className="text-lg font-bold text-slate-900">
+              Report a Bug
+            </h3>
+
+            <p className="max-w-lg text-xs leading-relaxed text-slate-500">
+              Describe what happened. Praxis automatically includes your current teacher workspace and assignment context.
+            </p>
+          </div>
+
+          <form onSubmit={onSubmit} className="space-y-5">
+            <div className="space-y-1.5">
+              <label
+                htmlFor="teacher-bug-description"
+                className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400"
+              >
+                What happened?
+              </label>
+
+              <textarea
+                id="teacher-bug-description"
+                value={bugDescription}
+                disabled={isSubmitting}
+                onChange={(event) => {
+                  setBugDescription(event.target.value);
+                  if (bugReportError) setBugReportError("");
+                  if (bugReportSuccess) setBugReportSuccess("");
+                }}
+                rows={5}
+                maxLength={1500}
+                placeholder="Example: I clicked Review, but the submission workspace did not open."
+                className="w-full resize-y rounded-2xl border border-slate-200 bg-[#F8FAFC] px-4 py-3.5 text-sm leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+              />
+
+              <div className="flex items-center justify-between text-[10px] text-slate-400">
+                <span>Include the action and what you expected.</span>
+                <span className="font-mono">
+                  {bugDescription.length}/1500
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div>
+                <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                  Picture
+                  <span className="ml-1 normal-case tracking-normal text-slate-300">
+                    optional
+                  </span>
+                </p>
+
+                <p className="mt-1 text-[10px] text-slate-400">
+                  PNG, JPG, or WebP only · maximum 3 MB
+                </p>
+              </div>
+
+              {!bugScreenshot ? (
+                <label className="group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-5 py-7 text-center transition-all hover:border-blue-300 hover:bg-blue-50/50">
+                  <input
+                    key={bugFileInputKey}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={isSubmitting}
+                    onChange={onScreenshotChange}
+                    className="sr-only"
+                  />
+
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-600 shadow-sm transition-transform group-hover:-translate-y-0.5">
+                    <ImagePlus className="h-5 w-5" />
+                  </div>
+
+                  <p className="mt-3 text-xs font-bold text-slate-700">
+                    Upload a picture
+                  </p>
+
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    Click to choose a screenshot of the issue
+                  </p>
+                </label>
+              ) : (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                  <div className="relative bg-slate-950/5 p-3">
+                    <img
+                      src={bugScreenshot.dataUrl}
+                      alt="Bug screenshot preview"
+                      className="max-h-64 w-full rounded-xl border border-slate-200 bg-white object-contain"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={onRemoveScreenshot}
+                      disabled={isSubmitting}
+                      className="absolute right-5 top-5 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/70 bg-white/95 text-slate-500 shadow-md transition-all hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Remove uploaded picture"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-bold text-slate-700">
+                        {bugScreenshot.name}
+                      </p>
+
+                      <p className="mt-0.5 text-[10px] text-slate-400">
+                        {formatBugFileSize(bugScreenshot.size)}
+                      </p>
+                    </div>
+
+                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[9px] font-bold text-emerald-700">
+                      Picture ready
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {bugReportError && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                <span className="font-semibold leading-relaxed">
+                  {bugReportError}
+                </span>
+              </div>
+            )}
+
+            {bugReportSuccess && (
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
+                <CheckSquare className="mt-0.5 h-4 w-4 shrink-0" />
+                <span className="font-semibold leading-relaxed">
+                  {bugReportSuccess}
+                </span>
+              </div>
+            )}
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isSubmitting}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="submit"
+                disabled={
+                  isSubmitting || bugDescription.trim().length < 10
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Send className="h-4 w-4" />
+                {isSubmitting ? "Sending report..." : "Send Report"}
+              </button>
+            </div>
+          </form>
         </div>
       </div>
     </div>

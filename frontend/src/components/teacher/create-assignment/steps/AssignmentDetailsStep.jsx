@@ -3,9 +3,9 @@ import {
   AlertCircle,
   Bot,
   CalendarDays,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
-  CheckCircle2,
   FileText,
   GraduationCap,
   Layers,
@@ -82,24 +82,8 @@ export default function AssignmentDetailsStep({
   feedbackChecks,
   setFeedbackChecks,
 
-  aiTopic,
-  setAiTopic,
-
   aiBrief,
   setAiBrief,
-
-  allowAI,
-  aiFeedback,
-  writingPlayback,
-
-  includeRubricInPrompt,
-  setIncludeRubricInPrompt,
-
-  includeStudentAiSupportInPrompt,
-  setIncludeStudentAiSupportInPrompt,
-
-  includeIntegritySettingsInPrompt,
-  setIncludeIntegritySettingsInPrompt,
 
   isGenerating,
   generationError,
@@ -108,12 +92,15 @@ export default function AssignmentDetailsStep({
   handleGenerateAssignmentDraft,
 }) {
   const isAiMode = creationMode === "ai";
-  const shouldShowStudentDraft = !isAiMode || Boolean(generatedDraft);
-  const [isAiSetupExpanded, setIsAiSetupExpanded] = useState(true);
+  const shouldShowGeneratedAssignment =
+    isAiMode && Boolean(generatedDraft);
+
+  const [isDescriptionExpanded, setIsDescriptionExpanded] =
+    useState(!generatedDraft);
 
   useEffect(() => {
     if (generatedDraft) {
-      setIsAiSetupExpanded(false);
+      setIsDescriptionExpanded(false);
     }
   }, [generatedDraft]);
 
@@ -159,7 +146,7 @@ export default function AssignmentDetailsStep({
 
             <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
               {isAiMode
-                ? "Complete the AI-assisted setup, then generate the student-facing assignment draft."
+                ? "Describe the assignment naturally. Praxis will create the title, instructions, course selection, level, type, word range, due date, and student-support settings."
                 : "Select the course, then write the assignment title, instructions, due date, and requirements."}
             </p>
           </div>
@@ -167,270 +154,131 @@ export default function AssignmentDetailsStep({
       </div>
 
       {isAiMode ? (
-        <div className="rounded-2xl border border-violet-200 bg-violet-50/50">
-          <div className="flex items-start justify-between gap-4 p-5">
-            <div className="flex items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700">
-                <Wand2 className="h-4 w-4" />
-              </div>
+        <div className="space-y-3">
+          {generatedDraft && !isDescriptionExpanded && (
+            <div className="flex flex-col gap-3 rounded-2xl border border-violet-200 bg-violet-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                  <p className="text-xs font-bold text-slate-900">
+                    Assignment generated from your description
+                  </p>
+                </div>
 
-              <div>
-                <h4 className="font-serif text-sm font-bold text-slate-950">
-                  AI-assisted setup
-                </h4>
-
-                <p className="mt-1 text-xs leading-relaxed text-violet-800">
-                  {generatedDraft
-                    ? "The assignment draft has been generated. Reopen this setup to adjust the inputs or regenerate it."
-                    : "Add a topic, level, word range, course, due date, and optional settings. Claude will generate an editable assignment draft that the teacher must review before continuing."}
+                <p className="mt-1 truncate text-[11px] text-slate-500">
+                  {aiBrief}
                 </p>
               </div>
-            </div>
 
-            <button
-              type="button"
-              onClick={() => setIsAiSetupExpanded((current) => !current)}
-              className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-violet-200 bg-white px-3 py-2 text-[11px] font-bold text-violet-700 transition-all hover:bg-violet-50"
-            >
-              {isAiSetupExpanded ? (
-                <>
-                  Hide AI setup
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </>
-              ) : (
-                <>
-                  Show AI setup
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </>
-              )}
-            </button>
-          </div>
-
-          {isAiSetupExpanded && (
-            <div className="space-y-5 border-t border-violet-200 p-5">
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <label className="space-y-1.5 lg:col-span-2">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Topic / Prompt Idea
-                <span className="ml-1 text-red-600">*</span>
-              </span>
-
-              <input
-                type="text"
-                value={aiTopic}
-                onChange={(event) => setAiTopic(event.target.value)}
-                placeholder="Example: Healthy living, friendship, happiness, cheese or butter..."
-                required
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs text-slate-900 outline-none transition-all focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10"
-              />
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Assignment Type
-              </span>
-
-              <select
-                value={assignmentType}
-                onChange={(event) => setAssignmentType(event.target.value)}
-                className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
-              >
-                {ASSIGNMENT_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {type}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <label className="space-y-1.5 lg:col-span-2">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Teacher Brief
-              </span>
-
-              <textarea
-                value={aiBrief}
-                onChange={(event) => setAiBrief(event.target.value)}
-                rows={4}
-                placeholder="Example: Create a B1 definition paragraph assignment. Students should define healthy living and support the definition with examples, facts, or details."
-                className="w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-900 outline-none transition-all focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10"
-              />
-            </label>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
-              <label className="space-y-1.5">
-                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  English Level
-                </span>
-
-                <select
-                  value={studentLevel}
-                  onChange={(event) => setStudentLevel(event.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDescriptionExpanded(true)}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-2 text-[10px] font-bold text-violet-700 hover:bg-violet-50"
                 >
-                  {STUDENT_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <ChevronDown className="h-3.5 w-3.5" />
+                  Show description
+                </button>
 
-              <label className="space-y-1.5">
-                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                  Feedback Checks
-                </span>
-
-                <input
-                  type="number"
-                  min="0"
-                  max="10"
-                  value={feedbackChecks}
-                  onChange={(event) =>
-                    setFeedbackChecks(Number(event.target.value || 0))
-                  }
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
-                />
-              </label>
+                <button
+                  type="button"
+                  onClick={handleGenerateAssignmentDraft}
+                  disabled={isGenerating || !aiBrief.trim() || classes.length === 0}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-violet-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {isGenerating ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  Regenerate
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
-            <label className="space-y-1.5 xl:col-span-2">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                <GraduationCap className="h-3.5 w-3.5" />
-                Course
-                <span className="text-red-600">*</span>
-              </span>
+          <div
+            className={`${
+              isDescriptionExpanded || !generatedDraft ? "block" : "hidden"
+            } space-y-5 rounded-2xl border border-violet-200 bg-violet-50/50 p-5`}
+          >
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700">
+              <Wand2 className="h-4 w-4" />
+            </div>
 
-              <select
-                value={selectedClass ? getClassValue(selectedClass) : course || ""}
-                onChange={handleCourseChange}
-                required
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
+            <div>
+              <h4 className="font-serif text-sm font-bold text-slate-950">
+                Describe the assignment
+              </h4>
+
+              <p className="mt-1 max-w-3xl text-xs leading-relaxed text-violet-800">
+                Use one plain-English description. Include only details that matter
+                to you. Praxis will choose sensible defaults for anything you omit.
+              </p>
+              </div>
+            </div>
+
+            {generatedDraft && (
+              <button
+                type="button"
+                onClick={() => setIsDescriptionExpanded(false)}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-violet-200 bg-white px-3 py-2 text-[10px] font-bold text-violet-700 hover:bg-violet-50"
               >
-                <option value="">Select a course</option>
-
-                {classes.map((cls) => (
-                  <option key={getClassValue(cls)} value={getClassValue(cls)}>
-                    {getClassLabel(cls)}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Min Words
-              </span>
-
-              <input
-                type="number"
-                min="1"
-                value={minWords}
-                onChange={(event) =>
-                  setMinWords(Number(event.target.value || 0))
-                }
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
-              />
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                Max Words
-              </span>
-
-              <input
-                type="number"
-                min={Math.max(1, Number(minWords || 1))}
-                value={maxWords}
-                onChange={(event) =>
-                  setMaxWords(Number(event.target.value || 0))
-                }
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-violet-500"
-              />
-            </label>
-
-            <label className="space-y-1.5">
-              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                <CalendarDays className="h-3.5 w-3.5" />
-                Due Date
-                <span className="text-red-600">*</span>
-              </span>
-
-              <input
-                type="datetime-local"
-                value={dueDate}
-                onChange={(event) => setDueDate(event.target.value)}
-                required
-                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs text-slate-900 outline-none focus:border-violet-500"
-              />
-            </label>
+                <ChevronUp className="h-3.5 w-3.5" />
+                Hide description
+              </button>
+            )}
           </div>
+
+          <label className="block space-y-2">
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              What assignment do you want to create?
+              <span className="ml-1 text-red-600">*</span>
+            </span>
+
+            <textarea
+              value={aiBrief}
+              onChange={(event) => setAiBrief(event.target.value)}
+              rows={9}
+              placeholder={`Example:
+
+Create a B1 process paragraph for CSC4301 about how students prepare for an important exam. It should be 250–400 words and due next Friday at 11:59 PM. Give students two AI feedback checks and enable the planning coach with automatic outline.`}
+              className="w-full resize-y rounded-2xl border border-violet-200 bg-white px-5 py-4 text-sm leading-7 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10"
+            />
+
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              You may mention the course, level, due date, word count, assignment
+              type, Coach support, or feedback limits in the same description.
+            </p>
+          </label>
 
           {classes.length === 0 && (
             <MessageBox
               tone="error"
-              message="No courses are available. Confirm that the teacher workspace passes the classes array to the assignment modal."
+              message="No active courses are available. Create or restore a course before generating the assignment."
             />
           )}
-
-          {Number(maxWords || 0) < Number(minWords || 0) && (
-            <MessageBox
-              tone="error"
-              message="Maximum words must be greater than or equal to minimum words."
-            />
-          )}
-
-          <div>
-            <p className="mb-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              What should Claude consider?
-            </p>
-
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-              <PromptOption
-                checked={includeRubricInPrompt}
-                onChange={setIncludeRubricInPrompt}
-                title="Use rubric"
-                description="Include the selected or uploaded rubric in generation."
-              />
-
-              <PromptOption
-                checked={includeStudentAiSupportInPrompt}
-                onChange={setIncludeStudentAiSupportInPrompt}
-                title="Use AI support settings"
-                description={`Ideas coach: ${allowAI ? "on" : "off"} · Feedback: ${
-                  aiFeedback ? "on" : "off"
-                } · Playback: ${writingPlayback ? "on" : "off"}`}
-              />
-
-              <PromptOption
-                checked={includeIntegritySettingsInPrompt}
-                onChange={setIncludeIntegritySettingsInPrompt}
-                title="Use integrity settings"
-                description="Include paste, focus, honor, and submission rules."
-              />
-            </div>
-          </div>
 
           <div className="flex flex-col gap-3 border-t border-violet-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              The student-facing fields remain hidden until Claude successfully
-              generates the assignment.
-            </p>
+            <div className="max-w-2xl">
+              <p className="text-[11px] font-semibold text-slate-700">
+                Praxis will generate the full configuration.
+              </p>
+
+              <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                After generation, review and edit the result before continuing.
+              </p>
+            </div>
 
             <button
               type="button"
               onClick={handleGenerateAssignmentDraft}
               disabled={
                 isGenerating ||
-                !course ||
-                !dueDate ||
-                !aiTopic?.trim() ||
-                Number(maxWords || 0) < Number(minWords || 0)
+                !aiBrief.trim() ||
+                classes.length === 0
               }
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-xs font-bold text-white shadow-sm shadow-violet-600/20 transition-all hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
             >
@@ -441,10 +289,10 @@ export default function AssignmentDetailsStep({
               )}
 
               {isGenerating
-                ? "Generating assignment..."
+                ? "Building the assignment..."
                 : generatedDraft
-                ? "Regenerate Assignment Draft"
-                : "Generate Assignment Draft"}
+                ? "Regenerate from Description"
+                : "Generate Complete Assignment"}
             </button>
           </div>
 
@@ -455,8 +303,7 @@ export default function AssignmentDetailsStep({
           {generationSuccess && generatedDraft && (
             <MessageBox tone="success" message={generationSuccess} />
           )}
-            </div>
-          )}
+          </div>
         </div>
       ) : (
         <ManualAssignmentSetup
@@ -483,9 +330,9 @@ export default function AssignmentDetailsStep({
         />
       )}
 
-      {shouldShowStudentDraft && isAiMode && (
+      {shouldShowGeneratedAssignment && (
         <div className="space-y-5 rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+          <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-700">
                 <Bot className="h-4 w-4" />
@@ -493,19 +340,19 @@ export default function AssignmentDetailsStep({
 
               <div>
                 <h4 className="font-serif text-base font-bold text-slate-950">
-                  Student-facing assignment draft
+                  Generated assignment
                 </h4>
 
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Claude generated this content. Review and edit every field
-                  before continuing.
+                  Praxis filled the assignment from your description. Review and
+                  edit every value before continuing.
                 </p>
               </div>
             </div>
 
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-bold text-emerald-700">
+            <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[10px] font-bold text-emerald-700">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Draft generated
+              Ready for review
             </span>
           </div>
 
@@ -520,7 +367,6 @@ export default function AssignmentDetailsStep({
               value={title}
               onChange={(event) => setTitle(event.target.value)}
               required
-              placeholder="Example: Definition Paragraph — Healthy Living"
               className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-900 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
             />
           </label>
@@ -536,36 +382,133 @@ export default function AssignmentDetailsStep({
               onChange={(event) => setDescription(event.target.value)}
               required
               rows={8}
-              placeholder="The generated student instructions will appear here..."
               className="w-full resize-y rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs leading-relaxed text-slate-900 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
             />
           </label>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <ReadOnlySummary
-              label="Course"
-              value={selectedClass ? getClassLabel(selectedClass) : course}
-            />
+            <label className="space-y-1.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <GraduationCap className="h-3.5 w-3.5" />
+                Course
+              </span>
 
-            <ReadOnlySummary label="Assignment Type" value={assignmentType} />
+              <select
+                value={selectedClass ? getClassValue(selectedClass) : course || ""}
+                onChange={handleCourseChange}
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              >
+                <option value="">Select a course</option>
 
-            <ReadOnlySummary label="English Level" value={studentLevel} />
+                {classes.map((cls) => (
+                  <option key={getClassValue(cls)} value={getClassValue(cls)}>
+                    {getClassLabel(cls)}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-            <ReadOnlySummary
-              label="Word Range"
-              value={`${minWords || 0}–${maxWords || 0} words`}
-            />
+            <label className="space-y-1.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <CalendarDays className="h-3.5 w-3.5" />
+                Due Date
+              </span>
 
-            <ReadOnlySummary
-              label="Due Date"
-              value={dueDate || "Not selected"}
-            />
+              <input
+                type="datetime-local"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs text-slate-900 outline-none focus:border-blue-500"
+              />
+            </label>
 
-            <ReadOnlySummary
-              label="Feedback Checks"
-              value={String(feedbackChecks ?? 0)}
-            />
+            <label className="space-y-1.5">
+              <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <Layers className="h-3.5 w-3.5" />
+                Assignment Type
+              </span>
+
+              <select
+                value={assignmentType}
+                onChange={(event) => setAssignmentType(event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              >
+                {ASSIGNMENT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                English Level
+              </span>
+
+              <select
+                value={studentLevel}
+                onChange={(event) => setStudentLevel(event.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              >
+                {STUDENT_LEVELS.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Minimum Words
+              </span>
+
+              <input
+                type="number"
+                min="1"
+                value={minWords}
+                onChange={(event) =>
+                  setMinWords(Number(event.target.value || 0))
+                }
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              />
+            </label>
+
+            <label className="space-y-1.5">
+              <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Maximum Words
+              </span>
+
+              <input
+                type="number"
+                min={Math.max(1, Number(minWords || 1))}
+                value={maxWords}
+                onChange={(event) =>
+                  setMaxWords(Number(event.target.value || 0))
+                }
+                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+              />
+            </label>
           </div>
+
+          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+            <p className="text-[11px] font-bold text-blue-900">
+              Student support was also generated.
+            </p>
+
+            <p className="mt-1 text-[10px] leading-relaxed text-blue-800">
+              Review the Ideas Coach, active-time limit, idea-help limit, outline,
+              and AI feedback request limit in Step 3.
+            </p>
+          </div>
+
+          {Number(maxWords || 0) < Number(minWords || 0) && (
+            <MessageBox
+              tone="error"
+              message="Maximum words must be greater than or equal to minimum words."
+            />
+          )}
         </div>
       )}
     </div>
@@ -617,7 +560,6 @@ function ManualAssignmentSetup({
           value={title}
           onChange={(event) => setTitle(event.target.value)}
           required
-          placeholder="Example: Definition Paragraph — Healthy Living"
           className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-900 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
         />
       </label>
@@ -633,7 +575,6 @@ function ManualAssignmentSetup({
           onChange={(event) => setDescription(event.target.value)}
           required
           rows={8}
-          placeholder="Write clear instructions for the student..."
           className="w-full resize-y rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs leading-relaxed text-slate-900 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
         />
       </label>
@@ -746,23 +687,6 @@ function ManualAssignmentSetup({
             ))}
           </select>
         </label>
-
-        <label className="space-y-1.5">
-          <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-            Feedback Checks
-          </span>
-
-          <input
-            type="number"
-            min="0"
-            max="10"
-            value={feedbackChecks}
-            onChange={(event) =>
-              setFeedbackChecks(Number(event.target.value || 0))
-            }
-            className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
-          />
-        </label>
       </div>
 
       {Number(maxWords || 0) < Number(minWords || 0) && (
@@ -772,49 +696,6 @@ function ManualAssignmentSetup({
         />
       )}
     </div>
-  );
-}
-
-function ReadOnlySummary({ label, value }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3">
-      <p className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
-
-      <p className="mt-1 text-xs font-bold text-slate-900">
-        {value || "Not set"}
-      </p>
-    </div>
-  );
-}
-
-function PromptOption({ checked, onChange, title, description }) {
-  return (
-    <label
-      className={`cursor-pointer rounded-xl border p-3 transition-all ${
-        checked
-          ? "border-violet-300 bg-white ring-4 ring-violet-500/10"
-          : "border-slate-200 bg-white/70 hover:border-violet-200"
-      }`}
-    >
-      <div className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={Boolean(checked)}
-          onChange={(event) => onChange(event.target.checked)}
-          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-        />
-
-        <div>
-          <p className="text-[11px] font-bold text-slate-900">{title}</p>
-
-          <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-            {description}
-          </p>
-        </div>
-      </div>
-    </label>
   );
 }
 

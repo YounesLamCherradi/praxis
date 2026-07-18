@@ -960,7 +960,11 @@ function normalizeAiSuggestion(rawData, rubricCriteria, rubricTotal) {
 }
 
 const SubmissionDetails = forwardRef(function SubmissionDetails(
-  { submission, onSaveReview },
+  {
+    submission,
+    onSaveReview,
+    readOnly = false,
+  },
   ref
 ) {
   const { rubrics = [], getRubricForAssignment } =
@@ -988,6 +992,8 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
   const [aiReviewLoading, setAiReviewLoading] = useState(false);
   const [aiReviewError, setAiReviewError] = useState("");
   const [aiSuggestion, setAiSuggestion] = useState(null);
+  const [aiRubricApplied, setAiRubricApplied] = useState(false);
+  const [aiFeedbackApplied, setAiFeedbackApplied] = useState(false);
 
   const studentTextRef = useRef(null);
 
@@ -1113,15 +1119,22 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
         submission.aiReviewSuggestion ||
         null
     );
+    setAiRubricApplied(
+      Boolean(submission.aiRubricSuggestionApplied)
+    );
+    setAiFeedbackApplied(
+      Boolean(submission.aiFeedbackSuggestionApplied)
+    );
   }, [submission?.id]);
 
   if (!submission) return null;
 
   const submissionText =
+    submission.submittedText ||
+    submission.submissionText ||
+    submission.finalText ||
     submission.content ||
     submission.draftText ||
-    submission.submittedText ||
-    submission.finalText ||
     submission.text ||
     "";
 
@@ -1170,6 +1183,8 @@ AI / external flags: ${aiFlagCount}
 These are teacher-only review signals and are not automatic grades.`;
 
   function updateRubricEntry(criterionId, nextEntry) {
+    if (readOnly) return;
+
     setRubricScores((prev) => {
       const previousEntry = getScoreEntry(prev, criterionId);
 
@@ -1241,6 +1256,13 @@ These are teacher-only review signals and are not automatic grades.`;
   }
 
   function addAnnotation(codeItem) {
+    if (readOnly) {
+      setAnnotationMessage(
+        "Previous attempts are read-only."
+      );
+      return;
+    }
+
     if (!codeItem) {
       setAnnotationMessage("Choose an annotation code.");
       return;
@@ -1298,6 +1320,13 @@ These are teacher-only review signals and are not automatic grades.`;
   }
 
   function deleteAnnotation(annotationId) {
+    if (readOnly) {
+      setAnnotationMessage(
+        "Previous attempts are read-only."
+      );
+      return;
+    }
+
     const nextAnnotations = annotationsRef.current.filter(
       (annotation) => annotation.id !== annotationId
     );
@@ -1309,6 +1338,13 @@ These are teacher-only review signals and are not automatic grades.`;
   }
 
   async function handleAiCheck() {
+    if (readOnly) {
+      setAiReviewError(
+        "Previous attempts are read-only."
+      );
+      return;
+    }
+
     if (!submissionText.trim()) {
       setAiReviewError("No student text is available for AI check.");
       setReviewMode("ai");
@@ -1387,6 +1423,7 @@ These are teacher-only review signals and are not automatic grades.`;
 
     if (!currentRubric) {
       setManualScore(aiSuggestion.finalScore || "");
+      setAiRubricApplied(true);
       setSaveMessage("AI suggested manual score applied. Review before saving.");
       setReviewMode("rubric");
       return;
@@ -1416,6 +1453,7 @@ These are teacher-only review signals and are not automatic grades.`;
     });
 
     setRubricScores(nextRubricScores);
+    setAiRubricApplied(true);
     setReviewMode("rubric");
     setSaveMessage("AI suggested rubric scores applied. Review before saving.");
   }
@@ -1435,6 +1473,7 @@ These are teacher-only review signals and are not automatic grades.`;
       return current ? `${current}\n\n${suggestion}` : suggestion;
     });
 
+    setAiFeedbackApplied(true);
     setSaveMessage(
       "AI feedback added as a teacher comment. Review and edit it before saving."
     );
@@ -1780,6 +1819,13 @@ These are teacher-only review signals and are not automatic grades.`;
   }
 
   function handleSave() {
+    if (readOnly) {
+      setSaveMessage(
+        "Previous attempts are read-only. Review the current attempt instead."
+      );
+      return;
+    }
+
     let finalScore = manualScore;
     let cleanedRubricScores = {};
     let calculatedRubricScore = rubricScoreTotal;
@@ -1787,7 +1833,20 @@ These are teacher-only review signals and are not automatic grades.`;
     if (currentRubric) {
       for (const criterion of rubricCriteria) {
         const entry = getScoreEntry(rubricScores, criterion.id);
-        const numericValue = Number(entry.score || 0);
+        const hasExplicitScore =
+          entry.score !== "" &&
+          entry.score !== null &&
+          entry.score !== undefined;
+
+        if (!hasExplicitScore) {
+          setSaveMessage(
+            `Select a score for "${criterion.name}" before saving the final review.`
+          );
+          setReviewMode("rubric");
+          return;
+        }
+
+        const numericValue = Number(entry.score);
 
         if (
           Number.isNaN(numericValue) ||
@@ -1837,17 +1896,25 @@ These are teacher-only review signals and are not automatic grades.`;
         finalScore = calculatedRubricScore;
       }
     } else {
+      if (manualScore === "") {
+        setSaveMessage(
+          "Enter a score before saving the final review."
+        );
+        return;
+      }
+
       const numericScore = Number(manualScore);
 
       if (
-        manualScore !== "" &&
-        (Number.isNaN(numericScore) || numericScore < 0 || numericScore > 100)
+        Number.isNaN(numericScore) ||
+        numericScore < 0 ||
+        numericScore > 100
       ) {
         setSaveMessage("Score must be between 0 and 100.");
         return;
       }
 
-      finalScore = manualScore === "" ? null : numericScore;
+      finalScore = numericScore;
     }
 
     const annotationsToSave = Array.isArray(annotationsRef.current)
@@ -1868,9 +1935,15 @@ These are teacher-only review signals and are not automatic grades.`;
       rubricOverride: currentRubric ? finalOverrideEnabled : false,
 
       aiTeacherReviewSuggestion: aiSuggestion || null,
-      aiTeacherReviewUsed: Boolean(aiSuggestion),
+      aiTeacherReviewGenerated: Boolean(aiSuggestion),
+      aiTeacherReviewUsed:
+        aiRubricApplied || aiFeedbackApplied,
+      aiRubricSuggestionApplied:
+        aiRubricApplied,
+      aiFeedbackSuggestionApplied:
+        aiFeedbackApplied,
 
-      reviewedAt: new Date().toISOString().slice(0, 10),
+      reviewedAt: new Date().toISOString(),
     });
 
     if (saveAccepted === false) {
@@ -1887,6 +1960,11 @@ These are teacher-only review signals and are not automatic grades.`;
   return (
     <div className="h-full min-h-0 animate-fade-in-up">
       <div className="h-full min-h-0 flex flex-col gap-3">
+        {readOnly && (
+          <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
+            Previous attempt — read-only. Grades, feedback, annotations, and AI review actions cannot be changed.
+          </div>
+        )}
         
 
         <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.95fr)_390px] gap-3 flex-1 min-h-0">
@@ -5432,16 +5510,10 @@ function ReviewSignalsPanel({
     (log) => String(log.type).toLowerCase() === "paste_blocked"
   ).length;
 
-  const honorConfirmed = Boolean(submission.honorConfirmed);
-
   const recentSignals = [
     ...copyPasteLogs.map((log) => ({
       ...log,
       signalSource: "Paste",
-    })),
-    ...focusLossLogs.map((log) => ({
-      ...log,
-      signalSource: "Focus",
     })),
     ...writingEvents.map((log) => ({
       ...log,
@@ -5479,17 +5551,7 @@ function ReviewSignalsPanel({
           hasAlert={pasteAttemptCount > 0}
         />
 
-        <PlaybackCard
-          icon={Eye}
-          label="Focus Loss / Tab Switch"
-          value={`${focusLossCount || 0} events`}
-          detail={
-            focusLossCount > 0
-              ? "Student left the writing tab or window."
-              : "No focus loss recorded."
-          }
-          hasAlert={focusLossCount > 0}
-        />
+
 
         <PlaybackCard
           icon={Activity}
@@ -5505,17 +5567,7 @@ function ReviewSignalsPanel({
           detail="AI draft feedback requests."
         />
 
-        <PlaybackCard
-          icon={CheckSquare}
-          label="Honor Confirmation"
-          value={honorConfirmed ? "Confirmed" : "Not confirmed"}
-          detail={
-            honorConfirmed
-              ? `Confirmed at ${formatDateTime(submission.honorConfirmedAt)}`
-              : "Student confirmation not found."
-          }
-          hasAlert={false}
-        />
+
 
         <PlaybackCard
           icon={hasAiFlags ? AlertTriangle : ShieldCheck}
@@ -5542,7 +5594,6 @@ function ReviewSignalsPanel({
 
       {integrityLogs.length === 0 &&
         copyPasteLogs.length === 0 &&
-        focusLossLogs.length === 0 &&
         writingEvents.length === 0 && (
           <div className="rounded-xl border border-dashed border-slate-200 bg-[#F8FAFC] p-4 text-center">
             <p className="text-[11px] font-mono text-slate-400">
@@ -5556,6 +5607,13 @@ function ReviewSignalsPanel({
 
 function SignalRow({ signal }) {
   const type = String(signal.type || "").toLowerCase();
+
+  if (
+    type === "focus_loss" ||
+    type === "large_insertion"
+  ) {
+    return null;
+  }
 
   let title = signal.signalSource || "Activity";
   let description = "Writing activity recorded.";

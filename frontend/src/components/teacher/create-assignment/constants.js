@@ -62,20 +62,16 @@ export const DEFAULT_CRITERIA = [
   },
 ];
 
-export const DEFAULT_INTEGRITY_SETTINGS = {
-  pastePolicy: "warn",
-  logPasteAttempts: true,
-  requireHonorConfirmation: true,
-  enforceWordCount: true,
-
-  // Always enforced. The teacher does not need to configure this.
-  lockAfterSubmission: true,
-};
-
 export const DEFAULT_AI_SUPPORT_SETTINGS = {
   aiIdeasCoach: true,
-  coachTimeLimitMinutes: 15,
-  aiDraftFeedback: true,
-  writingPlayback: true,
+
+  // Restored meaning: 0 = unlimited active Coach time.
+  coachTimeLimitMinutes: 0,
+
+  ideaRequestLimit: 3,
+  feedbackRequestLimit: 2,
   autoBuildOutlineFromCoach: true,
+
+  // Compatibility value derived from feedbackRequestLimit.
+  aiDraftFeedback: true,
 };

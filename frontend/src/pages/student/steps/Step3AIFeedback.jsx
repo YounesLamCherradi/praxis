@@ -5,10 +5,8 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  CheckCircle2,
-  Eye,
-  FileText,
-  Highlighter,
+  ChevronLeft,
+  ChevronRight,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -79,27 +77,113 @@ function extractJsonFromText(text) {
     // Continue below.
   }
 
+  const firstBracket = raw.indexOf("[");
+  const lastBracket = raw.lastIndexOf("]");
+
+  if (
+    firstBracket !== -1 &&
+    lastBracket !== -1 &&
+    lastBracket > firstBracket
+  ) {
+    try {
+      return JSON.parse(raw.slice(firstBracket, lastBracket + 1));
+    } catch {
+      // Continue below.
+    }
+  }
+
   const firstBrace = raw.indexOf("{");
   const lastBrace = raw.lastIndexOf("}");
 
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    return null;
+  if (
+    firstBrace !== -1 &&
+    lastBrace !== -1 &&
+    lastBrace > firstBrace
+  ) {
+    try {
+      return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    } catch {
+      return null;
+    }
   }
 
-  try {
-    return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
-  } catch {
-    return null;
+  return null;
+}
+
+function extractQuotedExcerpt(feedbackText) {
+  const text = getText(feedbackText);
+  if (!text) return "";
+
+  const quoteMatch =
+    text.match(/"([^"]{3,160})"/) ||
+    text.match(/“([^”]{3,160})”/) ||
+    text.match(/'([^']{3,160})'/);
+
+  return getText(quoteMatch?.[1] || "");
+}
+
+function getLineNumberFromText(value) {
+  const match = String(value || "").match(/\bline\s+(\d+)\b/i);
+  const number = Number(match?.[1]);
+
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function normalizeSeverity(value) {
+  const clean = getText(value).toLowerCase();
+
+  if (clean === "major" || clean === "minor") {
+    return clean;
   }
+
+  return "medium";
 }
 
 function normalizeIssue(issue, index) {
+  if (typeof issue === "string") {
+    const feedbackText = getText(issue);
+
+    return {
+      id: `issue_${index + 1}`,
+      lineNumber: getLineNumberFromText(feedbackText),
+      excerpt: extractQuotedExcerpt(feedbackText),
+      problem: feedbackText,
+      suggestion: "",
+      severity: "medium",
+    };
+  }
+
+  const feedbackText = getText(
+    issue?.problem ||
+      issue?.issue ||
+      issue?.comment ||
+      issue?.text ||
+      issue?.feedback
+  );
+
+  const rawLineNumber =
+    issue?.lineNumber ??
+    issue?.line ??
+    issue?.sentenceNumber ??
+    getLineNumberFromText(feedbackText);
+
+  const lineNumber = Number(rawLineNumber);
+
   return {
     id: issue?.id || `issue_${index + 1}`,
-    excerpt: getText(issue?.excerpt || issue?.quote || issue?.text),
-    problem: getText(issue?.problem || issue?.issue || issue?.comment),
-    suggestion: getText(issue?.suggestion || issue?.advice || issue?.fix),
-    severity: getText(issue?.severity || "medium").toLowerCase(),
+    lineNumber:
+      Number.isFinite(lineNumber) && lineNumber > 0
+        ? lineNumber
+        : null,
+    excerpt: getText(
+      issue?.excerpt ||
+        issue?.quote ||
+        issue?.selectedText ||
+        extractQuotedExcerpt(feedbackText)
+    ),
+    problem: feedbackText,
+    suggestion: "",
+    severity: normalizeSeverity(issue?.severity),
   };
 }
 
@@ -112,33 +196,25 @@ function normalizeFeedback(data) {
 
   const parsed = extractJsonFromText(responseText);
 
-  if (!parsed) {
-    return {
-      overall:
-        responseText ||
-        "The AI feedback was received, but it could not be structured.",
-      strengths: [],
-      issues: [],
-      nextSteps: [],
-      rawText: responseText,
-      createdAt: new Date().toISOString(),
-    };
-  }
+  const rawIssues = Array.isArray(parsed)
+    ? parsed
+    : safeArray(
+        parsed?.items ||
+          parsed?.feedbackItems ||
+          parsed?.issues
+      );
+
+  const issues = rawIssues
+    .map(normalizeIssue)
+    .filter((issue) => issue.problem)
+    .slice(0, 4);
 
   return {
-    overall: getText(parsed.overall || parsed.summary || ""),
-    strengths: Array.isArray(parsed.strengths)
-      ? parsed.strengths.map(getText).filter(Boolean)
-      : [],
-    issues: Array.isArray(parsed.issues)
-      ? parsed.issues
-          .map(normalizeIssue)
-          .filter((issue) => issue.problem || issue.suggestion)
-          .slice(0, 5)
-      : [],
-    nextSteps: Array.isArray(parsed.nextSteps)
-      ? parsed.nextSteps.map(getText).filter(Boolean)
-      : [],
+    overall: "",
+    strengths: [],
+    items: issues.map((issue) => issue.problem),
+    issues,
+    nextSteps: [],
     rawText: responseText,
     createdAt: new Date().toISOString(),
   };
@@ -152,15 +228,44 @@ function normalizeSavedFeedbackRecord(record) {
       ? record.feedback
       : record;
 
+  const savedItems = safeArray(
+    source.items ||
+      source.feedbackItems ||
+      record.items ||
+      record.feedbackItems
+  )
+    .map(getText)
+    .filter(Boolean)
+    .slice(0, 4);
+
+  const savedIssues = safeArray(
+    source.issues ||
+      record.issues
+  )
+    .map(normalizeIssue)
+    .filter((issue) => issue.problem)
+    .slice(0, 4);
+
+  const issues = savedIssues.length
+    ? savedIssues
+    : savedItems.map(normalizeIssue);
+
+  const items = issues.length
+    ? issues.map((issue) => issue.problem)
+    : savedItems;
+
   return {
-    overall: getText(source.overall || source.summary || source.text || ""),
-    strengths: safeArray(source.strengths).map(getText).filter(Boolean),
-    issues: safeArray(source.issues)
-      .map(normalizeIssue)
-      .filter((issue) => issue.problem || issue.suggestion)
-      .slice(0, 5),
-    nextSteps: safeArray(source.nextSteps).map(getText).filter(Boolean),
+    overall: "",
+    strengths: [],
+    items,
+    issues,
+    nextSteps: [],
     rawText: source.rawText || record.rawText || "",
+    reviewedText:
+      source.reviewedText ||
+      source.draftTextAtRequest ||
+      record.draftTextAtRequest ||
+      "",
     createdAt:
       source.createdAt ||
       record.createdAt ||
@@ -172,7 +277,10 @@ function normalizeSavedFeedbackRecord(record) {
 }
 
 function getLatestSavedAiFeedback(feedbackHistory = []) {
-  const savedAiReview = safeArray(feedbackHistory).find((item) => {
+  const savedAiReview = safeArray(feedbackHistory)
+    .slice()
+    .reverse()
+    .find((item) => {
     const role = String(item?.role || "").toLowerCase();
     const type = String(item?.type || "").toLowerCase();
     const source = String(item?.source || "").toLowerCase();
@@ -188,83 +296,282 @@ function getLatestSavedAiFeedback(feedbackHistory = []) {
   return normalizeSavedFeedbackRecord(savedAiReview);
 }
 
-function buildDraftReviewSystemPrompt({
+function isLargeSingleInsertEvent(event) {
+  return (
+    String(event?.type || "").toLowerCase() === "insert" &&
+    String(event?.insertedText || "").length >= 80 &&
+    !String(event?.removedText || "")
+  );
+}
+
+function isPasteLikeWritingEvent(event) {
+  const type = String(
+    event?.type ||
+      event?.action ||
+      event?.eventGroup ||
+      ""
+  ).toLowerCase();
+
+  return Boolean(
+    type.includes("paste") ||
+      event?.flagged ||
+      isLargeSingleInsertEvent(event)
+  );
+}
+
+function assignmentUsesSingleParagraph(assignment = {}) {
+  const haystack = `${assignment?.title || ""} ${
+    assignment?.brief || ""
+  } ${assignment?.prompt || assignment?.instructions || ""}`.toLowerCase();
+
+  return /\bparagraph\b/.test(haystack) && !/\bparagraphs\b/.test(haystack);
+}
+
+function buildSentenceLineEntries(text = "") {
+  const source = String(text || "");
+  const matches =
+    source.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+
+  let searchFrom = 0;
+
+  return matches
+    .map((sentence, index) => {
+      const clean = sentence.trim();
+      if (!clean) return null;
+
+      const start = source.indexOf(clean, searchFrom);
+      const safeStart = start >= 0 ? start : searchFrom;
+      const end = safeStart + clean.length;
+
+      searchFrom = end;
+
+      return {
+        number: index + 1,
+        text: clean,
+        start: safeStart,
+        end,
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildPhysicalLineEntries(text = "") {
+  const source = String(text || "");
+  const entries = [];
+  let cursor = 0;
+
+  source.split("\n").forEach((line, index) => {
+    const start = cursor;
+    const end = start + line.length;
+
+    entries.push({
+      number: index + 1,
+      text: line,
+      start,
+      end,
+    });
+
+    cursor = end + 1;
+  });
+
+  return entries;
+}
+
+function buildDraftLinesWithPasteMarkers({
+  draftText,
+  assignment,
+  submission,
+}) {
+  const text = String(draftText || "");
+
+  const flaggedRanges = safeArray(submission?.writingEvents)
+    .filter(
+      (event) =>
+        isPasteLikeWritingEvent(event) &&
+        typeof event?.start === "number"
+    )
+    .map((event) => ({
+      start: Number(event.start || 0),
+      end:
+        Number(event.end ?? event.start ?? 0) +
+        String(event.insertedText || "").length,
+    }));
+
+  const entries = assignmentUsesSingleParagraph(assignment)
+    ? buildSentenceLineEntries(text)
+    : buildPhysicalLineEntries(text);
+
+  return entries.map((entry) => ({
+    number: entry.number,
+    text: entry.text,
+    pasted: flaggedRanges.some(
+      (range) =>
+        entry.start < range.end &&
+        entry.end > range.start
+    ),
+  }));
+}
+
+function stringifyLinesWithMarkers(lines = []) {
+  return safeArray(lines)
+    .map(
+      (line) =>
+        `Line ${line.number}${
+          line.pasted ? " [PASTED]" : ""
+        }: ${line.text}`
+    )
+    .join("\n");
+}
+
+function getPreviousFeedbackItems(feedbackHistory = []) {
+  return safeArray(feedbackHistory)
+    .flatMap((entry) =>
+      safeArray(
+        entry?.items ||
+          entry?.feedbackItems ||
+          entry?.feedback?.items
+      )
+    )
+    .map(getText)
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function buildDraftFeedbackRequest({
+  assignment,
+  submission,
+  draftText,
   assignmentTitle,
   assignmentPrompt,
+  assignmentType,
+  languageLevel,
   minWords,
   maxWords,
   rubricText,
 }) {
-  return `
-You are the Praxis Draft Review Coach.
+  const lines = buildDraftLinesWithPasteMarkers({
+    draftText,
+    assignment,
+    submission,
+  }).filter((line) => String(line.text || "").trim());
 
-You review a student's draft and give revision feedback.
+  const previousFeedback = getPreviousFeedbackItems(
+    submission?.feedbackHistory
+  ).join("\n- ");
 
-Important rules:
-- Do not rewrite the full essay.
-- Do not produce a final version for the student.
-- Do not write replacement paragraphs.
-- Give feedback only.
-- Be specific and helpful.
-- When pointing out a problem, quote a short exact excerpt from the student's draft.
-- The excerpt must be copied exactly from the student's draft so the app can highlight it.
-- Keep excerpts short, ideally 3 to 18 words.
-- Focus on clarity, organization, assignment alignment, evidence/details, word count, and grammar/style.
-- Be encouraging but honest.
+  const responseShape = `[
+  {
+    "lineNumber": 2,
+    "excerpt": "exact words copied from the student's draft",
+    "comment": "Explain the problem without rewriting the sentence.",
+    "severity": "major"
+  }
+]`;
 
-Assignment context:
-Title: ${assignmentTitle || "Untitled Assignment"}
+  return {
+    maxTokens: 900,
+    temperature: 0.2,
+    system: `You are a careful writing teacher giving feedback to an ESL student.
 
-Prompt / Instructions:
-${assignmentPrompt || "No assignment prompt provided."}
+Return ONLY a JSON array containing 2 to 4 feedback objects.
 
-Word limits:
-Minimum words: ${minWords || "Not specified"}
-Maximum words: ${maxWords || "Not specified"}
+Every object must contain:
+- lineNumber: the visible line or sentence number.
+- excerpt: an exact 3-to-160 character phrase copied verbatim from the student's draft.
+- comment: a short explanation of what the student should review.
+- severity: "major", "medium", or "minor".
 
-Rubric / Evaluation criteria:
+Rules:
+- The excerpt MUST appear exactly in the submitted draft. Never paraphrase it.
+- Highlight the smallest useful phrase, not an entire paragraph.
+- Use the supplied line numbers. For a one-paragraph task, each numbered item is a sentence.
+- Ignore [PASTED] markers when judging quality, but preserve the numbering.
+- Identify specific, measurable problems in the student's writing.
+- Do NOT rewrite, correct, or complete a sentence for the student.
+- Do NOT provide a replacement thesis, paragraph, or answer.
+- Do NOT repeat an issue already included in previous feedback.
+- Match the assignment type. Do not treat a paragraph task as a multi-paragraph essay.
+- Prefer grammar, punctuation, spelling, logic, missing support, weak topic sentence, unclear wording, or weak ending.
+- On very short drafts, use at most two excerpt-based notes, then give structure or length guidance using an excerpt from the draft.
+- Keep comments simple and direct for a ${languageLevel || "B1"} student.`,
+    prompt: `Assignment title: ${assignmentTitle}
+Assignment type: ${assignmentType}
+Expected length: ${minWords}-${maxWords} words
+Student-facing task:
+${assignmentPrompt}
+
+Rubric summary:
 ${rubricText || "No rubric provided."}
 
-Return a maximum of 5 issues. Choose the most important issues only.
-Keep the JSON concise so the review can finish quickly.
+Draft with visible line numbers:
+${stringifyLinesWithMarkers(lines)}
 
-Return ONLY valid JSON with this exact shape:
-{
-  "overall": "brief overall feedback",
-  "strengths": ["strength 1", "strength 2"],
-  "issues": [
-    {
-      "excerpt": "exact short phrase from the student draft",
-      "problem": "what is wrong or weak",
-      "suggestion": "how the student can improve it without rewriting the essay",
-      "severity": "minor"
-    }
-  ],
-  "nextSteps": ["step 1", "step 2", "step 3"]
+Previous feedback already given (avoid repeating these ideas):
+- ${previousFeedback || "None"}
+
+Return only valid JSON in this shape:
+${responseShape}`,
+  };
 }
 
-Use severity as one of: minor, medium, major.
-`;
+function getEntriesForAssignment(text, assignment = {}) {
+  return assignmentUsesSingleParagraph(assignment)
+    ? buildSentenceLineEntries(text)
+    : buildPhysicalLineEntries(text);
 }
 
-function findHighlightRanges(text, issues) {
+function findIssueRangeInText(text, issue, assignment = {}) {
   const draft = String(text || "");
-  const lowerDraft = draft.toLowerCase();
+  const excerpt = getText(issue?.excerpt);
+
+  if (excerpt.length >= 3) {
+    const start = draft
+      .toLowerCase()
+      .indexOf(excerpt.toLowerCase());
+
+    if (start !== -1) {
+      return {
+        start,
+        end: start + excerpt.length,
+        matchType: "excerpt",
+      };
+    }
+  }
+
+  const lineNumber = Number(issue?.lineNumber);
+
+  if (Number.isFinite(lineNumber) && lineNumber > 0) {
+    const entry = getEntriesForAssignment(
+      draft,
+      assignment
+    ).find((item) => item.number === lineNumber);
+
+    if (entry && entry.end > entry.start) {
+      return {
+        start: entry.start,
+        end: entry.end,
+        matchType: "line",
+      };
+    }
+  }
+
+  return null;
+}
+
+function findHighlightRanges(text, issues, assignment = {}) {
   const ranges = [];
 
-  issues.forEach((issue, issueIndex) => {
-    const excerpt = getText(issue.excerpt);
+  safeArray(issues).forEach((issue, issueIndex) => {
+    const range = findIssueRangeInText(
+      text,
+      issue,
+      assignment
+    );
 
-    if (!excerpt || excerpt.length < 3) return;
-
-    const lowerExcerpt = excerpt.toLowerCase();
-    const start = lowerDraft.indexOf(lowerExcerpt);
-
-    if (start === -1) return;
+    if (!range) return;
 
     ranges.push({
-      start,
-      end: start + excerpt.length,
+      ...range,
       issueIndex,
       issue,
     });
@@ -310,10 +617,9 @@ function buildFeedbackHistoryEntry({
     assignmentId,
     assignmentTitle,
     draftWordCount: wordCount,
-    overall: feedback.overall || "",
-    strengths: safeArray(feedback.strengths),
+    reviewedText: feedback.reviewedText || "",
+    items: safeArray(feedback.items),
     issues: safeArray(feedback.issues),
-    nextSteps: safeArray(feedback.nextSteps),
     rawText: feedback.rawText || "",
   };
 }
@@ -324,7 +630,7 @@ function getIssueTone(issue = {}) {
   if (severity === "major") {
     return {
       mark:
-        "bg-red-100 text-red-950 decoration-red-500 hover:bg-red-200 focus:bg-red-200",
+        "bg-red-200 text-red-950 decoration-red-600 hover:bg-red-300 focus:bg-red-300",
       badge: "border-red-200 bg-red-50 text-red-700",
       border: "border-red-200",
       title: "Major revision",
@@ -334,7 +640,7 @@ function getIssueTone(issue = {}) {
   if (severity === "minor") {
     return {
       mark:
-        "bg-sky-100 text-sky-950 decoration-sky-500 hover:bg-sky-200 focus:bg-sky-200",
+        "bg-sky-200 text-sky-950 decoration-sky-600 hover:bg-sky-300 focus:bg-sky-300",
       badge: "border-sky-200 bg-sky-50 text-sky-700",
       border: "border-sky-200",
       title: "Small improvement",
@@ -343,7 +649,7 @@ function getIssueTone(issue = {}) {
 
   return {
     mark:
-      "bg-amber-100 text-amber-950 decoration-amber-500 hover:bg-amber-200 focus:bg-amber-200",
+      "bg-amber-200 text-amber-950 decoration-amber-600 hover:bg-amber-300 focus:bg-amber-300",
     badge: "border-amber-200 bg-amber-50 text-amber-800",
     border: "border-amber-200",
     title: "Revision note",
@@ -376,13 +682,38 @@ function getFloatingCommentPosition(rect) {
   };
 }
 
-function InlineFeedbackMark({ text, issue, number }) {
+function InlineFeedbackMark({
+  text,
+  issue,
+  number,
+  highlightIndex,
+  active = false,
+  onSelectIssue,
+}) {
   const markRef = useRef(null);
+  const hideTimerRef = useRef(null);
   const [tooltip, setTooltip] = useState(null);
   const tone = getIssueTone(issue);
 
+  useEffect(() => {
+    return () => {
+      if (hideTimerRef.current) {
+        window.clearTimeout(hideTimerRef.current);
+      }
+    };
+  }, []);
+
+  function cancelScheduledHide() {
+    if (hideTimerRef.current) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }
+
   function showTooltip(sticky = false) {
     if (!markRef.current) return;
+
+    cancelScheduledHide();
 
     const rect = markRef.current.getBoundingClientRect();
 
@@ -392,11 +723,25 @@ function InlineFeedbackMark({ text, issue, number }) {
     });
   }
 
-  function hideTooltip() {
-    setTooltip((current) => {
-      if (current?.sticky) return current;
-      return null;
-    });
+  function scheduleHide() {
+    cancelScheduledHide();
+
+    hideTimerRef.current = window.setTimeout(() => {
+      setTooltip((current) => {
+        if (current?.sticky) return current;
+        return null;
+      });
+    }, 180);
+  }
+
+  function openDetails(event) {
+    event.stopPropagation();
+
+    if (typeof onSelectIssue === "function") {
+      onSelectIssue(issue, number, highlightIndex);
+    }
+
+    showTooltip(true);
   }
 
   return (
@@ -404,17 +749,27 @@ function InlineFeedbackMark({ text, issue, number }) {
       <mark
         ref={markRef}
         tabIndex={0}
+        data-feedback-highlight-index={highlightIndex}
+        aria-label={`Feedback note ${number}: ${issue?.problem || "Review this text"}`}
         onMouseEnter={() => showTooltip(false)}
-        onMouseLeave={hideTooltip}
+        onMouseLeave={scheduleHide}
         onFocus={() => showTooltip(false)}
-        onBlur={hideTooltip}
-        onClick={(event) => {
-          event.stopPropagation();
-          showTooltip(true);
+        onBlur={scheduleHide}
+        onClick={openDetails}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            openDetails(event);
+          }
         }}
-        className={`relative cursor-help rounded px-1 font-semibold underline decoration-2 underline-offset-2 outline-none transition-colors focus:ring-4 focus:ring-blue-500/10 ${tone.mark}`}
+        className={`relative cursor-pointer rounded-md px-1.5 py-0.5 font-bold underline decoration-2 underline-offset-2 outline-none transition-all focus:ring-4 focus:ring-blue-500/15 ${
+          active
+            ? "ring-2 ring-blue-500 ring-offset-2"
+            : "hover:-translate-y-[1px]"
+        } ${tone.mark}`}
       >
         {text}
+
         <sup className="ml-0.5 text-[8px] font-mono font-black">
           {number}
         </sup>
@@ -423,20 +778,16 @@ function InlineFeedbackMark({ text, issue, number }) {
       {tooltip &&
         createPortal(
           <div
-            className={`fixed z-[2147483647] rounded-2xl border bg-white p-4 shadow-2xl ${tone.border}`}
+            className={`fixed z-[2147483647] max-h-[min(420px,80vh)] overflow-y-auto rounded-2xl border bg-white p-4 shadow-2xl ${tone.border}`}
             style={{
               left: `${tooltip.left}px`,
               top: `${tooltip.top}px`,
               width: `${tooltip.width}px`,
             }}
-            onMouseEnter={() =>
-              setTooltip((current) =>
-                current ? { ...current } : current
-              )
-            }
+            onMouseEnter={cancelScheduledHide}
             onMouseLeave={() => {
               if (!tooltip.sticky) {
-                setTooltip(null);
+                scheduleHide();
               }
             }}
           >
@@ -458,16 +809,29 @@ function InlineFeedbackMark({ text, issue, number }) {
                   type="button"
                   onClick={() => setTooltip(null)}
                   className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-900"
+                  aria-label="Close feedback details"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
             </div>
 
+            {issue.excerpt && (
+              <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+                  Highlighted text
+                </p>
+
+                <p className="mt-1 text-[11px] font-semibold leading-relaxed text-slate-700">
+                  “{issue.excerpt}”
+                </p>
+              </div>
+            )}
+
             {issue.problem && (
               <div className="mt-3">
                 <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
-                  What to revise
+                  What to review
                 </p>
 
                 <p className="mt-1 text-xs leading-relaxed text-slate-700">
@@ -476,23 +840,12 @@ function InlineFeedbackMark({ text, issue, number }) {
               </div>
             )}
 
-            {issue.suggestion && (
-              <div className="mt-3 rounded-xl bg-blue-50 px-3 py-2.5">
-                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-blue-700">
-                  How to improve
-                </p>
-
-                <p className="mt-1 text-xs leading-relaxed text-blue-900">
-                  {issue.suggestion}
-                </p>
-              </div>
-            )}
-
             {!tooltip.sticky && (
               <p className="mt-3 text-[9px] font-mono text-slate-400">
-                Click the highlight to keep this note open.
+                Click the highlight to keep this feedback open.
               </p>
             )}
+
           </div>,
           document.body
         )}
@@ -500,25 +853,44 @@ function InlineFeedbackMark({ text, issue, number }) {
   );
 }
 
-function HighlightedDraftPreview({ draftText, issues }) {
+function HighlightedDraftPreview({
+  reviewedText,
+  issues,
+  assignment,
+  activeIssueId,
+  onSelectIssue,
+}) {
   const ranges = useMemo(
-    () => findHighlightRanges(draftText, issues),
-    [draftText, issues]
+    () =>
+      findHighlightRanges(
+        reviewedText,
+        issues,
+        assignment
+      ),
+    [reviewedText, issues, assignment]
   );
 
-  if (!draftText) {
+  if (!reviewedText) {
     return (
       <p className="text-xs italic text-slate-400">
-        No draft text available yet.
+        Request feedback to create a highlighted reviewed version.
       </p>
     );
   }
 
   if (ranges.length === 0) {
     return (
-      <p className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700">
-        {draftText}
-      </p>
+      <div>
+        <p className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700">
+          {reviewedText}
+        </p>
+
+        {safeArray(issues).length > 0 && (
+          <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800">
+            The feedback is saved, but this older review did not contain an exact phrase that Praxis could highlight.
+          </p>
+        )}
+      </div>
     );
   }
 
@@ -529,24 +901,31 @@ function HighlightedDraftPreview({ draftText, issues }) {
     if (range.start > cursor) {
       parts.push({
         type: "text",
-        text: draftText.slice(cursor, range.start),
+        text: reviewedText.slice(
+          cursor,
+          range.start
+        ),
       });
     }
 
     parts.push({
       type: "highlight",
-      text: draftText.slice(range.start, range.end),
+      text: reviewedText.slice(
+        range.start,
+        range.end
+      ),
       issue: range.issue,
       number: rangeIndex + 1,
+      highlightIndex: rangeIndex,
     });
 
     cursor = range.end;
   });
 
-  if (cursor < draftText.length) {
+  if (cursor < reviewedText.length) {
     parts.push({
       type: "text",
-      text: draftText.slice(cursor),
+      text: reviewedText.slice(cursor),
     });
   }
 
@@ -560,6 +939,12 @@ function HighlightedDraftPreview({ draftText, issues }) {
               text={part.text}
               issue={part.issue}
               number={part.number}
+              highlightIndex={part.highlightIndex}
+              active={
+                String(activeIssueId || "") ===
+                String(part.issue?.id || "")
+              }
+              onSelectIssue={onSelectIssue}
             />
           );
         }
@@ -571,145 +956,6 @@ function HighlightedDraftPreview({ draftText, issues }) {
         );
       })}
     </p>
-  );
-}
-
-function FeedbackSummaryDrawer({
-  open,
-  onClose,
-  feedback,
-  highlightedCount,
-}) {
-  if (!open || !feedback) return null;
-
-  const strengths = safeArray(feedback.strengths);
-  const nextSteps = safeArray(feedback.nextSteps);
-
-  return createPortal(
-    <div className="fixed inset-0 z-[2147483646]">
-      <button
-        type="button"
-        aria-label="Close feedback summary"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-950/25 backdrop-blur-[2px]"
-      />
-
-      <aside className="absolute inset-y-0 right-0 flex w-[min(92vw,430px)] flex-col border-l border-slate-200 bg-white shadow-2xl">
-        <div className="shrink-0 border-b border-slate-200 px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-blue-700" />
-                <h3 className="font-serif text-lg font-bold text-slate-950">
-                  Feedback Summary
-                </h3>
-              </div>
-
-              <p className="mt-1 text-[11px] text-slate-500">
-                Review the overall guidance without losing your place in the draft.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={onClose}
-              className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-900"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto bg-[#F8FAFC] p-4">
-          <div className="space-y-3">
-            <section className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-emerald-700" />
-                <h4 className="text-xs font-bold text-emerald-950">
-                  Overall Feedback
-                </h4>
-              </div>
-
-              <p className="mt-2 text-xs leading-relaxed text-emerald-900">
-                {feedback.overall || "Your draft was reviewed."}
-              </p>
-            </section>
-
-            {strengths.length > 0 && (
-              <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-xs font-bold text-slate-900">
-                    Strengths
-                  </h4>
-
-                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-mono font-bold text-emerald-700">
-                    {strengths.length}
-                  </span>
-                </div>
-
-                <ul className="mt-3 space-y-2">
-                  {strengths.map((strength, index) => (
-                    <li
-                      key={`drawer-strength-${index}`}
-                      className="flex items-start gap-2 text-xs leading-relaxed text-slate-700"
-                    >
-                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
-                      <span>{strength}</span>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            <section className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-xs font-bold text-amber-950">
-                  Inline Revision Notes
-                </h4>
-
-                <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-mono font-bold text-amber-800">
-                  {highlightedCount}
-                </span>
-              </div>
-
-              <p className="mt-2 text-xs leading-relaxed text-amber-900">
-                Hover over highlighted phrases in the draft to view each comment.
-                Click a highlight to pin its comment open.
-              </p>
-            </section>
-
-            {nextSteps.length > 0 && (
-              <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-xs font-bold text-blue-950">
-                    Next Revision Steps
-                  </h4>
-
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-mono font-bold text-blue-700">
-                    {nextSteps.length}
-                  </span>
-                </div>
-
-                <ol className="mt-3 space-y-2">
-                  {nextSteps.map((step, index) => (
-                    <li
-                      key={`drawer-step-${index}`}
-                      className="flex items-start gap-2 text-xs leading-relaxed text-blue-900"
-                    >
-                      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white text-[9px] font-mono font-black text-blue-700">
-                        {index + 1}
-                      </span>
-                      <span>{step}</span>
-                    </li>
-                  ))}
-                </ol>
-              </section>
-            )}
-          </div>
-        </div>
-      </aside>
-    </div>,
-    document.body
   );
 }
 
@@ -725,7 +971,7 @@ function ReviewProgressBox({ progressMessage }) {
           </p>
 
           <p className="mt-1 text-[11px] leading-relaxed text-blue-700">
-            The coach is checking the full draft and matching exact excerpts.
+            The coach is checking the draft against the assignment and previous feedback.
           </p>
         </div>
       </div>
@@ -738,7 +984,8 @@ export default function Step3AIFeedback() {
     activeAssignment,
     activeSubmission,
     typedText,
-    setStudentStep,
+    setTypedText,
+    goToStudentStep,
     saveDraftProgress,
   } = useStudentWorkspace();
 
@@ -746,19 +993,26 @@ export default function Step3AIFeedback() {
   const [feedback, setFeedback] = useState(null);
   const [reviewError, setReviewError] = useState("");
   const [progressMessage, setProgressMessage] = useState("");
-  const [showSummary, setShowSummary] = useState(false);
+  const [viewMode, setViewMode] = useState("edit");
+  const [selectionMessage, setSelectionMessage] = useState("");
+  const [showGeneralNotes, setShowGeneralNotes] = useState(false);
+  const [activeHighlightIndex, setActiveHighlightIndex] = useState(0);
+  const [selectedIssueId, setSelectedIssueId] = useState("");
+  const editorRef = useRef(null);
+  const feedbackScrollRef = useRef(null);
 
   const assignmentId =
     activeAssignment?.id ||
     activeSubmission?.assignmentId ||
     null;
 
-  const draftText = (
-    typedText ||
-    activeSubmission?.draftText ||
-    activeSubmission?.content ||
-    ""
-  ).trim();
+  const draftText = String(
+    typedText ??
+      activeSubmission?.finalText ??
+      activeSubmission?.draftText ??
+      activeSubmission?.content ??
+      ""
+  );
 
   const wordCount = countWords(draftText);
 
@@ -775,6 +1029,19 @@ export default function Step3AIFeedback() {
     activeSubmission?.instructions ||
     activeSubmission?.description ||
     "No instructions provided.";
+
+  const assignmentType =
+    activeAssignment?.assignmentType ||
+    activeAssignment?.type ||
+    activeSubmission?.assignmentType ||
+    "response";
+
+  const languageLevel =
+    activeAssignment?.languageLevel ||
+    activeAssignment?.studentLevel ||
+    activeAssignment?.level ||
+    activeSubmission?.languageLevel ||
+    "B1";
 
   const minWords =
     activeAssignment?.wordCountMin ??
@@ -797,6 +1064,7 @@ export default function Step3AIFeedback() {
     "";
 
   const aiFeedbackAllowed =
+    activeAssignment?.aiDraftFeedback !== false &&
     activeAssignment?.aiFeedback !== false &&
     activeAssignment?.allowAI !== false;
 
@@ -824,13 +1092,13 @@ export default function Step3AIFeedback() {
       );
     }).length;
 
-  const feedbackChecksRemaining =
-    feedbackLimit > 0
-      ? Math.max(0, feedbackLimit - feedbackChecksUsed)
-      : null;
+  const feedbackChecksRemaining = Math.max(
+    0,
+    feedbackLimit - feedbackChecksUsed
+  );
 
   const feedbackLimitReached =
-    feedbackLimit > 0 && feedbackChecksRemaining <= 0;
+    feedbackChecksUsed >= feedbackLimit;
 
   useEffect(() => {
     const savedFeedback = getLatestSavedAiFeedback(
@@ -838,11 +1106,70 @@ export default function Step3AIFeedback() {
     );
 
     setFeedback(savedFeedback || null);
+    setViewMode("edit");
+    setShowGeneralNotes(false);
+    setActiveHighlightIndex(0);
+    setSelectedIssueId("");
   }, [
     activeSubmission?.id,
     activeSubmission?.lastFeedbackAt,
     activeSubmission?.feedbackHistory,
   ]);
+
+  useEffect(() => {
+    if (!assignmentId) return;
+
+    const liveText = String(
+      typedText ?? ""
+    );
+
+    const savedFinal = String(
+      activeSubmission?.finalText || ""
+    );
+
+    const savedDraft = String(
+      activeSubmission?.draftText || ""
+    );
+
+    /*
+      Central navigation normally initializes Step 3. This is only a
+      compatibility fallback for an assignment opened directly at Step 3.
+      Never replace non-empty live transition text with an older snapshot.
+    */
+    if (
+      !liveText.trim() &&
+      !savedFinal.trim() &&
+      savedDraft.trim()
+    ) {
+      setTypedText(savedDraft);
+
+      saveDraftProgress(assignmentId, {
+        finalText: savedDraft,
+        finalInitializedAt:
+          new Date().toISOString(),
+        finalSourceDraftText:
+          savedDraft,
+      });
+    }
+  }, [
+    assignmentId,
+    activeSubmission?.id,
+  ]);
+
+  function handleFinalTextChange(event) {
+    const nextText = event.target.value;
+
+    setSelectionMessage("");
+    setTypedText(nextText);
+
+    if (assignmentId && typeof saveDraftProgress === "function") {
+      saveDraftProgress(assignmentId, {
+        finalText: nextText,
+        wordCount: countWords(nextText),
+        finalSavedAt: new Date().toISOString(),
+      });
+    }
+  }
 
   function saveFeedbackToProgress(nextFeedback) {
     if (!assignmentId || typeof saveDraftProgress !== "function") {
@@ -859,13 +1186,16 @@ export default function Step3AIFeedback() {
     const previousHistory = safeArray(activeSubmission?.feedbackHistory);
 
     const nextFeedbackHistory = [
-      feedbackEntry,
       ...previousHistory,
-    ].slice(0, 20);
+      {
+        ...feedbackEntry,
+        timestamp: feedbackEntry.createdAt,
+        draftTextAtRequest: draftText,
+        draftWordCountAtRequest: wordCount,
+      },
+    ].slice(-20);
 
     return saveDraftProgress(assignmentId, {
-      draftText,
-      content: draftText,
       finalText: draftText,
       wordCount,
       feedbackHistory: nextFeedbackHistory,
@@ -874,10 +1204,68 @@ export default function Step3AIFeedback() {
     });
   }
 
+  function generateLocalFeedback() {
+    const items = [];
+    const text = String(draftText || "").trim();
+    const sentences =
+      text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [];
+
+    if (!text) {
+      return [
+        "Start with one clear sentence that says what this piece will be about.",
+        "Use one of your saved ideas to help you begin.",
+      ];
+    }
+
+    if (wordCount < Math.max(80, Number(minWords || 0) * 0.4)) {
+      items.push(
+        "Your draft is still short. Add another example or explanation before requesting another detailed check."
+      );
+    }
+
+    const first = String(sentences[0] || "").trim();
+    const last = String(sentences.at(-1) || "").trim();
+
+    if (first && first.split(/\s+/).length < 6) {
+      items.push(
+        `Line 1 ("${first.slice(0, 70)}") may not yet state the main idea clearly enough.`
+      );
+    }
+
+    if (!/\bbecause\b|\bfor example\b|\bfor instance\b|\bsuch as\b/i.test(text)) {
+      items.push(
+        "The draft needs a clearer reason, example, or supporting detail connected to the main idea."
+      );
+    }
+
+    if (last && !/[.!?]["')\]]?$/.test(last)) {
+      items.push(
+        `The final line ("${last.slice(0, 70)}") does not end with clear punctuation.`
+      );
+    }
+
+    if (
+      String(assignmentType).toLowerCase().includes("process") &&
+      !/\bfirst\b|\bnext\b|\bthen\b|\bfinally\b/i.test(text)
+    ) {
+      items.push(
+        "The order of the process is difficult to follow because the draft does not use clear step words."
+      );
+    }
+
+    return (items.length
+      ? items
+      : [
+          "Choose the sentence that feels least clear and check whether its meaning is specific enough for the reader.",
+          "Check that every sentence directly supports the assignment task.",
+        ]
+    ).slice(0, 4);
+  }
+
   async function handleCheckDraft() {
     setReviewError("");
 
-    if (!draftText) {
+    if (!draftText.trim()) {
       setReviewError("Please write your draft before asking for feedback.");
       return;
     }
@@ -912,36 +1300,20 @@ export default function Step3AIFeedback() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          system: buildDraftReviewSystemPrompt({
+        body: JSON.stringify(
+          buildDraftFeedbackRequest({
+            assignment: activeAssignment || {},
+            submission: activeSubmission || {},
+            draftText,
             assignmentTitle,
             assignmentPrompt,
+            assignmentType,
+            languageLevel,
             minWords,
             maxWords,
             rubricText,
-          }),
-          messages: [
-            {
-              role: "user",
-              content: `
-Please review this student draft.
-
-Student draft:
-"""
-${draftText}
-"""
-
-Remember:
-- Do not rewrite the full essay.
-- Give feedback only.
-- Quote exact short excerpts from the draft when identifying issues.
-- Return valid JSON only.
-`,
-            },
-          ],
-          maxTokens: 900,
-          temperature: 0.2,
-        }),
+          })
+        ),
       });
 
       const contentType = response.headers.get("content-type") || "";
@@ -958,20 +1330,45 @@ Remember:
       }
 
       const normalizedFeedback = normalizeFeedback(data);
+
       const feedbackToSave = {
         ...normalizedFeedback,
+        reviewedText: draftText,
         createdAt: new Date().toISOString(),
         saved: true,
       };
 
       setFeedback(feedbackToSave);
+      setViewMode("feedback");
+      setShowGeneralNotes(false);
+      setActiveHighlightIndex(0);
+      setSelectedIssueId("");
       saveFeedbackToProgress(feedbackToSave);
     } catch (error) {
-      console.error("Claude draft review error:", error);
+      const fallbackItems = generateLocalFeedback();
+
+      const fallbackFeedback = {
+        overall: "",
+        strengths: [],
+        items: fallbackItems,
+        issues: fallbackItems.map(normalizeIssue),
+        nextSteps: [],
+        rawText: "",
+        reviewedText: draftText,
+        createdAt: new Date().toISOString(),
+        saved: true,
+        fallback: true,
+      };
+
+      setFeedback(fallbackFeedback);
+      setViewMode("feedback");
+      setShowGeneralNotes(false);
+      setActiveHighlightIndex(0);
+      setSelectedIssueId("");
+      saveFeedbackToProgress(fallbackFeedback);
 
       setReviewError(
-        error?.message ||
-          "The AI feedback could not be generated right now."
+        "AI feedback was unavailable, so Praxis used the original local feedback fallback."
       );
     } finally {
       window.clearInterval(progressTimer);
@@ -981,64 +1378,136 @@ Remember:
   }
 
   function handleContinueToFinalSubmission() {
-    if (assignmentId && typeof saveDraftProgress === "function") {
+    if (
+      assignmentId &&
+      typeof saveDraftProgress === "function"
+    ) {
       saveDraftProgress(assignmentId, {
-        draftText,
-        content: draftText,
         finalText: draftText,
         wordCount,
+        finalSavedAt:
+          new Date().toISOString(),
       });
     }
 
-    setStudentStep(4);
+    goToStudentStep(4, {
+      finalText: draftText,
+      currentText: draftText,
+    });
   }
 
   const issues = safeArray(feedback?.issues);
-  const highlightedCount = findHighlightRanges(draftText, issues).length;
-  const lastFeedbackTime = formatReviewTime(feedback?.createdAt);
+
+  const reviewedText = String(
+    feedback?.reviewedText ||
+      activeSubmission?.feedbackHistory?.at?.(-1)?.draftTextAtRequest ||
+      draftText ||
+      ""
+  );
+
+  const highlightRanges = findHighlightRanges(
+    reviewedText,
+    issues,
+    activeAssignment || {}
+  );
+
+  const highlightedCount = highlightRanges.length;
+
+  const generalIssues = issues.filter(
+    (issue) =>
+      !findIssueRangeInText(
+        reviewedText,
+        issue,
+        activeAssignment || {}
+      )
+  );
+
+  const lastFeedbackTime = formatReviewTime(
+    feedback?.createdAt
+  );
+
+  function jumpToHighlight(index, behavior = "smooth") {
+    if (!highlightedCount) return;
+
+    const nextIndex =
+      (index + highlightedCount) % highlightedCount;
+
+    setActiveHighlightIndex(nextIndex);
+
+    window.requestAnimationFrame(() => {
+      const container = feedbackScrollRef.current;
+      const target = container?.querySelector(
+        `[data-feedback-highlight-index="${nextIndex}"]`
+      );
+
+      if (!container || !target) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+
+      const targetTop =
+        container.scrollTop +
+        (targetRect.top - containerRect.top) -
+        container.clientHeight / 2 +
+        targetRect.height / 2;
+
+      container.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior,
+      });
+    });
+  }
+
+  function handleSelectIssue(issue, number, highlightIndex) {
+    setSelectedIssueId(String(issue?.id || ""));
+    setActiveHighlightIndex(
+      Number.isFinite(Number(highlightIndex))
+        ? Number(highlightIndex)
+        : Math.max(0, Number(number || 1) - 1)
+    );
+  }
+
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      {reviewError && (
-        <div className="shrink-0 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold text-red-700">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>{reviewError}</span>
-          </div>
-        </div>
-      )}
-
-      {isChecking && (
-        <div className="shrink-0">
-          <ReviewProgressBox progressMessage={progressMessage} />
-        </div>
-      )}
-
-      {/* Full-width draft with inline feedback */}
-      <section className="flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="shrink-0 border-b border-slate-100 px-4 py-3">
+    <div className="flex min-h-full flex-col gap-3 pb-1">
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
+            <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-sm font-bold text-slate-900">
-                  Draft with Inline Feedback
+                  Final Revision
                 </h3>
 
-                <span className="rounded-full border border-slate-200 bg-[#F8FAFC] px-2.5 py-1 text-[9px] font-mono font-bold text-slate-700">
+                <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-mono font-bold text-blue-700">
                   {wordCount}
-                  {Number(maxWords) > 0 ? ` / ${maxWords}` : ""} words
+                  {Number(maxWords) > 0
+                    ? ` / ${maxWords}`
+                    : ""}{" "}
+                  words
                 </span>
 
-                {highlightedCount > 0 && (
-                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[9px] font-mono font-bold text-amber-800">
-                    {highlightedCount} revision note
+                {feedback && (
+                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-mono font-bold text-amber-800">
+                    {highlightedCount} highlight
                     {highlightedCount === 1 ? "" : "s"}
                   </span>
                 )}
+
+                <span
+                  className={`rounded-full border px-2 py-0.5 text-[9px] font-mono font-bold ${
+                    feedbackChecksRemaining > 0
+                      ? "border-indigo-100 bg-indigo-50 text-indigo-700"
+                      : "border-red-200 bg-red-50 text-red-700"
+                  }`}
+                >
+                  {feedbackChecksRemaining} check
+                  {feedbackChecksRemaining === 1 ? "" : "s"} left
+                </span>
               </div>
 
-              <p className="mt-1 text-[11px] text-slate-500">
-                Hover over a highlighted phrase to see the comment. Click it to keep the note open.
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                Edit one paragraph, then open AI Feedback to see the same paragraph with highlighted notes.
               </p>
 
               {lastFeedbackTime && (
@@ -1049,40 +1518,43 @@ Remember:
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {feedbackChecksRemaining !== null && (
-                <span
-                  className={`inline-flex items-center rounded-lg border px-2.5 py-1.5 text-[9px] font-mono font-bold ${
-                    feedbackChecksRemaining > 0
-                      ? "border-blue-100 bg-blue-50 text-blue-700"
-                      : "border-red-200 bg-red-50 text-red-700"
-                  }`}
-                >
-                  {feedbackChecksRemaining} check
-                  {feedbackChecksRemaining === 1 ? "" : "s"} left
-                </span>
-              )}
-
-              {feedback && (
+              <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
                 <button
                   type="button"
-                  onClick={() => setShowSummary(true)}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3.5 py-2.5 text-xs font-bold text-blue-700 transition-all hover:bg-blue-100"
+                  onClick={() => { setSelectedIssueId(""); setViewMode("edit"); }}
+                  className={`rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+                    viewMode === "edit"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  }`}
                 >
-                  <Eye className="h-4 w-4" />
-                  View Feedback Summary
+                  Edit Revision
                 </button>
-              )}
+
+                <button
+                  type="button"
+                  onClick={() => setViewMode("feedback")}
+                  disabled={!feedback}
+                  className={`rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+                    viewMode === "feedback"
+                      ? "bg-white text-blue-700 shadow-sm"
+                      : "text-slate-500 hover:text-slate-900"
+                  } disabled:cursor-not-allowed disabled:text-slate-300`}
+                >
+                  AI Feedback
+                </button>
+              </div>
 
               <button
                 type="button"
                 onClick={handleCheckDraft}
                 disabled={
                   isChecking ||
-                  !draftText ||
+                  !draftText.trim() ||
                   !aiFeedbackAllowed ||
                   feedbackLimitReached
                 }
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2.5 text-[11px] font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
               >
                 {isChecking ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1095,41 +1567,208 @@ Remember:
                 {isChecking
                   ? "Checking..."
                   : feedback
-                  ? "Run Again"
+                  ? "Request Another Check"
                   : "Get AI Feedback"}
               </button>
             </div>
           </div>
+
+          {selectionMessage && viewMode === "edit" && (
+            <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold text-blue-800">
+              {selectionMessage}
+            </div>
+          )}
+
+          {reviewError && (
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-700">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{reviewError}</span>
+            </div>
+          )}
+
+          {isChecking && (
+            <div className="mt-3">
+              <ReviewProgressBox
+                progressMessage={progressMessage}
+              />
+            </div>
+          )}
         </div>
 
-        <div className="flex-1 min-h-[430px] overflow-y-auto bg-[#F8FAFC] px-6 py-6">
-          <article className="mx-auto w-full max-w-[980px] rounded-2xl border border-slate-200 bg-white px-7 py-7 shadow-sm">
-            <HighlightedDraftPreview
-              draftText={draftText}
-              issues={issues}
-            />
-          </article>
-        </div>
+        {viewMode === "edit" ? (
+          <textarea
+            ref={editorRef}
+            id="final-editor"
+            aria-label="Final revision editor"
+            value={draftText}
+            onChange={handleFinalTextChange}
+            placeholder="Revise your final paragraph in your own words."
+            className="min-h-[470px] w-full resize-none bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:bg-white"
+          />
+        ) : (
+          <div className="bg-[#F8FAFC] p-3 sm:p-4">
+            <article className="relative mx-auto flex h-[clamp(430px,calc(100vh-485px),610px)] min-h-[430px] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="relative z-10 shrink-0 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-sm font-bold text-slate-900">
+                        Your paragraph with AI highlights
+                      </h4>
+
+                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[9px] font-mono font-bold text-amber-800">
+                        {highlightedCount} highlighted note
+                        {highlightedCount === 1 ? "" : "s"}
+                      </span>
+                    </div>
+
+                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                      Hover over a highlight for a quick explanation. Click it to keep the feedback details open.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedIssueId("");
+                        setViewMode("edit");
+                      }}
+                      className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-bold text-blue-700 transition-all hover:bg-blue-100"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      Back to Edit Revision
+                    </button>
+
+                    {highlightedCount > 0 && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            jumpToHighlight(
+                              activeHighlightIndex - 1
+                            )
+                          }
+                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                          aria-label="Previous highlighted note"
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </button>
+
+                        <span className="min-w-[74px] text-center text-[9px] font-mono font-bold text-slate-500">
+                          Note {activeHighlightIndex + 1} of {highlightedCount}
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            jumpToHighlight(
+                              activeHighlightIndex + 1
+                            )
+                          }
+                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                          aria-label="Next highlighted note"
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {highlightedCount > 0 && (
+                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                    {highlightRanges.map((range, index) => (
+                      <button
+                        key={`highlight-jump-${index}`}
+                        type="button"
+                        onClick={() =>
+                          jumpToHighlight(index)
+                        }
+                        className={`flex h-7 min-w-7 items-center justify-center rounded-full border px-2 text-[9px] font-mono font-black transition-all ${
+                          index === activeHighlightIndex
+                            ? "border-blue-600 bg-blue-600 text-white"
+                            : "border-slate-200 bg-white text-slate-500 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
+                        }`}
+                        aria-label={`Go to highlighted note ${index + 1}`}
+                      >
+                        {index + 1}
+                      </button>
+                    ))}
+
+                    <span className="ml-1 text-[9px] text-slate-400">
+                      Select a number to jump directly to that highlight.
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              <div
+                ref={feedbackScrollRef}
+                className="min-h-0 flex-1 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7 sm:py-6"
+              >
+                <div className="mx-auto max-w-5xl">
+                  <HighlightedDraftPreview
+                    reviewedText={reviewedText}
+                    issues={issues}
+                    assignment={activeAssignment || {}}
+                    activeIssueId={selectedIssueId}
+                    onSelectIssue={handleSelectIssue}
+                  />
+
+                  {generalIssues.length > 0 && (
+                    <div className="mt-7 border-t border-slate-100 pt-4">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setShowGeneralNotes((current) => !current)
+                        }
+                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                      >
+                        {showGeneralNotes ? "Hide" : "View"}{" "}
+                        {generalIssues.length} general note
+                        {generalIssues.length === 1 ? "" : "s"}
+                      </button>
+
+                      {showGeneralNotes && (
+                        <div className="mt-3 space-y-2">
+                          {generalIssues.map((issue, index) => (
+                            <div
+                              key={issue.id || `general-note-${index}`}
+                              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"
+                            >
+                              <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
+                                General note {index + 1}
+                              </p>
+
+                              <p className="mt-1 text-xs leading-relaxed text-amber-950">
+                                {issue.problem}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white to-transparent" />
+            </article>
+          </div>
+        )}
       </section>
 
-      <FeedbackSummaryDrawer
-        open={showSummary}
-        onClose={() => setShowSummary(false)}
-        feedback={feedback}
-        highlightedCount={highlightedCount}
-      />
-
-      {/* Compact bottom navigation */}
       <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[11px] leading-relaxed text-slate-500">
-            Review the inline notes, revise your draft if needed, or continue when ready.
+            Use AI Feedback to locate issues, then return to Edit Revision and improve the paragraph in your own words.
           </p>
 
           <div className="flex items-center justify-between gap-2 sm:justify-end">
             <button
               type="button"
-              onClick={() => setStudentStep(2)}
+              onClick={() => goToStudentStep(2)}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
             >
               <ArrowLeft className="h-4 w-4" />
@@ -1139,9 +1778,9 @@ Remember:
             <button
               type="button"
               onClick={handleContinueToFinalSubmission}
-              disabled={!draftText}
+              disabled={!draftText.trim()}
               className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
-                draftText
+                draftText.trim()
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
                   : "cursor-not-allowed bg-slate-100 text-slate-400"
               }`}
@@ -1153,25 +1792,5 @@ Remember:
         </div>
       </div>
     </div>
-  );
-}
-
-function ToolbarPill({ icon: Icon, label, tone = "slate" }) {
-  const styles = {
-    slate: "border-slate-200 bg-[#F8FAFC] text-slate-700",
-    blue: "border-blue-100 bg-blue-50 text-blue-700",
-    amber: "border-amber-200 bg-amber-50 text-amber-800",
-    red: "border-red-200 bg-red-50 text-red-700",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-mono font-bold ${
-        styles[tone] || styles.slate
-      }`}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
-    </span>
   );
 }

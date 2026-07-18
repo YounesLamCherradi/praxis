@@ -12,6 +12,7 @@ import {
   Search,
   Send,
   Trash2,
+  UserRound,
   Users,
 } from "lucide-react";
 
@@ -75,10 +76,16 @@ function uniqueEmails(emails = []) {
 export default function TeacherCommunication() {
   const { classes = [] } = useTeacherWorkspace();
 
+  const activeCourses = useMemo(
+    () => classes.filter((course) => course?.archived !== true),
+    [classes]
+  );
+
   const [data, setData] = useState(() => getPraxisData());
   const [activeView, setActiveView] = useState("compose");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [recipientMode, setRecipientMode] = useState("all");
+  const [selectedStudentEmail, setSelectedStudentEmail] = useState("");
 
   const [subject, setSubject] = useState("");
   const [messageBody, setMessageBody] = useState("");
@@ -92,21 +99,27 @@ export default function TeacherCommunication() {
     const latestData = getPraxisData();
     setData(latestData);
 
-    if (!selectedCourseId && classes[0]?.id) {
-      setSelectedCourseId(String(classes[0].id));
+    const selectedCourseStillActive = activeCourses.some(
+      (course) => String(course.id) === String(selectedCourseId)
+    );
+
+    if (!selectedCourseStillActive) {
+      setSelectedCourseId(
+        activeCourses.length === 1 ? String(activeCourses[0].id) : ""
+      );
     }
-  }, [classes, selectedCourseId]);
+  }, [activeCourses, selectedCourseId]);
 
   const enrollments = data.enrollments || [];
   const communicationMessages = data.communicationMessages || [];
 
   const selectedCourse = useMemo(() => {
     return (
-      classes.find((course) => String(course.id) === String(selectedCourseId)) ||
-      classes[0] ||
-      null
+      activeCourses.find(
+        (course) => String(course.id) === String(selectedCourseId)
+      ) || null
     );
-  }, [classes, selectedCourseId]);
+  }, [activeCourses, selectedCourseId]);
 
   const courseEnrollments = useMemo(() => {
     if (!selectedCourse) return [];
@@ -125,11 +138,67 @@ export default function TeacherCommunication() {
     });
   }, [enrollments, selectedCourse]);
 
+  const selectableStudents = useMemo(() => {
+    const studentsByEmail = new Map();
+
+    courseEnrollments.forEach((enrollment) => {
+      const email = String(enrollment?.studentEmail || "")
+        .trim()
+        .toLowerCase();
+
+      if (!email || studentsByEmail.has(email)) return;
+
+      studentsByEmail.set(email, {
+        id: enrollment.id || email,
+        studentName: enrollment.studentName || "Student",
+        studentEmail: email,
+      });
+    });
+
+    return Array.from(studentsByEmail.values()).sort((first, second) =>
+      String(first.studentName || first.studentEmail).localeCompare(
+        String(second.studentName || second.studentEmail)
+      )
+    );
+  }, [courseEnrollments]);
+
+  const selectedStudent = useMemo(() => {
+    return (
+      selectableStudents.find(
+        (student) =>
+          String(student.studentEmail) === String(selectedStudentEmail)
+      ) || null
+    );
+  }, [selectableStudents, selectedStudentEmail]);
+
   const bccEmails = useMemo(() => {
     return uniqueEmails(
       courseEnrollments.map((enrollment) => enrollment.studentEmail)
     );
   }, [courseEnrollments]);
+
+  const recipientEmails = useMemo(() => {
+    if (recipientMode === "individual") {
+      return selectedStudent?.studentEmail
+        ? [selectedStudent.studentEmail]
+        : [];
+    }
+
+    return bccEmails;
+  }, [bccEmails, recipientMode, selectedStudent]);
+
+  useEffect(() => {
+    if (recipientMode !== "individual") return;
+
+    const selectedStudentStillEnrolled = selectableStudents.some(
+      (student) =>
+        String(student.studentEmail) === String(selectedStudentEmail)
+    );
+
+    if (!selectedStudentStillEnrolled) {
+      setSelectedStudentEmail("");
+    }
+  }, [recipientMode, selectableStudents, selectedStudentEmail]);
 
   const filteredHistory = useMemo(() => {
     const query = historySearch.toLowerCase().trim();
@@ -140,7 +209,9 @@ export default function TeacherCommunication() {
         message.subject?.toLowerCase().includes(query) ||
         message.body?.toLowerCase().includes(query) ||
         message.courseCode?.toLowerCase().includes(query) ||
-        message.courseName?.toLowerCase().includes(query);
+        message.courseName?.toLowerCase().includes(query) ||
+        message.recipientStudentName?.toLowerCase().includes(query) ||
+        message.recipientStudentEmail?.toLowerCase().includes(query);
 
       return matchesSearch;
     });
@@ -181,7 +252,12 @@ export default function TeacherCommunication() {
       return false;
     }
 
-    if (bccEmails.length === 0) {
+    if (recipientMode === "individual" && !selectedStudent) {
+      setSystemError("Please select an individual student.");
+      return false;
+    }
+
+    if (recipientMode === "all" && bccEmails.length === 0) {
       setSystemError("No enrolled student emails found for this course.");
       return false;
     }
@@ -204,10 +280,12 @@ export default function TeacherCommunication() {
 
     if (!validateComposer()) return;
 
+    const isIndividualRecipient = recipientMode === "individual";
+
     const message = {
       id: `comm_${Date.now()}`,
       type: "email",
-      channel: "BCC Email",
+      channel: isIndividualRecipient ? "Direct Email" : "BCC Email",
       status: "Prepared",
       frontendOnly: true,
 
@@ -216,8 +294,16 @@ export default function TeacherCommunication() {
       courseName: selectedCourse.name,
 
       recipientMode,
-      recipientCount: bccEmails.length,
-      bccEmails,
+      recipientCount: recipientEmails.length,
+      recipientEmails,
+      bccEmails: isIndividualRecipient ? [] : recipientEmails,
+      toEmails: isIndividualRecipient ? recipientEmails : [],
+      recipientStudentName: isIndividualRecipient
+        ? selectedStudent?.studentName || "Student"
+        : "",
+      recipientStudentEmail: isIndividualRecipient
+        ? selectedStudent?.studentEmail || ""
+        : "",
 
       subject: subject.trim(),
       body: messageBody.trim(),
@@ -227,9 +313,13 @@ export default function TeacherCommunication() {
 
     persistCommunicationMessage(
       message,
-      `Email prepared for ${bccEmails.length} student${
-        bccEmails.length === 1 ? "" : "s"
-      } using BCC. Backend sending will be connected later.`
+      isIndividualRecipient
+        ? `Email prepared for ${
+            selectedStudent?.studentName || selectedStudent?.studentEmail
+          }. Backend sending will be connected later.`
+        : `Email prepared for ${recipientEmails.length} student${
+            recipientEmails.length === 1 ? "" : "s"
+          } using BCC. Backend sending will be connected later.`
     );
 
     resetComposer();
@@ -250,10 +340,17 @@ export default function TeacherCommunication() {
       return;
     }
 
+    if (recipientMode === "individual" && !selectedStudent) {
+      setSystemError("Please select an individual student before saving.");
+      return;
+    }
+
+    const isIndividualRecipient = recipientMode === "individual";
+
     const message = {
       id: `draft_${Date.now()}`,
       type: "email",
-      channel: "BCC Email",
+      channel: isIndividualRecipient ? "Direct Email" : "BCC Email",
       status: "Draft",
       frontendOnly: true,
 
@@ -262,8 +359,16 @@ export default function TeacherCommunication() {
       courseName: selectedCourse.name,
 
       recipientMode,
-      recipientCount: bccEmails.length,
-      bccEmails,
+      recipientCount: recipientEmails.length,
+      recipientEmails,
+      bccEmails: isIndividualRecipient ? [] : recipientEmails,
+      toEmails: isIndividualRecipient ? recipientEmails : [],
+      recipientStudentName: isIndividualRecipient
+        ? selectedStudent?.studentName || "Student"
+        : "",
+      recipientStudentEmail: isIndividualRecipient
+        ? selectedStudent?.studentEmail || ""
+        : "",
 
       subject: subject.trim() || "Untitled draft",
       body: messageBody.trim(),
@@ -320,13 +425,11 @@ export default function TeacherCommunication() {
             </div>
 
             <h2 className="text-2xl font-serif font-black text-slate-950">
-              Course Communication Center
+              Messages
             </h2>
 
             <p className="text-xs text-slate-500 font-medium max-w-2xl leading-relaxed">
-              Prepare course announcements, email enrolled students using BCC,
-              save drafts, and review local communication history. This is
-              frontend-only until backend email sending is connected.
+              Communicate with students and manage course announcements.
             </p>
           </div>
 
@@ -345,25 +448,20 @@ export default function TeacherCommunication() {
               onClick={() => setActiveView("history")}
             />
 
-            <CommunicationTab
-              active={activeView === "templates"}
-              label="Templates"
-              icon={FileText}
-              onClick={() => setActiveView("templates")}
-            />
+            
           </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-6">
           <SummaryBox
-            label="Courses"
-            value={classes.length}
+            label="Active Courses"
+            value={activeCourses.length}
             icon={Users}
           />
 
           <SummaryBox
             label="Selected Recipients"
-            value={bccEmails.length}
+            value={recipientEmails.length}
             icon={Mail}
           />
 
@@ -405,12 +503,12 @@ export default function TeacherCommunication() {
                 </h3>
 
                 <p className="text-xs text-slate-500 mt-1">
-                  Write an announcement for enrolled students. Recipients will
-                  be placed in BCC.
+                  Send to all enrolled students through BCC or choose one
+                  individual student.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(220px,0.75fr)_1fr] gap-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
                     Course
@@ -418,18 +516,25 @@ export default function TeacherCommunication() {
 
                   <select
                     value={selectedCourseId}
-                    onChange={(e) => setSelectedCourseId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedCourseId(e.target.value);
+                      setSelectedStudentEmail("");
+                      setSystemError("");
+                      setSystemMessage("");
+                    }}
                     className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                   >
-                    {classes.length === 0 ? (
-                      <option value="">No courses available</option>
-                    ) : (
-                      classes.map((course) => (
-                        <option key={course.id} value={course.id}>
-                          {course.code} — {course.name}
-                        </option>
-                      ))
-                    )}
+                    <option value="">
+                      {activeCourses.length === 0
+                        ? "No active courses"
+                        : "Select a course"}
+                    </option>
+
+                    {activeCourses.map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.code} — {course.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -440,12 +545,67 @@ export default function TeacherCommunication() {
 
                   <select
                     value={recipientMode}
-                    onChange={(e) => setRecipientMode(e.target.value)}
+                    onChange={(e) => {
+                      const nextMode = e.target.value;
+                      setRecipientMode(nextMode);
+
+                      if (nextMode !== "individual") {
+                        setSelectedStudentEmail("");
+                      }
+
+                      setSystemError("");
+                      setSystemMessage("");
+                    }}
                     className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                   >
                     <option value="all">All enrolled students</option>
+                    <option value="individual">Individual student</option>
                   </select>
                 </div>
+
+                {recipientMode === "individual" && (
+                  <div className="space-y-1.5 lg:col-span-2">
+                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                      Student
+                    </label>
+
+                    <div className="relative">
+                      <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+
+                      <select
+                        value={selectedStudentEmail}
+                        onChange={(e) => {
+                          setSelectedStudentEmail(e.target.value);
+                          setSystemError("");
+                          setSystemMessage("");
+                        }}
+                        disabled={!selectedCourse || selectableStudents.length === 0}
+                        className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <option value="">
+                          {!selectedCourse
+                            ? "Select a course first"
+                            : selectableStudents.length === 0
+                            ? "No enrolled students"
+                            : "Select a student"}
+                        </option>
+
+                        {selectableStudents.map((student) => (
+                          <option
+                            key={student.id || student.studentEmail}
+                            value={student.studentEmail}
+                          >
+                            {student.studentName} — {student.studentEmail}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <p className="text-[10px] text-slate-400">
+                      The email will be addressed only to the selected student.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -490,8 +650,13 @@ export default function TeacherCommunication() {
                   className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-600/20"
                 >
                   <Send className="w-4 h-4" />
-                  Prepare Email to {bccEmails.length} Student
-                  {bccEmails.length === 1 ? "" : "s"}
+                  {recipientMode === "individual" && selectedStudent
+                    ? `Prepare Email to ${
+                        selectedStudent.studentName || "Student"
+                      }`
+                    : `Prepare Email to ${recipientEmails.length} Student${
+                        recipientEmails.length === 1 ? "" : "s"
+                      }`}
                 </button>
               </div>
             </div>
@@ -499,46 +664,73 @@ export default function TeacherCommunication() {
             <div className="space-y-4">
               <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
                 <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-blue-600" />
+                  {recipientMode === "individual" ? (
+                    <UserRound className="w-4 h-4 text-blue-600" />
+                  ) : (
+                    <Users className="w-4 h-4 text-blue-600" />
+                  )}
 
                   <h3 className="font-serif text-sm font-bold text-slate-950">
-                    BCC Recipients
+                    {recipientMode === "individual"
+                      ? "Selected Student"
+                      : "BCC Recipients"}
                   </h3>
                 </div>
 
-                <p className="text-3xl font-serif font-black text-slate-950 mt-4">
-                  {bccEmails.length}
-                </p>
+                {recipientMode === "individual" ? (
+                  <>
+                    <p className="mt-4 truncate font-serif text-xl font-black text-slate-950">
+                      {selectedStudent?.studentName || "No student selected"}
+                    </p>
 
-                <p className="text-xs text-slate-500 mt-1">
-                  enrolled student{bccEmails.length === 1 ? "" : "s"} in{" "}
-                  <span className="font-bold text-slate-800">
-                    {selectedCourse?.code || "No course"}
-                  </span>
-                </p>
+                    <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                      {selectedStudent?.studentEmail ||
+                        "Choose an enrolled student from the form."}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-3xl font-serif font-black text-slate-950 mt-4">
+                      {recipientEmails.length}
+                    </p>
+
+                    <p className="text-xs text-slate-500 mt-1">
+                      enrolled student
+                      {recipientEmails.length === 1 ? "" : "s"} in{" "}
+                      <span className="font-bold text-slate-800">
+                        {selectedCourse?.code || "No course"}
+                      </span>
+                    </p>
+                  </>
+                )}
 
                 <button
                   type="button"
+                  disabled={recipientEmails.length === 0}
                   onClick={() => setShowBccList((prev) => !prev)}
-                  className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-xs font-bold text-slate-600 hover:bg-white transition-all"
+                  className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-xs font-bold text-slate-600 hover:bg-white transition-all disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {showBccList ? (
                     <EyeOff className="w-4 h-4" />
                   ) : (
                     <Eye className="w-4 h-4" />
                   )}
-                  {showBccList ? "Hide BCC List" : "Preview BCC List"}
+                  {showBccList
+                    ? "Hide Recipient"
+                    : recipientMode === "individual"
+                    ? "View Recipient"
+                    : "Preview BCC List"}
                 </button>
               </div>
 
               {showBccList && (
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm max-h-72 overflow-y-auto space-y-2">
-                  {bccEmails.length === 0 ? (
+                  {recipientEmails.length === 0 ? (
                     <p className="text-xs text-slate-400">
-                      No enrolled student emails available.
+                      No recipient selected.
                     </p>
                   ) : (
-                    bccEmails.map((email) => (
+                    recipientEmails.map((email) => (
                       <div
                         key={email}
                         className="rounded-lg bg-[#F8FAFC] border border-slate-100 px-3 py-2 text-[10px] font-mono text-slate-600 truncate"
@@ -642,8 +834,19 @@ export default function TeacherCommunication() {
                     </p>
 
                     <p className="text-[11px] text-slate-400 mt-1">
-                      {message.recipientCount} BCC recipient
-                      {message.recipientCount === 1 ? "" : "s"}
+                      {message.recipientMode === "individual"
+                        ? `${
+                            message.recipientStudentName ||
+                            "Individual student"
+                          } · ${
+                            message.recipientStudentEmail ||
+                            message.recipientEmails?.[0] ||
+                            message.toEmails?.[0] ||
+                            "Email unavailable"
+                          }`
+                        : `${message.recipientCount || 0} BCC recipient${
+                            Number(message.recipientCount || 0) === 1 ? "" : "s"
+                          }`}
                     </p>
                   </div>
 

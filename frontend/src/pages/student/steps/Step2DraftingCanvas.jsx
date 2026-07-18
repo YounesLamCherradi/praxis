@@ -4,21 +4,15 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Clock3,
-  Eye,
-  EyeOff,
   FileText,
-  Focus,
   ListChecks,
-  Maximize2,
-  Minimize2,
   Save,
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
+
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
 
 function countWords(text) {
   const clean = String(text || "").trim();
@@ -75,82 +69,192 @@ function normalizePastePolicy(value) {
   return "allow";
 }
 
-function getIntegritySettings(assignment = {}) {
-  const settings =
-    assignment.integritySettings ||
-    assignment.academicIntegrity ||
-    assignment.integrity ||
-    {};
-
+function getIntegritySettings() {
+  /*
+    Restored old Praxis behavior:
+    - Writing replay and paste evidence remain platform process records.
+    - Focus tracking, large-insertion detection, drag/drop blocking,
+      and honor-confirmation settings are not part of the old workflow.
+    - Word limits remain original assignment requirements.
+  */
   return {
-    pastePolicy: normalizePastePolicy(
-      settings.pastePolicy ||
-        assignment.pastePolicy ||
-        "allow"
-    ),
-
-    logPasteAttempts:
-      settings.logPasteAttempts ??
-      settings.logCopyPaste ??
-      assignment.logPasteAttempts ??
-      assignment.logCopyPaste ??
-      true,
-
-    detectLargeInsertions:
-      settings.detectLargeInsertions ??
-      assignment.detectLargeInsertions ??
-      true,
-
-    largeInsertionThreshold: Number(
-      settings.largeInsertionThreshold ??
-        assignment.largeInsertionThreshold ??
-        120
-    ),
-
-    disableDragDrop:
-      settings.disableDragDrop ??
-      assignment.disableDragDrop ??
-      true,
-
-    trackFocusLoss:
-      settings.trackFocusLoss ??
-      assignment.trackFocusLoss ??
-      true,
-
-    requireHonorConfirmation:
-      settings.requireHonorConfirmation ??
-      assignment.requireHonorConfirmation ??
-      false,
-
-    enforceWordCount:
-      settings.enforceWordCount ??
-      assignment.enforceWordCount ??
-      false,
+    pastePolicy: "warn",
+    logPasteAttempts: true,
+    detectLargeInsertions: false,
+    largeInsertionThreshold:
+      Number.POSITIVE_INFINITY,
+    disableDragDrop: false,
+    trackFocusLoss: false,
+    requireHonorConfirmation: false,
+    enforceWordCount: true,
   };
 }
 
-function collectOutlineNotes(outline) {
-  if (!outline) return [];
+function getChatMessageText(message = {}) {
+  return String(
+    message?.content ||
+      message?.text ||
+      message?.message ||
+      ""
+  ).trim();
+}
 
-  const directNotes = safeArray(outline.notes)
-    .map((item) =>
-      typeof item === "string"
-        ? item
-        : item?.text || item?.label || item?.title || ""
-    )
-    .filter(Boolean);
+function getPlanningChatHistory(submission = {}) {
+  const candidates = [
+    submission?.chatHistory,
+    submission?.planningChatMessages,
+    submission?.planningCoachHistory,
+    submission?.planningMessages,
+    submission?.coachChatHistory,
+    submission?.planningChat,
+  ];
 
-  const sectionNotes = safeArray(outline.sections).flatMap((section) =>
-    safeArray(section?.items)
-      .map((item) =>
-        typeof item === "string"
-          ? item
-          : item?.text || item?.label || item?.title || ""
-      )
-      .filter(Boolean)
+  return (
+    candidates.find(
+      (candidate) =>
+        Array.isArray(candidate) &&
+        candidate.some((message) => getChatMessageText(message))
+    ) || []
   );
+}
 
-  return Array.from(new Set([...directNotes, ...sectionNotes])).slice(0, 14);
+function chatTranscript(messages = []) {
+  return safeArray(messages)
+    .filter((message) => getChatMessageText(message))
+    .map((message) => {
+      const role =
+        String(message?.role || "").toLowerCase() === "assistant"
+          ? "Coach"
+          : "Student";
+
+      return `${role}: ${getChatMessageText(message)}`;
+    })
+    .join("\n");
+}
+
+function buildOutlinePayload(assignment, messages) {
+  return {
+    maxTokens: 500,
+    temperature: 0.3,
+    system: `You are a writing coach helping a ${
+      assignment?.languageLevel ||
+      assignment?.level ||
+      "B1"
+    } student turn their planning chat into a working outline.
+
+Return ONLY JSON in this shape:
+{ "sections": [ { "heading": "short label", "points": ["idea", "idea"] } ] }
+
+Rules:
+- Use ONLY the student's own ideas from the chat. Do not invent new content.
+- IDEAS ONLY: short note-form phrases, never full sentences the student could copy into their essay.
+- 2 to 5 sections, each with 1 to 4 short bullet points.
+- Keep each bullet under about 10 words and use simple language.`,
+    prompt: `Assignment title: ${assignment?.title || "Untitled Assignment"}
+Assignment type: ${assignment?.assignmentType || assignment?.type || "response"}
+Student-facing task:
+${
+  assignment?.prompt ||
+  assignment?.instructions ||
+  assignment?.description ||
+  "No instructions provided."
+}
+
+Planning chat between the student and the coach:
+${chatTranscript(messages)}
+
+Build the student's outline as JSON now.`,
+  };
+}
+
+function stripCodeFence(value) {
+  let text = String(value || "").trim();
+
+  if (text.startsWith("```")) {
+    const firstBreak = text.indexOf("\n");
+    text = firstBreak >= 0 ? text.slice(firstBreak + 1) : text.slice(3);
+  }
+
+  if (text.endsWith("```")) {
+    text = text.slice(0, -3);
+  }
+
+  return text.trim();
+}
+
+function firstBraceIndex(text) {
+  const square = text.indexOf("[");
+  const curly = text.indexOf("{");
+
+  if (square < 0) return curly;
+  if (curly < 0) return square;
+
+  return Math.min(square, curly);
+}
+
+function safeJsonParse(raw) {
+  const text = stripCodeFence(raw);
+
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Fall through to extracting the first JSON-looking span.
+  }
+
+  const start = firstBraceIndex(text);
+  const end = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
+
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function parseOutlineSections(raw) {
+  const data = safeJsonParse(raw);
+
+  if (!data) return [];
+
+  const list = Array.isArray(data)
+    ? data
+    : safeArray(data.sections);
+
+  return list
+    .map((section) => ({
+      heading: String(section?.heading || "").trim(),
+      points: safeArray(section?.points)
+        .map((point) => String(point || "").trim())
+        .filter(Boolean),
+    }))
+    .filter(
+      (section) =>
+        section.heading ||
+        section.points.length
+    )
+    .slice(0, 6);
+}
+
+function sectionsToOutlineText(sections) {
+  return sections
+    .map((section) => {
+      const heading = section.heading || "Ideas";
+      const bullets = section.points
+        .map((point) => `  • ${point}`)
+        .join("\n");
+
+      return bullets
+        ? `${heading}
+${bullets}`
+        : heading;
+    })
+    .join("\n\n");
 }
 
 function formatSavedTime(value) {
@@ -187,15 +291,21 @@ export default function Step2DraftingCanvas() {
     studentProfile,
     typedText,
     setTypedText,
-    setStudentStep,
+    goToStudentStep,
     saveDraftProgress,
   } = useStudentWorkspace();
 
   const [integrityWarning, setIntegrityWarning] = useState("");
   const [integrityLogs, setIntegrityLogs] = useState([]);
-  const [honorAccepted, setHonorAccepted] = useState(false);
-  const [showPlanningNotes, setShowPlanningNotes] = useState(false);
-  const [focusMode, setFocusMode] = useState(false);
+  const [chatOutlineText, setChatOutlineText] = useState(
+    activeSubmission?.outline?.chatOutlineText || ""
+  );
+  const [chatOutlineMeta, setChatOutlineMeta] = useState(
+    activeSubmission?.outline?.chatOutlineMeta || {}
+  );
+  const [outlineStatus, setOutlineStatus] = useState("");
+  const [outlineBusy, setOutlineBusy] = useState(false);
+  const [outlineRebuildPrompt, setOutlineRebuildPrompt] = useState(false);
   const [saveStatus, setSaveStatus] = useState("saved");
   const [lastSavedAt, setLastSavedAt] = useState(
     activeSubmission?.updatedAt ||
@@ -207,6 +317,9 @@ export default function Step2DraftingCanvas() {
   const lastValueRef = useRef("");
   const warningTimerRef = useRef(null);
   const autosaveTimerRef = useRef(null);
+  const outlineAutosaveTimerRef = useRef(null);
+  const autoOutlineAttemptedRef = useRef(false);
+  const outlineRequestInFlightRef = useRef(false);
   const writingEventsRef = useRef(
     safeArray(activeSubmission?.writingEvents)
   );
@@ -268,25 +381,40 @@ export default function Step2DraftingCanvas() {
   const aboveMaxWords = maxWords > 0 && wordCount > maxWords;
   const wordCountIssue = belowMinWords || aboveMaxWords;
 
-  const honorBlocked =
-    settings.requireHonorConfirmation && !honorAccepted;
+  const canReview = hasDraftText;
 
-  const wordCountBlocked =
-    settings.enforceWordCount && wordCountIssue;
-
-  const canReview =
-    hasDraftText && !honorBlocked && !wordCountBlocked;
-
-  const outline =
+  const existingOutline =
     activeSubmission?.outline ||
     activeSubmission?.planningOutline ||
-    assignment?.outline ||
-    null;
+    {};
 
-  const planningNotes = useMemo(
-    () => collectOutlineNotes(outline),
-    [outline]
+  const planningChatHistory = useMemo(
+    () => getPlanningChatHistory(activeSubmission || {}),
+    [
+      activeSubmission?.id,
+      activeSubmission?.chatHistory,
+      activeSubmission?.planningChatMessages,
+      activeSubmission?.planningCoachHistory,
+      activeSubmission?.planningMessages,
+      activeSubmission?.coachChatHistory,
+      activeSubmission?.planningChat,
+    ]
   );
+
+  const autoOutlineFromChat = Boolean(
+    assignment?.autoOutlineFromChat ??
+      assignment?.autoBuildOutlineFromCoach ??
+      assignment?.generateOutlineFromCoach ??
+      assignment?.aiSupportSettings?.autoOutlineFromChat ??
+      assignment?.aiSupportSettings?.autoBuildOutlineFromCoach ??
+      false
+  );
+
+  const showChatOutline =
+    autoOutlineFromChat &&
+    planningChatHistory.filter((message) =>
+      getChatMessageText(message)
+    ).length >= 2;
 
   const wordProgress = getWordProgress(wordCount, minWords, maxWords);
 
@@ -339,10 +467,6 @@ export default function Step2DraftingCanvas() {
   }, [integrityLogKey]);
 
   useEffect(() => {
-    setHonorAccepted(!settings.requireHonorConfirmation);
-  }, [assignmentId, settings.requireHonorConfirmation]);
-
-  useEffect(() => {
     return () => {
       if (warningTimerRef.current) {
         clearTimeout(warningTimerRef.current);
@@ -351,8 +475,233 @@ export default function Step2DraftingCanvas() {
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current);
       }
+
+      if (outlineAutosaveTimerRef.current) {
+        clearTimeout(outlineAutosaveTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    const savedOutline =
+      activeSubmission?.outline ||
+      activeSubmission?.planningOutline ||
+      {};
+
+    setChatOutlineText(
+      String(savedOutline?.chatOutlineText || "")
+    );
+    setChatOutlineMeta(
+      savedOutline?.chatOutlineMeta || {}
+    );
+    setOutlineStatus("");
+    setOutlineBusy(false);
+    autoOutlineAttemptedRef.current = false;
+    outlineRequestInFlightRef.current = false;
+  }, [activeSubmission?.id, assignmentId]);
+
+  function persistChatOutline(nextText, nextMeta) {
+    if (
+      !assignmentId ||
+      typeof saveDraftProgress !== "function"
+    ) {
+      return;
+    }
+
+    saveDraftProgress(assignmentId, {
+      outline: {
+        ...existingOutline,
+        chatOutlineText: nextText,
+        chatOutlineMeta: nextMeta,
+      },
+    });
+  }
+
+  function scheduleOutlineAutosave(nextText, nextMeta) {
+    if (outlineAutosaveTimerRef.current) {
+      clearTimeout(outlineAutosaveTimerRef.current);
+    }
+
+    outlineAutosaveTimerRef.current = setTimeout(() => {
+      persistChatOutline(nextText, nextMeta);
+    }, 350);
+  }
+
+  async function requestOutlineGeneration(
+    payload,
+    { retries = 1, timeoutMs = 22000 } = {}
+  ) {
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(
+        () => controller.abort(),
+        timeoutMs
+      );
+
+      try {
+        const response = await fetch(AI_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+
+        const contentType =
+          response.headers.get("content-type") || "";
+
+        const data = contentType.includes("application/json")
+          ? await response.json()
+          : { error: await response.text() };
+
+        if (!response.ok) {
+          throw new Error(
+            data?.error ||
+              `Outline request failed with status ${response.status}.`
+          );
+        }
+
+        return data;
+      } catch (error) {
+        lastError =
+          error?.name === "AbortError"
+            ? new Error("Outline request timed out.")
+            : error;
+
+        if (attempt >= retries) {
+          throw lastError;
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    }
+
+    throw lastError || new Error("Outline request failed.");
+  }
+
+  async function generateOutline({
+    force = false,
+    confirmed = false,
+  } = {}) {
+    if (
+      !showChatOutline ||
+      outlineRequestInFlightRef.current
+    ) {
+      return;
+    }
+
+    const currentText = String(chatOutlineText || "");
+    const currentMeta = chatOutlineMeta || {};
+
+    if (
+      force &&
+      currentText.trim() &&
+      currentMeta.edited &&
+      !confirmed
+    ) {
+      setOutlineRebuildPrompt(true);
+      return;
+    }
+
+    setOutlineRebuildPrompt(false);
+
+    outlineRequestInFlightRef.current = true;
+    setOutlineBusy(true);
+    setOutlineStatus("Building your outline from the chat…");
+
+    try {
+      const result = await requestOutlineGeneration(
+        buildOutlinePayload(
+          assignment,
+          planningChatHistory
+        ),
+        {
+          retries: 1,
+          timeoutMs: 22000,
+        }
+      );
+
+      const sections = parseOutlineSections(
+        result?.response ||
+          result?.reply ||
+          result?.message ||
+          ""
+      );
+
+      const nextMeta = {
+        ...currentMeta,
+        autoAttempted: true,
+        generatedAt: new Date().toISOString(),
+        sourceChatLen: planningChatHistory.length,
+        edited: false,
+      };
+
+      setChatOutlineMeta(nextMeta);
+
+      if (sections.length) {
+        const nextText =
+          sectionsToOutlineText(sections);
+
+        setChatOutlineText(nextText);
+        persistChatOutline(nextText, nextMeta);
+        setOutlineStatus(
+          "Outline ready — edit it freely before you write."
+        );
+      } else {
+        persistChatOutline(currentText, nextMeta);
+        setOutlineStatus(
+          "Couldn't turn the chat into an outline. You can write your own below."
+        );
+      }
+    } catch (error) {
+      const nextMeta = {
+        ...currentMeta,
+        autoAttempted: true,
+      };
+
+      setChatOutlineMeta(nextMeta);
+      persistChatOutline(currentText, nextMeta);
+      setOutlineStatus(
+        "Outline help is unavailable right now. Try “Rebuild from chat”, or write your own."
+      );
+    } finally {
+      outlineRequestInFlightRef.current = false;
+      setOutlineBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (
+      !showChatOutline ||
+      chatOutlineText.trim() ||
+      outlineBusy ||
+      autoOutlineAttemptedRef.current
+    ) {
+      return;
+    }
+
+    autoOutlineAttemptedRef.current = true;
+    generateOutline({ force: false });
+  }, [
+    assignmentId,
+    showChatOutline,
+    planningChatHistory.length,
+  ]);
+
+  function handleOutlineChange(event) {
+    const nextText = event.target.value;
+    const nextMeta = {
+      ...chatOutlineMeta,
+      edited: true,
+    };
+
+    setChatOutlineText(nextText);
+    setChatOutlineMeta(nextMeta);
+    scheduleOutlineAutosave(nextText, nextMeta);
+  }
 
   function showWarning(message) {
     setIntegrityWarning(message);
@@ -509,7 +858,6 @@ export default function Step2DraftingCanvas() {
       saveDraftProgress(assignmentId, {
         draftText: nextValue,
         content: nextValue,
-        finalText: nextValue,
         wordCount: countWords(nextValue),
         draftSavedAt: savedAt,
         lastSavedAt: savedAt,
@@ -542,7 +890,6 @@ export default function Step2DraftingCanvas() {
         setLastSavedAt(savedAt);
         setSaveStatus("saved");
       } catch (error) {
-        console.error("Draft autosave failed:", error);
         setSaveStatus("error");
       }
     }, 700);
@@ -780,29 +1127,46 @@ export default function Step2DraftingCanvas() {
   }
 
   function handleReviewDraft() {
-    if (!canReview) {
-      if (honorBlocked) {
-        showWarning(
-          "Please confirm the academic integrity statement before continuing."
-        );
-      } else if (wordCountBlocked) {
-        showWarning(
-          "Please respect the word count requirement before continuing."
-        );
-      } else if (!hasDraftText) {
-        showWarning("Write part of your draft before continuing.");
-      }
-
+    if (!hasDraftText) {
+      showWarning(
+        "Write part of your draft before continuing."
+      );
       return;
     }
 
-    setStudentStep(3);
+    /*
+      Do not wait for the 700 ms debounce when the student moves on.
+      Save the exact editor value now, then pass that same value through
+      central navigation.
+    */
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    const savedAt =
+      persistWritingEvidence(draftValue);
+
+    setLastSavedAt(savedAt);
+    setSaveStatus("saved");
+
+    const moved = goToStudentStep(3, {
+      draftText: draftValue,
+      currentText: draftValue,
+    });
+
+    if (!moved) {
+      setSaveStatus("error");
+      showWarning(
+        "Praxis could not open Feedback. Your latest draft is saved. Close this message and try again."
+      );
+    }
   }
 
   return (
-    <div className="h-full min-h-0 flex flex-col gap-3">
+    <div className="flex min-h-full flex-col gap-3 pb-2">
       {/* Compact progress and editor toolbar */}
-      <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="sticky top-0 z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -844,46 +1208,28 @@ export default function Step2DraftingCanvas() {
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {planningNotes.length > 0 && !focusMode && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setShowPlanningNotes((current) => !current)
-                  }
-                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 transition-all"
-                >
-                  <ListChecks className="w-4 h-4" />
-                  Planning Notes
-                  <span className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-mono">
-                    {planningNotes.length}
-                  </span>
-                  {showPlanningNotes ? (
-                    <ChevronRight className="w-3.5 h-3.5 rotate-180" />
-                  ) : (
-                    <ChevronLeft className="w-3.5 h-3.5 rotate-180" />
-                  )}
-                </button>
-              )}
+            <div className="flex w-full shrink-0 items-center gap-2 lg:w-auto lg:justify-end">
+              <button
+                type="button"
+                onClick={() => goToStudentStep(1)}
+                className="hidden items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-500 transition-all hover:bg-blue-50 hover:text-blue-700 sm:inline-flex"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back to Coach
+              </button>
 
               <button
                 type="button"
-                onClick={() => {
-                  setFocusMode((current) => !current);
-                  setShowPlanningNotes(false);
-                }}
-                className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-[11px] font-bold transition-all ${
-                  focusMode
-                    ? "border-blue-300 bg-blue-600 text-white shadow-sm shadow-blue-600/20"
-                    : "border-slate-200 bg-[#F8FAFC] text-slate-700 hover:bg-white hover:border-blue-200 hover:text-blue-700"
+                onClick={handleReviewDraft}
+                disabled={!canReview}
+                className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all sm:w-auto ${
+                  canReview
+                    ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700"
+                    : "cursor-not-allowed bg-slate-100 text-slate-400"
                 }`}
               >
-                {focusMode ? (
-                  <Minimize2 className="w-4 h-4" />
-                ) : (
-                  <Maximize2 className="w-4 h-4" />
-                )}
-                {focusMode ? "Exit Focus" : "Focus Mode"}
+                Continue to Feedback
+                <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -915,22 +1261,72 @@ export default function Step2DraftingCanvas() {
         </div>
       )}
 
-      {/* Editor is the primary workspace */}
+      {outlineRebuildPrompt && (
+        <div className="shrink-0 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950 shadow-sm">
+          <div className="flex items-start gap-3">
+            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+
+            <div className="min-w-0 flex-1">
+              <h3 className="text-xs font-bold">
+                Replace your edited outline?
+              </h3>
+
+              <p className="mt-1 text-[11px] leading-relaxed text-blue-800">
+                Rebuilding will replace the outline notes you edited. Your draft text will not be changed.
+              </p>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    generateOutline({
+                      force: true,
+                      confirmed: true,
+                    })
+                  }
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-[11px] font-bold text-white hover:bg-blue-700"
+                >
+                  Rebuild Outline
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setOutlineRebuildPrompt(false)}
+                  className="rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
+                >
+                  Keep My Outline
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* The real writing editor stays primary on the left.
+          When the automatic outline is enabled, the editable outline
+          appears as a right-side planning panel on desktop. */}
       <div
-        className={`grid flex-1 min-h-0 gap-3 ${
-          !focusMode && showPlanningNotes && planningNotes.length > 0
-            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_285px]"
+        className={`grid w-full shrink-0 gap-3 ${
+          showChatOutline
+            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_420px]"
             : "grid-cols-1"
         }`}
       >
-        <section className="min-h-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm flex flex-col">
+        <section className="flex h-[clamp(420px,46vh,520px)] min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="shrink-0 flex flex-col gap-2 border-b border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                Draft Editor
-              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Draft Editor
+                </h2>
+
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-wider text-blue-700">
+                  Write your essay here
+                </span>
+              </div>
+
               <p className="mt-0.5 text-[11px] text-slate-500">
-                Write freely first, then revise before requesting feedback.
+                Type the full assignment below. The outline is only for planning notes.
               </p>
             </div>
 
@@ -954,6 +1350,7 @@ export default function Step2DraftingCanvas() {
           </div>
 
           <textarea
+            aria-label="Draft editor — write your essay here"
             value={draftValue}
             onChange={handleDraftChange}
             onPaste={handlePaste}
@@ -963,155 +1360,90 @@ export default function Step2DraftingCanvas() {
             onDrop={handleDrop}
             onBlur={handleBlur}
             placeholder="Start with your main idea. Use your planning notes to guide your own writing."
-            className={`flex-1 min-h-[390px] w-full resize-none bg-[#F8FAFC] px-5 py-5 text-sm leading-7 text-slate-800 placeholder-slate-400 outline-none transition-all focus:bg-white ${
-              focusMode ? "min-h-[520px]" : ""
-            }`}
+            className="min-h-0 w-full flex-1 resize-none overflow-y-auto bg-[#F8FAFC] px-5 py-5 text-sm leading-7 text-slate-800 placeholder-slate-400 outline-none transition-all focus:bg-white"
           />
 
-          {settings.requireHonorConfirmation && (
-            <label className="shrink-0 flex cursor-pointer items-start gap-2 border-t border-slate-100 bg-white px-4 py-3 text-[11px] text-slate-600">
-              <input
-                type="checkbox"
-                checked={honorAccepted}
-                onChange={(event) =>
-                  setHonorAccepted(event.target.checked)
-                }
-                className="mt-0.5"
-              />
-
-              <span>
-                I understand that my writing activity may be reviewed
-                according to this assignment’s integrity settings.
-              </span>
-            </label>
-          )}
         </section>
 
-        {!focusMode &&
-          showPlanningNotes &&
-          planningNotes.length > 0 && (
-            <aside className="min-h-0 overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/60 shadow-sm flex flex-col">
-              <div className="shrink-0 border-b border-emerald-200 bg-white/80 px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-emerald-700" />
-                      <h3 className="text-xs font-bold text-slate-900">
-                        Planning Notes
-                      </h3>
-                    </div>
-
-                    <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                      Notes only. Write the final sentences yourself.
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowPlanningNotes(false)}
-                    className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-100"
-                    title="Hide planning notes"
-                  >
-                    <EyeOff className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex-1 min-h-0 overflow-y-auto p-3">
-                <div className="space-y-2">
-                  {planningNotes.map((note, index) => (
-                    <div
-                      key={`${note}-${index}`}
-                      className="rounded-xl border border-emerald-100 bg-white px-3 py-2.5"
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[9px] font-mono font-black text-emerald-700">
-                          {index + 1}
-                        </span>
-
-                        <p className="text-[11px] leading-relaxed text-slate-700">
-                          {note}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </aside>
-          )}
+        {showChatOutline && (
+          <ChatOutlinePanel
+            value={chatOutlineText}
+            status={outlineStatus}
+            busy={outlineBusy}
+            onChange={handleOutlineChange}
+            onRebuild={() =>
+              generateOutline({ force: true })
+            }
+          />
+        )}
       </div>
 
-      {/* Compact validation and navigation */}
-      <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            {belowMinWords && (
-              <StatusMessage
-                tone="amber"
-                icon={AlertTriangle}
-                text={`Add ${minWords - wordCount} more words to reach the minimum.`}
-              />
-            )}
-
-            {aboveMaxWords && (
-              <StatusMessage
-                tone="red"
-                icon={AlertTriangle}
-                text={`Remove ${wordCount - maxWords} words to meet the maximum.`}
-              />
-            )}
-
-            {!wordCountIssue && hasDraftText && (
-              <StatusMessage
-                tone="green"
-                icon={CheckCircle2}
-                text="Draft length is within the required range."
-              />
-            )}
-
-            {!hasDraftText && (
-              <StatusMessage
-                tone="slate"
-                icon={Clock3}
-                text="Start writing to unlock the feedback step."
-              />
-            )}
-
-            {integrityLogs.length > 0 && (
-              <span className="text-[10px] font-mono text-slate-400">
-                {integrityLogs.length} writing event
-                {integrityLogs.length === 1 ? "" : "s"} recorded
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between gap-2 sm:justify-end">
-            <button
-              type="button"
-              onClick={() => setStudentStep(1)}
-              className="inline-flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-slate-500 transition-all hover:bg-blue-50 hover:text-blue-700"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Back to Coach
-            </button>
-
-            <button
-              type="button"
-              onClick={handleReviewDraft}
-              disabled={!canReview}
-              className={`inline-flex items-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
-                canReview
-                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
-                  : "cursor-not-allowed bg-slate-100 text-slate-400"
-              }`}
-            >
-              Continue to Feedback
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </div>
     </div>
+  );
+}
+
+function ChatOutlinePanel({
+  value,
+  status,
+  busy,
+  onChange,
+  onRebuild,
+}) {
+  return (
+    <section className="flex h-[clamp(420px,46vh,520px)] min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-blue-200 border-t-4 border-t-blue-600 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <ListChecks className="h-4 w-4 text-blue-700" />
+            <h2 className="text-xs font-black uppercase tracking-wider text-slate-900">
+              Outline — short notes only
+            </h2>
+          </div>
+
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+            This is a planning outline, not your essay. Edit the notes before you write.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onRebuild}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Sparkles
+            className={`h-3.5 w-3.5 ${
+              busy ? "animate-pulse" : ""
+            }`}
+          />
+          {busy
+            ? "Building..."
+            : "Rebuild from chat"}
+        </button>
+      </div>
+
+      <p
+        className={`mt-3 min-h-[1rem] text-[11px] ${
+          busy
+            ? "font-semibold text-blue-700"
+            : "text-slate-500"
+        }`}
+      >
+        {status}
+      </p>
+
+      <textarea
+        aria-label="Editable planning outline"
+        value={value}
+        onChange={onChange}
+        placeholder="Short bullet notes only. Write your full essay in the Draft Editor."
+        className="mt-2 min-h-0 w-full flex-1 resize-none overflow-y-auto rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-sm leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+      />
+
+      <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+        Keep this to short notes and bullets. Write the full assignment in the Draft Editor on the left.
+      </p>
+    </section>
   );
 }
 

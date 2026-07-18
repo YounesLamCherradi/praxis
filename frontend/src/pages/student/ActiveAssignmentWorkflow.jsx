@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useEffect } from "react";
 import { useStudentWorkspace } from "../../contexts/StudentWorkspaceContext";
 
 import Step1IdeasChat from "./steps/Step1IdeasChat";
@@ -8,71 +7,100 @@ import Step3AIFeedback from "./steps/Step3AIFeedback";
 import Step4FinalSummary from "./steps/Step4FinalSummary";
 
 import {
-  AlertCircle,
+  AlertTriangle,
   ArrowLeft,
-  Bot,
-  Calendar,
+  ArrowRight,
   CheckCircle2,
-  ChevronDown,
   ClipboardCheck,
   FileText,
-  ListChecks,
+  Info,
   Lock,
   MessageSquare,
   PenTool,
-  PlayCircle,
-  ShieldCheck,
-  Timer,
+  X,
 } from "lucide-react";
 
 function countWords(text = "") {
   const clean = String(text || "").trim();
-  if (!clean) return 0;
+
+  if (!clean) {
+    return 0;
+  }
+
   return clean.split(/\s+/).filter(Boolean).length;
 }
 
 function boolValue(defaultValue, ...values) {
   for (const value of values) {
-    if (value !== undefined && value !== null) return Boolean(value);
-  }
-  return defaultValue;
-}
-
-function numberValue(defaultValue, ...values) {
-  for (const value of values) {
-    if (value !== undefined && value !== null && value !== "") {
-      const numeric = Number(value);
-      if (!Number.isNaN(numeric)) return numeric;
+    if (value !== undefined && value !== null) {
+      return Boolean(value);
     }
   }
+
   return defaultValue;
 }
 
-function safeArray(value) {
-  return Array.isArray(value) ? value : [];
+function normalizeWorkflowStatus(status) {
+  const value = String(
+    status || "draft"
+  )
+    .trim()
+    .toLowerCase();
+
+  if (value === "in progress") {
+    return "draft";
+  }
+
+  return value;
 }
 
-function isDraftLikeStatus(status) {
-  const value = String(status || "draft").toLowerCase();
-  return value === "draft" || value === "in progress" || value === "reopened";
+function hasWorkflowSubmissionEvidence(submission = {}) {
+  const submittedText = String(
+    submission.submittedText ||
+      submission.submissionText ||
+      submission.response ||
+      submission.essay ||
+      ""
+  ).trim();
+
+  return Boolean(
+    submission.submittedAt ||
+      submission.resubmittedAt ||
+      submittedText
+  );
 }
 
-function formatPastePolicy(value) {
-  const clean = String(value || "warn").toLowerCase();
-  if (clean === "allow") return "Allowed";
-  if (clean === "block") return "Blocked";
-  return "Warning shown";
-}
+function isWorkflowSubmissionLocked(submission = {}) {
+  if (!submission) return false;
 
-function formatDueDate(value) {
-  if (!value) return "Not set";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleDateString([], {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  const status = normalizeWorkflowStatus(
+    submission.status
+  );
+
+  if (
+    status === "draft" ||
+    status === "reopened" ||
+    status === "missing"
+  ) {
+    return false;
+  }
+
+  if (status === "late") {
+    return hasWorkflowSubmissionEvidence(
+      submission
+    );
+  }
+
+  if (
+    status === "submitted" ||
+    status === "graded"
+  ) {
+    return true;
+  }
+
+  return hasWorkflowSubmissionEvidence(
+    submission
+  );
 }
 
 function limitToSentences(text, maxSentences = 3) {
@@ -80,9 +108,13 @@ function limitToSentences(text, maxSentences = 3) {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (!clean) return "No instructions provided.";
+  if (!clean) {
+    return "No instructions provided.";
+  }
 
-  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
+  const sentences =
+    clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
+
   return sentences
     .map((sentence) => sentence.trim())
     .filter(Boolean)
@@ -95,28 +127,34 @@ export default function ActiveAssignmentWorkflow() {
     activeAssignment,
     activeSubmission,
     studentStep,
-    setStudentStep,
-    setSelectedAssignmentId,
+    goToStudentStep,
+    studentWorkflowNotice,
+    showStudentWorkflowNotice,
+    clearStudentWorkflowNotice,
+    confirmStudentWorkflowNotice,
+    closeStudentAssignment,
     typedText = "",
   } = useStudentWorkspace();
 
-  const [coachNowTick, setCoachNowTick] = useState(Date.now());
-
   const assignment = activeAssignment || {};
   const aiSupportSettings = assignment.aiSupportSettings || {};
-  const integritySettings = assignment.integritySettings || {};
 
   const currentDraft =
-    typedText ||
-    activeSubmission?.draftText ||
-    activeSubmission?.content ||
-    activeSubmission?.finalText ||
-    "";
+    studentStep >= 3
+      ? String(
+          typedText ??
+            activeSubmission?.finalText ??
+            activeSubmission?.draftText ??
+            ""
+        )
+      : String(
+          typedText ??
+            activeSubmission?.draftText ??
+            activeSubmission?.content ??
+            ""
+        );
 
   const wordCount = countWords(currentDraft);
-
-  const minWords = numberValue(0, assignment.wordCountMin, assignment.minWords);
-  const maxWords = numberValue(0, assignment.wordCountMax, assignment.maxWords);
 
   const aiIdeasCoach = boolValue(
     true,
@@ -125,42 +163,6 @@ export default function ActiveAssignmentWorkflow() {
     assignment.allowAI
   );
 
-  const coachTimeLimitMinutes = numberValue(
-    15,
-    aiSupportSettings.coachTimeLimitMinutes,
-    assignment.coachTimeLimitMinutes,
-    assignment.aiCoachTimeLimitMinutes
-  );
-
-  const coachTotalSeconds = Math.max(60, coachTimeLimitMinutes * 60);
-  const savedCoachUsedSeconds = Number(activeSubmission?.coachTimeUsedSeconds || 0);
-  const coachStartedAt = activeSubmission?.coachStartedAt || null;
-  const coachEndedAt = activeSubmission?.coachEndedAt || null;
-  const liveCoachSeconds =
-    coachStartedAt && !coachEndedAt
-      ? Math.max(
-          0,
-          Math.floor(
-            (coachNowTick - new Date(coachStartedAt).getTime()) / 1000
-          )
-        )
-      : 0;
-  const coachUsedSeconds = Math.min(
-    coachTotalSeconds,
-    savedCoachUsedSeconds + liveCoachSeconds
-  );
-  const coachRemainingSeconds = Math.max(0, coachTotalSeconds - coachUsedSeconds);
-  const coachTimeExpired = aiIdeasCoach && coachRemainingSeconds <= 0;
-
-  const autoBuildOutlineFromCoach =
-    aiIdeasCoach &&
-    boolValue(
-      true,
-      aiSupportSettings.autoBuildOutlineFromCoach,
-      assignment.autoBuildOutlineFromCoach,
-      assignment.generateOutlineFromCoach
-    );
-
   const aiDraftFeedback = boolValue(
     true,
     aiSupportSettings.aiDraftFeedback,
@@ -168,118 +170,49 @@ export default function ActiveAssignmentWorkflow() {
     assignment.aiFeedback
   );
 
-  const writingPlayback = boolValue(
-    true,
-    aiSupportSettings.writingPlayback,
-    assignment.writingPlayback,
-    assignment.saveWritingPlayback
-  );
-
-  const feedbackRequestLimit = numberValue(
-    aiDraftFeedback ? 2 : 0,
-    assignment.feedbackRequestLimit,
-    assignment.feedbackChecks,
-    aiSupportSettings.feedbackRequestLimit,
-    aiSupportSettings.feedbackChecks
-  );
-
-  const pastePolicy = integritySettings.pastePolicy || assignment.pastePolicy || "warn";
-
-  const logPasteAttempts = boolValue(
-    true,
-    integritySettings.logPasteAttempts,
-    assignment.logPasteAttempts
-  );
-
-  const trackFocusLoss = boolValue(
-    true,
-    integritySettings.trackFocusLoss,
-    assignment.trackFocusLoss
-  );
-
-  const requireHonorConfirmation = boolValue(
-    true,
-    integritySettings.requireHonorConfirmation,
-    assignment.requireHonorConfirmation
-  );
-
-  const enforceWordCount = boolValue(
-    true,
-    integritySettings.enforceWordCount,
-    assignment.enforceWordCount
-  );
-
-  const submissionStatus = activeSubmission?.status || "draft";
   const assignmentLocked =
-    Boolean(activeSubmission) && !isDraftLikeStatus(submissionStatus);
-
-  const belowMinimum = enforceWordCount && minWords > 0 && wordCount < minWords;
-  const aboveMaximum = enforceWordCount && maxWords > 0 && wordCount > maxWords;
-  const wordCountIsValid = !enforceWordCount || (!belowMinimum && !aboveMaximum);
-
-  const rubricCriteria = useMemo(() => {
-    if (safeArray(assignment.rubricCriteria).length > 0) {
-      return safeArray(assignment.rubricCriteria);
-    }
-    if (safeArray(assignment.rubricSchema?.criteria).length > 0) {
-      return safeArray(assignment.rubricSchema.criteria);
-    }
-    return safeArray(assignment.rubric);
-  }, [assignment]);
-
-  const feedbackChecksUsed =
-    Number(activeSubmission?.feedbackChecksUsed || 0) ||
-    safeArray(activeSubmission?.feedbackHistory).filter((item) => {
-      const role = String(item?.role || "").toLowerCase();
-      const type = String(item?.type || "").toLowerCase();
-      const source = String(item?.source || "").toLowerCase();
-      return (
-        role === "ai" ||
-        type === "draft_review" ||
-        type === "ai_feedback" ||
-        source === "claude" ||
-        source === "ai"
-      );
-    }).length;
-
-  const feedbackChecksRemaining = Math.max(
-    0,
-    feedbackRequestLimit - feedbackChecksUsed
-  );
+    isWorkflowSubmissionLocked(
+      activeSubmission
+    );
 
   useEffect(() => {
-    if (!aiIdeasCoach || !coachStartedAt || coachEndedAt) return undefined;
+    if (!activeAssignment) {
+      return;
+    }
 
-    const intervalId = window.setInterval(() => {
-      setCoachNowTick(Date.now());
-    }, 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, [aiIdeasCoach, coachStartedAt, coachEndedAt]);
-
-  useEffect(() => {
-    if (!activeAssignment) return;
     if (!aiIdeasCoach && studentStep === 1) {
-      setStudentStep(2);
+      goToStudentStep(2, {
+        force: true,
+      });
       return;
     }
+
     if (!aiDraftFeedback && studentStep === 3) {
-      setStudentStep(4);
+      goToStudentStep(4, {
+        force: true,
+        skipFeedbackPrompt: true,
+      });
       return;
     }
+
     if (assignmentLocked && studentStep !== 4) {
-      setStudentStep(4);
+      goToStudentStep(4, {
+        force: true,
+        skipFeedbackPrompt: true,
+      });
     }
   }, [
-    activeAssignment,
+    activeAssignment?.id,
     aiIdeasCoach,
     aiDraftFeedback,
     assignmentLocked,
     studentStep,
-    setStudentStep,
+    goToStudentStep,
   ]);
 
-  if (!activeAssignment) return null;
+  if (!activeAssignment) {
+    return null;
+  }
 
   const steps = [
     {
@@ -300,7 +233,10 @@ export default function ActiveAssignmentWorkflow() {
       id: 3,
       label: "Feedback",
       icon: ClipboardCheck,
-      enabled: aiDraftFeedback && wordCount > 0 && !assignmentLocked,
+      enabled:
+        aiDraftFeedback &&
+        wordCount > 0 &&
+        !assignmentLocked,
       disabledReason: !aiDraftFeedback
         ? "AI draft feedback is disabled."
         : "Write a draft before requesting feedback.",
@@ -314,15 +250,17 @@ export default function ActiveAssignmentWorkflow() {
     },
   ];
 
-  const activeStepMeta = steps.find((step) => step.id === studentStep) || steps[0];
+  const activeStepMeta =
+    steps.find((step) => step.id === studentStep) || steps[0];
+
   const activeStepTitle =
     studentStep === 1
       ? "Step 1: Plan Your Ideas"
       : studentStep === 2
-      ? "Step 2: Draft Your Response"
-      : studentStep === 3
-      ? "Step 3: Review AI Feedback"
-      : "Step 4: Submit Assignment";
+        ? "Step 2: Draft Your Response"
+        : studentStep === 3
+          ? "Step 3: Review AI Feedback"
+          : "Step 4: Submit Assignment";
 
   function renderActiveStepComponent() {
     if (assignmentLocked && studentStep !== 4) {
@@ -344,8 +282,10 @@ export default function ActiveAssignmentWorkflow() {
             message="Your teacher disabled brainstorming chat for this assignment. Continue directly to drafting."
           />
         );
+
       case 2:
         return <Step2DraftingCanvas />;
+
       case 3:
         return aiDraftFeedback ? (
           <Step3AIFeedback />
@@ -355,43 +295,52 @@ export default function ActiveAssignmentWorkflow() {
             message="Your teacher disabled AI draft feedback for this assignment. Continue to final submission."
           />
         );
+
       case 4:
         return <Step4FinalSummary />;
+
       default:
-        return aiIdeasCoach ? <Step1IdeasChat /> : <Step2DraftingCanvas />;
+        return aiIdeasCoach ? (
+          <Step1IdeasChat />
+        ) : (
+          <Step2DraftingCanvas />
+        );
     }
   }
 
   const conciseInstructions = limitToSentences(
-    assignment.prompt || assignment.instructions || assignment.description,
+    assignment.prompt ||
+      assignment.instructions ||
+      assignment.description,
     3
   );
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row gap-4 min-h-0">
-      <div className="flex-1 bg-white border border-slate-200 rounded-2xl p-4 flex flex-col min-h-[620px] lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)] shadow-sm">
-        <div className="border-b border-slate-100 pb-3 mb-4 flex flex-col xl:flex-row xl:items-center gap-3 shrink-0">
+    <div className="flex-1 min-h-0">
+      <div className="flex min-h-[620px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)]">
+        <div className="mb-4 flex shrink-0 flex-col gap-3 border-b border-slate-100 pb-3 xl:flex-row xl:items-center">
           <button
             type="button"
-            onClick={() => setSelectedAssignmentId(null)}
-            className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-700 transition-colors group w-fit shrink-0"
+            onClick={closeStudentAssignment}
+            className="group inline-flex w-fit shrink-0 items-center gap-1.5 text-xs font-bold text-slate-500 transition-colors hover:text-blue-700"
           >
-            <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+            <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
             Back to Dashboard
           </button>
 
-          <div className="hidden xl:block h-5 w-px bg-slate-200" />
+          <div className="hidden h-5 w-px bg-slate-200 xl:block" />
 
           <div className="min-w-0 xl:flex-1">
-            <p className="text-[9px] font-mono font-black uppercase tracking-wider text-blue-700">
+            <p className="font-mono text-[9px] font-black uppercase tracking-wider text-blue-700">
               {activeStepMeta?.label || "Assignment Step"}
             </p>
-            <h2 className="font-serif text-sm font-bold text-slate-900 truncate">
+
+            <h2 className="truncate font-serif text-sm font-bold text-slate-900">
               {activeStepTitle}
             </h2>
           </div>
 
-          <div className="flex items-center gap-1 bg-[#F8FAFC] border border-slate-200 p-1 rounded-xl overflow-x-auto max-w-full xl:ml-auto">
+          <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-[#F8FAFC] p-1 xl:ml-auto">
             {steps.map((step) => {
               const Icon = step.icon;
               const isActive = studentStep === step.id;
@@ -401,18 +350,29 @@ export default function ActiveAssignmentWorkflow() {
                 <button
                   key={step.id}
                   type="button"
-                  disabled={isLocked}
-                  title={isLocked ? step.disabledReason : step.label}
-                  onClick={() => setStudentStep(step.id)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                  aria-disabled={isLocked}
+                  title={step.label}
+                  onClick={() => {
+                    if (isLocked) {
+                      showStudentWorkflowNotice?.({
+                        tone: "amber",
+                        title: `${step.label} is not available yet`,
+                        message: step.disabledReason,
+                      });
+                      return;
+                    }
+
+                    goToStudentStep(step.id);
+                  }}
+                  className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
                     isActive
                       ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                       : isLocked
-                      ? "text-slate-300 cursor-not-allowed"
-                      : "text-slate-500 hover:text-blue-700 hover:bg-blue-50"
+                        ? "cursor-pointer text-slate-300 hover:bg-amber-50 hover:text-amber-700"
+                        : "text-slate-500 hover:bg-blue-50 hover:text-blue-700"
                   }`}
                 >
-                  <Icon className="w-3.5 h-3.5" />
+                  <Icon className="h-3.5 w-3.5" />
                   <span>{step.label}</span>
                 </button>
               );
@@ -421,9 +381,11 @@ export default function ActiveAssignmentWorkflow() {
         </div>
 
         {assignmentLocked && (
-          <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800 flex items-start gap-2 shrink-0">
-            <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
-            <p>This assignment has been submitted. Editing is locked.</p>
+          <div className="mb-3 flex shrink-0 items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <p>
+              This assignment has been submitted. Editing is locked.
+            </p>
           </div>
         )}
 
@@ -432,199 +394,157 @@ export default function ActiveAssignmentWorkflow() {
           instructions={conciseInstructions}
         />
 
-        <div className="flex-1 overflow-y-auto min-h-0 flex flex-col pr-1 mt-3">
-          {renderActiveStepComponent()}
-        </div>
-      </div>
-
-      <aside className="w-full lg:w-72 xl:w-80 shrink-0 lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-190px)] lg:overflow-y-auto space-y-3 pr-1">
-        {aiIdeasCoach && studentStep === 1 && (
-          <CoachTimeCard
-            remainingSeconds={coachRemainingSeconds}
-            expired={coachTimeExpired}
-            limitMinutes={coachTimeLimitMinutes}
+        {studentWorkflowNotice && (
+          <WorkflowNoticeBox
+            notice={studentWorkflowNotice}
+            onPrimary={confirmStudentWorkflowNotice}
+            onSecondary={clearStudentWorkflowNotice}
+            onClose={clearStudentWorkflowNotice}
           />
         )}
 
-        <ExpandablePanel
-          icon={Bot}
-          title="AI Support"
-          description="Student tools enabled by your teacher."
-        >
-          <SupportRow
-            icon={MessageSquare}
-            label="Ideas coach"
-            value={aiIdeasCoach ? "Active" : "Off"}
-            active={aiIdeasCoach}
-            description="Use the AI coach during brainstorming to understand the task, organize ideas, and plan before drafting."
-          />
-          <SupportRow
-            icon={Timer}
-            label="Coach limit"
-            value={aiIdeasCoach ? `${coachTimeLimitMinutes} min` : "Disabled"}
-            active={aiIdeasCoach}
-            description={`The brainstorming coach is available for up to ${coachTimeLimitMinutes} minutes for this assignment.`}
-          />
-          <SupportRow
-            icon={ListChecks}
-            label="Auto-outline"
-            value={autoBuildOutlineFromCoach ? "Active" : "Off"}
-            active={autoBuildOutlineFromCoach}
-            description="Creates a notes-only outline from the planning conversation before the student begins drafting."
-          />
-          <SupportRow
-            icon={ClipboardCheck}
-            label="Draft feedback"
-            value={aiDraftFeedback ? "Active" : "Off"}
-            active={aiDraftFeedback}
-            description="Allows the student to request AI feedback on the current draft without having the AI write the assignment."
-          />
-          <SupportRow
-            icon={PlayCircle}
-            label="Writing playback"
-            value={writingPlayback ? "Active" : "Off"}
-            active={writingPlayback}
-            description="Records writing events and draft development so the teacher can review how the text changed over time."
-          />
-          <SupportRow
-            icon={CheckCircle2}
-            label="Feedback checks"
-            value={`${feedbackChecksRemaining}/${feedbackRequestLimit} left`}
-            active={aiDraftFeedback && feedbackRequestLimit > 0}
-            description={`The student has ${feedbackChecksRemaining} of ${feedbackRequestLimit} AI feedback checks remaining.`}
-          />
-        </ExpandablePanel>
-
-        <ExpandablePanel
-          icon={ShieldCheck}
-          title="Integrity Rules"
-          description="Writing and submission rules."
-          defaultOpen
-        >
-          <SupportRow
-            icon={ShieldCheck}
-            label="Paste policy"
-            value={formatPastePolicy(pastePolicy)}
-            active={pastePolicy !== "allow"}
-            description="Controls what happens when pasted text is detected. Depending on the teacher setting, pasting may be allowed, warned, or blocked."
-          />
-          <SupportRow
-            icon={ClipboardCheck}
-            label="Paste logging"
-            value={logPasteAttempts ? "Active" : "Off"}
-            active={logPasteAttempts}
-            description="Records paste attempts for teacher review. A logged paste is a review signal, not an automatic grade penalty."
-          />
-          <SupportRow
-            icon={AlertCircle}
-            label="Focus tracking"
-            value={trackFocusLoss ? "Active" : "Off"}
-            active={trackFocusLoss}
-            description="Records when the assignment window loses focus or the student switches to another tab."
-          />
-          <SupportRow
-            icon={CheckCircle2}
-            label="Honor statement"
-            value={requireHonorConfirmation ? "Required" : "Not required"}
-            active={requireHonorConfirmation}
-            description="Requires the student to confirm the academic honor statement before final submission."
-          />
-          <SupportRow
-            icon={FileText}
-            label="Word-count rule"
-            value={enforceWordCount ? "Active" : "Off"}
-            active={enforceWordCount}
-            description="Checks the draft against the required minimum and maximum word limits before submission."
-          />
-          <SupportRow
-            icon={Lock}
-            label="After submission"
-            value="Locked"
-            active
-            description="After final submission, the assignment becomes read-only unless the teacher reopens it."
-          />
-        </ExpandablePanel>
-
-        <AssignmentInfoGrid
-          minWords={minWords}
-          maxWords={maxWords}
-          wordCount={wordCount}
-          dueDate={assignment.dueDate}
-          wordCountIsValid={wordCountIsValid}
-          belowMinimum={belowMinimum}
-          aboveMaximum={aboveMaximum}
-        />
-      </aside>
+        <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1">
+          {renderActiveStepComponent()}
+        </div>
+      </div>
     </div>
   );
 }
 
-function formatCompactSeconds(totalSeconds) {
-  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
-  const minutes = Math.floor(safeSeconds / 60);
-  const seconds = safeSeconds % 60;
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
+function WorkflowNoticeBox({
+  notice,
+  onPrimary,
+  onSecondary,
+  onClose,
+}) {
+  const tone = notice?.tone || "amber";
 
-function CoachTimeCard({ remainingSeconds, expired, limitMinutes }) {
+  const toneMap = {
+    amber: {
+      shell: "border-amber-200 bg-amber-50 text-amber-950",
+      icon: "border-amber-200 bg-white text-amber-700",
+      primary: "bg-amber-600 text-white hover:bg-amber-700",
+      Icon: AlertTriangle,
+    },
+    red: {
+      shell: "border-red-200 bg-red-50 text-red-950",
+      icon: "border-red-200 bg-white text-red-700",
+      primary: "bg-red-600 text-white hover:bg-red-700",
+      Icon: AlertTriangle,
+    },
+    blue: {
+      shell: "border-blue-200 bg-blue-50 text-blue-950",
+      icon: "border-blue-200 bg-white text-blue-700",
+      primary: "bg-blue-600 text-white hover:bg-blue-700",
+      Icon: Info,
+    },
+    green: {
+      shell: "border-emerald-200 bg-emerald-50 text-emerald-950",
+      icon: "border-emerald-200 bg-white text-emerald-700",
+      primary: "bg-emerald-600 text-white hover:bg-emerald-700",
+      Icon: CheckCircle2,
+    },
+  };
+
+  const style = toneMap[tone] || toneMap.amber;
+  const Icon = style.Icon;
+  const hasPendingAction = Boolean(
+    notice?.pendingTransition &&
+      notice?.primaryLabel
+  );
+
   return (
-    <section
-      className={`rounded-2xl border p-4 shadow-sm ${
-        expired
-          ? "border-amber-200 bg-amber-50"
-          : "border-blue-200 bg-blue-50/70"
-      }`}
+    <div
+      role="status"
+      aria-live="polite"
+      className={`mt-3 shrink-0 rounded-2xl border px-4 py-3 shadow-sm ${style.shell}`}
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className={`w-9 h-9 rounded-xl border bg-white flex items-center justify-center shrink-0 ${
-              expired
-                ? "border-amber-200 text-amber-700"
-                : "border-blue-200 text-blue-700"
-            }`}
-          >
-            <Timer className="w-4 h-4" />
-          </span>
+      <div className="flex items-start gap-3">
+        <span
+          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${style.icon}`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
 
-          <div className="min-w-0">
-            <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-500">
-              Ideas Coach Time
-            </p>
-            <p
-              className={`text-lg font-mono font-black ${
-                expired ? "text-amber-800" : "text-blue-800"
-              }`}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-xs font-bold">
+                {notice?.title || "Check this step"}
+              </h3>
+
+              <p className="mt-1 text-[11px] leading-relaxed opacity-90">
+                {notice?.message}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-current/15 bg-white/60 opacity-60 transition-all hover:opacity-100"
+              aria-label="Close message"
             >
-              {expired ? "Finished" : `${formatCompactSeconds(remainingSeconds)} left`}
-            </p>
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {hasPendingAction ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onPrimary}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-[11px] font-bold transition-all ${style.primary}`}
+                >
+                  {notice.primaryLabel}
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onSecondary}
+                  className="rounded-xl border border-current/15 bg-white px-4 py-2.5 text-[11px] font-bold opacity-80 transition-all hover:opacity-100"
+                >
+                  {notice.secondaryLabel || "Stay here"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-current/15 bg-white px-4 py-2.5 text-[11px] font-bold opacity-80 transition-all hover:opacity-100"
+              >
+                Got it
+              </button>
+            )}
           </div>
         </div>
-
-        <span className="rounded-lg border border-white/80 bg-white px-2 py-1 text-[9px] font-mono font-bold uppercase text-slate-500">
-          {limitMinutes} min
-        </span>
       </div>
-    </section>
+    </div>
   );
 }
 
-function CompactAssignmentBrief({ title, instructions }) {
+function CompactAssignmentBrief({
+  title,
+  instructions,
+}) {
   return (
     <section className="shrink-0 rounded-2xl border border-blue-100 bg-blue-50/40 px-4 py-3">
       <div className="flex items-start gap-3">
-        <span className="w-9 h-9 rounded-xl bg-white border border-blue-100 text-blue-700 flex items-center justify-center shrink-0 shadow-sm">
-          <FileText className="w-4 h-4" />
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-700 shadow-sm">
+          <FileText className="h-4 w-4" />
         </span>
 
         <div className="min-w-0">
-          <p className="text-[9px] font-mono font-black uppercase tracking-widest text-blue-700">
+          <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
             Assignment Brief
           </p>
-          <h2 className="font-serif text-base font-bold text-slate-950 mt-1">
+
+          <h2 className="mt-1 font-serif text-base font-bold text-slate-950">
             {title || "Untitled Assignment"}
           </h2>
-          <p className="text-[11px] leading-relaxed text-slate-600 mt-1.5">
+
+          <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
             {instructions}
           </p>
         </div>
@@ -633,212 +553,24 @@ function CompactAssignmentBrief({ title, instructions }) {
   );
 }
 
-function AssignmentInfoGrid({
-  minWords,
-  maxWords,
-  wordCount,
-  dueDate,
-  wordCountIsValid,
-  belowMinimum,
-  aboveMaximum,
+function LockedStepMessage({
+  title,
+  message,
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-center gap-2 mb-3">
-        <Calendar className="w-3.5 h-3.5 text-blue-700" />
-        <p className="text-[10px] font-mono font-black uppercase tracking-wider text-slate-700">
-          Assignment Info
-        </p>
-      </div>
-
-      <div className="grid grid-cols-3 gap-2">
-        <InfoMetric
-          label="Required"
-          value={maxWords > 0 ? `${minWords || 0}–${maxWords}` : `${minWords || 0}+`}
-          suffix="words"
-        />
-        <InfoMetric
-          label="Current"
-          value={wordCount}
-          suffix="words"
-          tone={wordCountIsValid ? "blue" : "amber"}
-        />
-        <InfoMetric
-          label="Due"
-          value={formatDueDate(dueDate)}
-          compact
-        />
-      </div>
-
-      {(belowMinimum || aboveMaximum) && (
-        <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] leading-relaxed text-amber-800 flex items-start gap-2">
-          <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-          <span>
-            {belowMinimum
-              ? `At least ${minWords} words are required before submission.`
-              : `The draft is above the ${maxWords}-word maximum.`}
-          </span>
-        </div>
-      )}
-    </section>
-  );
-}
-
-function InfoMetric({ label, value, suffix, tone = "slate", compact = false }) {
-  const tones = {
-    slate: "border-slate-200 bg-[#F8FAFC] text-slate-800",
-    blue: "border-blue-200 bg-blue-50 text-blue-800",
-    amber: "border-amber-200 bg-amber-50 text-amber-800",
-  };
-
-  return (
-    <div className={`rounded-xl border p-2.5 min-w-0 ${tones[tone] || tones.slate}`}>
-      <p className="text-[8px] font-mono font-black uppercase tracking-wider opacity-55">
-        {label}
-      </p>
-      <p className={`${compact ? "text-[10px]" : "text-xs"} font-mono font-black mt-1 truncate`} title={String(value)}>
-        {value}
-      </p>
-      {suffix && <p className="text-[8px] mt-0.5 opacity-60">{suffix}</p>}
-    </div>
-  );
-}
-
-function ExpandablePanel({ icon: Icon, title, description, children, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
-
-  return (
-    <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className="w-full flex items-center justify-between gap-3 p-4 text-left hover:bg-[#F8FAFC] transition-colors"
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <span className="w-8 h-8 rounded-xl bg-blue-50 border border-blue-100 text-blue-700 flex items-center justify-center shrink-0">
-            <Icon className="w-4 h-4" />
-          </span>
-          <div className="min-w-0">
-            <p className="text-xs font-black uppercase tracking-wider text-slate-900">{title}</p>
-            <p className="text-[10px] text-slate-500 mt-0.5 truncate">{description}</p>
-          </div>
-        </div>
-        <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${open ? "rotate-180" : ""}`} />
-      </button>
-
-      {open && <div className="border-t border-slate-100 p-4 space-y-2">{children}</div>}
-    </div>
-  );
-}
-
-function SupportRow({ icon: Icon, label, value, active, description }) {
-  const rowRef = useRef(null);
-  const [tooltip, setTooltip] = useState(null);
-
-  function showTooltip() {
-    if (!description || !rowRef.current) return;
-
-    const rect = rowRef.current.getBoundingClientRect();
-    const width = Math.min(320, window.innerWidth - 24);
-    const margin = 12;
-
-    let left = rect.left - width - 10;
-    let top = rect.top;
-
-    if (left < margin) {
-      left = Math.min(
-        window.innerWidth - width - margin,
-        rect.right + 10
-      );
-    }
-
-    if (top + 140 > window.innerHeight - margin) {
-      top = Math.max(margin, window.innerHeight - 140 - margin);
-    }
-
-    setTooltip({ left, top, width });
-  }
-
-  function hideTooltip() {
-    setTooltip(null);
-  }
-
-  return (
-    <>
-      <div
-        ref={rowRef}
-        tabIndex={0}
-        onMouseEnter={showTooltip}
-        onMouseLeave={hideTooltip}
-        onFocus={showTooltip}
-        onBlur={hideTooltip}
-        className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-[#F8FAFC] px-3 py-2 cursor-help outline-none transition-all hover:border-blue-200 hover:bg-blue-50/50 focus:border-blue-300 focus:ring-4 focus:ring-blue-500/10"
-      >
-        <div className="flex items-center gap-2 min-w-0">
-          <Icon
-            className={`w-3.5 h-3.5 shrink-0 ${
-              active ? "text-blue-700" : "text-slate-400"
-            }`}
-          />
-          <span className="text-[10px] font-bold text-slate-600 truncate">
-            {label}
-          </span>
-        </div>
-
-        <span
-          className={`text-[9px] font-mono font-black uppercase ${
-            active ? "text-blue-700" : "text-slate-400"
-          }`}
-        >
-          {value}
-        </span>
-      </div>
-
-      {tooltip &&
-        createPortal(
-          <div
-            role="tooltip"
-            className="fixed z-[2147483647] rounded-xl border border-blue-200 bg-white px-3 py-2.5 shadow-2xl"
-            style={{
-              left: `${tooltip.left}px`,
-              top: `${tooltip.top}px`,
-              width: `${tooltip.width}px`,
-            }}
-          >
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700">
-                <Icon className="h-3.5 w-3.5" />
-              </span>
-
-              <div className="min-w-0">
-                <p className="text-[10px] font-mono font-black uppercase tracking-wider text-blue-700">
-                  {label}
-                </p>
-                <p className="text-[9px] font-mono font-bold uppercase text-slate-400">
-                  {value}
-                </p>
-              </div>
-            </div>
-
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-600">
-              {description}
-            </p>
-          </div>,
-          document.body
-        )}
-    </>
-  );
-}
-
-function LockedStepMessage({ title, message }) {
-  return (
-    <div className="h-full min-h-[280px] rounded-2xl border border-slate-200 bg-[#F8FAFC] flex items-center justify-center p-6 text-center">
+    <div className="flex h-full min-h-[280px] items-center justify-center rounded-2xl border border-slate-200 bg-[#F8FAFC] p-6 text-center">
       <div className="max-w-sm">
-        <div className="w-11 h-11 rounded-2xl bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-500">
-          <Lock className="w-5 h-5" />
+        <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-500">
+          <Lock className="h-5 w-5" />
         </div>
-        <h3 className="font-serif text-lg font-bold text-slate-900 mt-3">{title}</h3>
-        <p className="text-xs text-slate-500 mt-1 leading-relaxed">{message}</p>
+
+        <h3 className="mt-3 font-serif text-lg font-bold text-slate-900">
+          {title}
+        </h3>
+
+        <p className="mt-1 text-xs leading-relaxed text-slate-500">
+          {message}
+        </p>
       </div>
     </div>
   );
