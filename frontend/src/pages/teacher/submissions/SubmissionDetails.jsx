@@ -324,7 +324,7 @@ function getSubmissionText(submission = {}) {
 }
 
 function formatDateTime(value) {
-  if (!value) return "—";
+  if (!value) return " - ";
 
   const date = new Date(value);
 
@@ -341,7 +341,7 @@ function formatDateTime(value) {
 }
 
 function formatTime(value) {
-  if (!value) return "—";
+  if (!value) return " - ";
 
   const date = new Date(value);
 
@@ -410,7 +410,7 @@ function getAnnotationTone(annotation = {}) {
 
 function getAnnotationTooltipText(annotation = {}) {
   const code = annotation.code || annotation.type || "NOTE";
-  const label = annotation.label || annotation.type || "Teacher note";
+  const label = annotation.label || annotation.type || "Instructor note";
   const comment = annotation.comment || label;
 
   return {
@@ -606,8 +606,8 @@ function getSelfAssessmentSummary(submission, rubricTotal) {
 
   if (!hasSelfAssessment) return null;
 
-  const score = submission.selfRubricTotal ?? "—";
-  const max = submission.selfRubricMax ?? rubricTotal ?? "—";
+  const score = submission.selfRubricTotal ?? " - ";
+  const max = submission.selfRubricMax ?? rubricTotal ?? " - ";
   const percent =
     submission.selfRubricPercentage !== undefined &&
     submission.selfRubricPercentage !== null
@@ -1137,7 +1137,7 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
   const [annotationMessage, setAnnotationMessage] = useState("");
 
   
-  const [reviewMode, setReviewMode] = useState("text");
+  const [reviewMode, setReviewMode] = useState("grading");
 
   const [aiReviewLoading, setAiReviewLoading] = useState(false);
   const [aiReviewError, setAiReviewError] = useState("");
@@ -1262,7 +1262,7 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
     setAnnotationComment("");
     setSaveMessage("");
     setAnnotationMessage("");
-    setReviewMode("text");
+    setReviewMode("grading");
     setAiReviewError("");
     setAiSuggestion(
       submission.aiTeacherReviewSuggestion ||
@@ -1330,7 +1330,7 @@ Paste attempts: ${pasteAttemptCount}
 Focus loss / tab switching: ${focusLossCount}
 AI / external flags: ${aiFlagCount}
 
-These are teacher-only review signals and are not automatic grades.`;
+These are instructor-only review signals and are not automatic grades.`;
 
   function updateRubricEntry(criterionId, nextEntry) {
     if (readOnly) return;
@@ -1379,7 +1379,7 @@ These are teacher-only review signals and are not automatic grades.`;
   }
 
   function captureSelectedText() {
-    if (reviewMode !== "text") return;
+    if (reviewMode !== "grading") return;
 
     const container = studentTextRef.current;
     if (!container) return;
@@ -1497,11 +1497,11 @@ These are teacher-only review signals and are not automatic grades.`;
 
     if (!submissionText.trim()) {
       setAiReviewError("No student text is available for AI check.");
-      setReviewMode("ai");
+      setReviewMode("grading");
       return;
     }
 
-    setReviewMode("ai");
+    setReviewMode("grading");
     setAiReviewLoading(true);
     setAiReviewError("");
     setAiSuggestion(null);
@@ -1563,11 +1563,6 @@ These are teacher-only review signals and are not automatic grades.`;
     }
   }
 
-  function openAiWorkspace() {
-    setReviewMode("ai");
-    setAiReviewError("");
-  }
-
   function applyAiRubricScores() {
     if (!aiSuggestion) return;
 
@@ -1575,7 +1570,7 @@ These are teacher-only review signals and are not automatic grades.`;
       setManualScore(aiSuggestion.finalScore || "");
       setAiRubricApplied(true);
       setSaveMessage("AI suggested manual score applied. Review before saving.");
-      setReviewMode("rubric");
+      setReviewMode("grading");
       return;
     }
 
@@ -1604,7 +1599,7 @@ These are teacher-only review signals and are not automatic grades.`;
 
     setRubricScores(nextRubricScores);
     setAiRubricApplied(true);
-    setReviewMode("rubric");
+    setReviewMode("grading");
     setSaveMessage("AI suggested rubric scores applied. Review before saving.");
   }
 
@@ -1625,7 +1620,7 @@ These are teacher-only review signals and are not automatic grades.`;
 
     setAiFeedbackApplied(true);
     setSaveMessage(
-      "AI feedback added as a teacher comment. Review and edit it before saving."
+      "AI feedback added as an instructor comment. Review and edit it before saving."
     );
   }
 
@@ -1992,11 +1987,17 @@ These are teacher-only review signals and are not automatic grades.`;
           setSaveMessage(
             `Select a score for "${criterion.name}" before saving the final review.`
           );
-          setReviewMode("rubric");
+          setReviewMode("grading");
           return;
         }
 
         const numericValue = Number(entry.score);
+
+        const isHalfStepScore =
+          Math.abs(
+            numericValue * 2 -
+              Math.round(numericValue * 2)
+          ) < 1e-9;
 
         if (
           Number.isNaN(numericValue) ||
@@ -2006,7 +2007,15 @@ These are teacher-only review signals and are not automatic grades.`;
           setSaveMessage(
             `Score for "${criterion.name}" must be between 0 and ${criterion.points}.`
           );
-          setReviewMode("rubric");
+          setReviewMode("grading");
+          return;
+        }
+
+        if (!isHalfStepScore) {
+          setSaveMessage(
+            `Score for "${criterion.name}" must use 0.5 increments.`
+          );
+          setReviewMode("grading");
           return;
         }
 
@@ -2028,6 +2037,11 @@ These are teacher-only review signals and are not automatic grades.`;
 
       if (finalOverrideEnabled && finalOverride !== "") {
         const overrideValue = Number(finalOverride);
+        const isHalfStepOverride =
+          Math.abs(
+            overrideValue * 2 -
+              Math.round(overrideValue * 2)
+          ) < 1e-9;
 
         if (
           Number.isNaN(overrideValue) ||
@@ -2037,7 +2051,15 @@ These are teacher-only review signals and are not automatic grades.`;
           setSaveMessage(
             `Final score override must be between 0 and ${rubricTotal}.`
           );
-          setReviewMode("rubric");
+          setReviewMode("grading");
+          return;
+        }
+
+        if (!isHalfStepOverride) {
+          setSaveMessage(
+            "Final score override must use 0.5 increments."
+          );
+          setReviewMode("grading");
           return;
         }
 
@@ -2098,7 +2120,7 @@ These are teacher-only review signals and are not automatic grades.`;
 
     if (saveAccepted === false) {
       setSaveMessage(
-        "This assignment is reopened. The student must resubmit it before a new teacher review can be saved."
+        "This assignment is reopened. The student must resubmit it before a new instructor review can be saved."
       );
       return;
     }
@@ -2109,47 +2131,23 @@ These are teacher-only review signals and are not automatic grades.`;
 
   return (
     <div className="h-full min-h-0 animate-fade-in-up">
-      <div className="h-full min-h-0 flex flex-col gap-3">
+      <div className="flex h-full min-h-0 flex-col gap-3">
         {readOnly && (
           <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
-            Previous attempt — read-only. Grades, feedback, annotations, and AI review actions cannot be changed.
+            Previous attempt  -  read-only. Grades, feedback, annotations, and AI review actions cannot be changed.
           </div>
         )}
         
 
-        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.95fr)_390px] gap-3 flex-1 min-h-0">
-          <div className="min-w-0 min-h-0 flex flex-col gap-2">
-            <ReviewModeSwitch
-              reviewMode={reviewMode}
-              setReviewMode={setReviewMode}
-              hasRubric={Boolean(currentRubric)}
-              rubricScoreTotal={rubricScoreTotal}
-              rubricTotal={rubricTotal}
-              gradedCriteriaCount={gradedCriteriaCount}
-              rubricCriteriaCount={rubricCriteria.length}
-              onAiCheck={openAiWorkspace}
-              aiReviewLoading={aiReviewLoading}
-              hasAiSuggestion={Boolean(aiSuggestion)}
-              planningMessageCount={planningChatMessages.length}
-              studentAiFeedbackCount={studentAiFeedbackHistory.length}
-              writingReplayCount={writingReplayEvents.length}
-            />
+        <ReviewModeSwitch
+          reviewMode={reviewMode}
+          setReviewMode={setReviewMode}
+          planningMessageCount={planningChatMessages.length}
+          studentAiFeedbackCount={studentAiFeedbackHistory.length}
+          writingReplayCount={writingReplayEvents.length}
+        />
 
-            <div className="flex-1 min-h-0 [&>*]:h-full">
-              {reviewMode === "ai" ? (
-            <AiCheckWorkspace
-              aiReviewLoading={aiReviewLoading}
-              aiReviewError={aiReviewError}
-              aiSuggestion={aiSuggestion}
-              onRunAiCheck={handleAiCheck}
-              applyAiRubricScores={applyAiRubricScores}
-              applyAiFeedback={applyAiFeedback}
-              rubricCriteria={rubricCriteria}
-              rubricTotal={rubricTotal}
-              currentRubric={currentRubric}
-              onCancel={() => setReviewMode("text")}
-            />
-          ) : reviewMode === "planning" ? (
+        {reviewMode === "planning" ? (
             <PlanningAndAiFeedbackWorkspace
               planningMessages={planningChatMessages}
               aiFeedbackHistory={studentAiFeedbackHistory}
@@ -2162,154 +2160,81 @@ These are teacher-only review signals and are not automatic grades.`;
               focusLossLogs={focusLossLogs}
               integrityLogs={integrityLogs}
             />
-          ) : reviewMode === "rubric" ? (
-            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
-              <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <ClipboardList className="w-4 h-4 text-blue-700 shrink-0" />
-
-                    <div className="min-w-0">
-                      <h2 className="font-serif text-base font-bold text-slate-950 truncate">
-                        Rubric Grading Workspace
-                        {currentRubric?.title && (
-                          <span className="font-sans text-xs font-bold text-slate-400 ml-2">
-                            · {currentRubric.title}
-                          </span>
-                        )}
-                      </h2>
-
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Grade one criterion at a time. AI suggestions are optional.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
-                {currentRubric ? (
-                  <RubricScorePanel
-                    rubric={currentRubric}
-                    rubricCriteria={rubricCriteria}
-                    rubricScores={rubricScores}
-                    rubricScoreTotal={rubricScoreTotal}
-                    rubricTotal={rubricTotal}
-                    gradedCriteriaCount={gradedCriteriaCount}
-                    selectBand={selectBand}
-                    adjustCriterionScore={adjustCriterionScore}
-                    updateCriterionScore={updateCriterionScore}
-                    updateCriterionComment={updateCriterionComment}
-                    finalOverrideEnabled={finalOverrideEnabled}
-                    setFinalOverrideEnabled={setFinalOverrideEnabled}
-                    finalOverride={finalOverride}
-                    setFinalOverride={setFinalOverride}
-                    aiSuggestion={aiSuggestion}
-                    applyAiRubricScores={applyAiRubricScores}
-                  />
-                ) : (
-                  <ManualScorePanel
-                    manualScore={manualScore}
-                    setManualScore={setManualScore}
-                    aiSuggestion={aiSuggestion}
-                    applyAiRubricScores={applyAiRubricScores}
-                  />
-                )}
-              </div>
-            </section>
           ) : (
-            <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
-              <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-4 h-4 text-blue-700 shrink-0" />
+            <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(360px,0.9fr)]">
+              <div className="min-w-0 space-y-3">
+                <StudentTextReviewPanel
+                  studentTextRef={studentTextRef}
+                  captureSelectedText={captureSelectedText}
+                  submission={submission}
+                  wordCount={wordCount}
+                  annotationMessage={annotationMessage}
+                  submissionText={submissionText}
+                  annotations={annotations}
+                  deleteAnnotation={deleteAnnotation}
+                />
 
-                    <div className="min-w-0">
-                      <h2 className="font-serif text-base font-bold text-slate-950">
-                        Student Text
-                      </h2>
-
-                      <p className="text-[11px] text-slate-500 mt-0.5">
-                        Select text to reveal annotation tools.
-                      </p>
+                <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <ClipboardList className="h-4 w-4 shrink-0 text-blue-700" />
+                      <div className="min-w-0">
+                        <h2 className="truncate font-serif text-base font-bold text-slate-950">Rubric</h2>
+                        <p className="mt-0.5 text-[11px] text-slate-500">Open one criterion at a time and score it against the student text above.</p>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5">
-                      <Calendar className="h-3.5 w-3.5 text-slate-400" />
-
-                      <span className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
-                        Submitted
-                      </span>
-
-                      <span className="text-[10px] font-mono font-bold text-slate-700">
-                        {formatSubmittedDateTime(
-                          submission.resubmittedAt ||
-                            submission.submittedAt ||
-                            submission.createdAt
-                        )}
-                      </span>
-                    </div>
-
-                    <div className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5">
-                      <FileText className="h-3.5 w-3.5 text-slate-400" />
-
-                      <span className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
-                        Words
-                      </span>
-
-                      <span className="text-[10px] font-mono font-bold text-slate-700">
-                        {wordCount}
-                      </span>
-                    </div>
-
-                    {annotationMessage && (
-                      <span className="text-[10px] font-mono font-bold text-blue-700">
-                        {annotationMessage}
-                      </span>
+                  <div className="bg-[#F8FAFC] p-3">
+                    {currentRubric ? (
+                      <RubricScorePanel
+                        rubric={currentRubric}
+                        rubricCriteria={rubricCriteria}
+                        rubricScores={rubricScores}
+                        rubricScoreTotal={rubricScoreTotal}
+                        rubricTotal={rubricTotal}
+                        gradedCriteriaCount={gradedCriteriaCount}
+                        selectBand={selectBand}
+                        adjustCriterionScore={adjustCriterionScore}
+                        updateCriterionScore={updateCriterionScore}
+                        updateCriterionComment={updateCriterionComment}
+                        finalOverrideEnabled={finalOverrideEnabled}
+                        setFinalOverrideEnabled={setFinalOverrideEnabled}
+                        finalOverride={finalOverride}
+                        setFinalOverride={setFinalOverride}
+                        aiSuggestion={aiSuggestion}
+                        applyAiRubricScores={applyAiRubricScores}
+                      />
+                    ) : (
+                      <ManualScorePanel
+                        manualScore={manualScore}
+                        setManualScore={setManualScore}
+                        aiSuggestion={aiSuggestion}
+                        applyAiRubricScores={applyAiRubricScores}
+                      />
                     )}
                   </div>
-                </div>
+                </section>
               </div>
 
-              <div
-                ref={studentTextRef}
-                onMouseUp={captureSelectedText}
-                className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] px-5 py-5 text-[13px] font-mono text-slate-700 leading-7 whitespace-pre-wrap select-text cursor-text"
-              >
-                <div className="max-w-[900px] mx-auto w-full">
-                  {renderAnnotatedText(
-                    submissionText,
-                    annotations,
-                    deleteAnnotation
-                  )}
-                </div>
-              </div>
-            </section>
-              )}
+              <UnifiedFeedbackPanel
+                aiReviewLoading={aiReviewLoading}
+                aiReviewError={aiReviewError}
+                aiSuggestion={aiSuggestion}
+                onRunAiCheck={handleAiCheck}
+                applyAiRubricScores={applyAiRubricScores}
+                applyAiFeedback={applyAiFeedback}
+                rubricTotal={rubricTotal}
+                feedback={feedback}
+                setFeedback={setFeedback}
+                currentRubric={currentRubric}
+                finalDisplayedScore={finalDisplayedScore}
+                saveMessage={saveMessage}
+              />
             </div>
-          </div>
-
-          <aside className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden h-full min-h-0 flex flex-col">
-            <div className="shrink-0 px-4 py-3 border-b border-slate-100">
-              <ReviewPanelHeader />
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto p-4">
-              <FeedbackPanel feedback={feedback} setFeedback={setFeedback} />
-            </div>
-
-            <ReviewActionBar
-              currentRubric={currentRubric}
-              finalDisplayedScore={finalDisplayedScore}
-              saveMessage={saveMessage}
-            />
-          </aside>
-        </div>
+          )}
       </div>
 
-      {selectedText && selectionToolbar && reviewMode === "text" && (
+      {selectedText && selectionToolbar && reviewMode === "grading" && (
         <FloatingAnnotationToolbar
           position={selectionToolbar}
           selectedText={selectedText}
@@ -2323,6 +2248,141 @@ These are teacher-only review signals and are not automatic grades.`;
   );
 });
 
+function StudentTextReviewPanel({
+  studentTextRef,
+  captureSelectedText,
+  submission,
+  wordCount,
+  annotationMessage,
+  submissionText,
+  annotations,
+  deleteAnnotation,
+}) {
+  return (
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText className="h-4 w-4 shrink-0 text-blue-700" />
+            <div>
+              <h2 className="font-serif text-base font-bold text-slate-950">Student Text</h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">Select text to reveal annotation tools.</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-1 text-[9px] font-mono font-bold text-slate-600">
+              <Calendar className="h-3 w-3 text-slate-400" />
+              {formatSubmittedDateTime(submission.resubmittedAt || submission.submittedAt || submission.createdAt)}
+            </span>
+            <span className="rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-1 text-[9px] font-mono font-bold text-slate-600">
+              {wordCount} words
+            </span>
+          </div>
+        </div>
+        {annotationMessage && <p className="mt-2 text-[10px] font-mono font-bold text-blue-700">{annotationMessage}</p>}
+      </div>
+      <div
+        ref={studentTextRef}
+        onMouseUp={captureSelectedText}
+        className="bg-[#F8FAFC] px-5 py-5 text-[13px] font-mono leading-7 text-slate-700 whitespace-pre-wrap select-text cursor-text"
+      >
+        {renderAnnotatedText(submissionText, annotations, deleteAnnotation)}
+      </div>
+    </section>
+  );
+}
+
+function UnifiedFeedbackPanel({
+  aiReviewLoading,
+  aiReviewError,
+  aiSuggestion,
+  onRunAiCheck,
+  applyAiRubricScores,
+  applyAiFeedback,
+  rubricTotal,
+  feedback,
+  setFeedback,
+  saveMessage,
+}) {
+  return (
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-200 px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <BrainCircuit className="h-4 w-4 shrink-0 text-violet-700" />
+            <div>
+              <h2 className="font-serif text-base font-bold text-slate-950">AI &amp; Instructor Feedback</h2>
+              <p className="mt-0.5 text-[11px] text-slate-500">Review AI guidance, then write the final comment.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onRunAiCheck}
+            disabled={aiReviewLoading}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-800 hover:bg-violet-100 disabled:opacity-60"
+          >
+            {aiReviewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+            {aiReviewLoading ? "Analyzing" : aiSuggestion ? "Run again" : "Run AI check"}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-3 bg-[#F8FAFC] p-3">
+        {aiReviewError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-[11px] leading-5 text-red-800">
+            <strong className="block">AI check could not run</strong>
+            {aiReviewError}
+          </div>
+        )}
+
+        {!aiSuggestion && !aiReviewLoading && !aiReviewError && (
+          <div className="rounded-xl border border-violet-200 bg-violet-50/70 p-3">
+            <div className="flex items-start gap-2">
+              <Bot className="mt-0.5 h-4 w-4 shrink-0 text-violet-700" />
+              <p className="text-[11px] leading-5 text-violet-900">AI can suggest rubric scores and feedback. Nothing is applied or saved automatically.</p>
+            </div>
+          </div>
+        )}
+
+        {aiReviewLoading && (
+          <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 p-3 text-[11px] font-bold text-violet-800">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Analyzing the submission and rubric…
+          </div>
+        )}
+
+        {aiSuggestion && (
+          <div className="rounded-xl border border-violet-200 bg-white p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-violet-700">AI suggestion</p>
+                <p className="mt-1.5 text-[11px] leading-5 text-slate-700">{aiSuggestion.summary}</p>
+              </div>
+              <span className="shrink-0 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1 font-mono text-xs font-black text-violet-900">
+                {aiSuggestion.finalScore}/{rubricTotal || 100}
+              </span>
+            </div>
+            {aiSuggestion.feedback && <p className="mt-2 whitespace-pre-wrap rounded-lg bg-violet-50/60 p-2 text-[11px] leading-5 text-slate-700">{aiSuggestion.feedback}</p>}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" onClick={applyAiRubricScores} className="rounded-lg bg-blue-600 px-2.5 py-1.5 text-[10px] font-bold text-white hover:bg-blue-700">Apply rubric scores</button>
+              {aiSuggestion.feedback && <button type="button" onClick={applyAiFeedback} className="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-[10px] font-bold text-violet-800 hover:bg-violet-100">Use as feedback</button>}
+            </div>
+          </div>
+        )}
+
+        <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <ReviewPanelHeader />
+          <div className="mt-3">
+            <FeedbackPanel feedback={feedback} setFeedback={setFeedback} />
+          </div>
+        </div>
+
+        <ReviewActionBar saveMessage={saveMessage} />
+      </div>
+    </section>
+  );
+}
+
 function EmptyEvidenceState({ title, description }) {
   return (
     <div className="rounded-2xl border border-dashed border-slate-200 bg-[#F8FAFC] p-8 text-center">
@@ -2335,7 +2395,7 @@ function EmptyEvidenceState({ title, description }) {
 
 function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory }) {
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white shadow-sm min-w-0 flex flex-col min-h-0 overflow-hidden">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-4 h-4 text-cyan-700 shrink-0" />
@@ -2346,9 +2406,9 @@ function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory })
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
-        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-4 max-w-[1300px] mx-auto">
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+      <div className="flex min-h-0 flex-1 bg-[#F8FAFC] p-4">
+        <div className="grid min-h-0 w-full flex-1 grid-cols-1 gap-4 2xl:grid-cols-2">
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Planning chat</h3>
@@ -2357,7 +2417,7 @@ function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory })
               <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-1 text-[10px] font-mono font-bold text-cyan-700">{planningMessages.length} messages</span>
             </div>
 
-            <div className="p-4 space-y-3 max-h-[58vh] overflow-y-auto">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {planningMessages.length === 0 ? (
                 <EmptyEvidenceState title="No planning chat saved" description="No planning or brainstorming conversation was attached to this submission." />
               ) : (
@@ -2380,7 +2440,7 @@ function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory })
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">Student AI draft checks</h3>
@@ -2389,7 +2449,7 @@ function PlanningAndAiFeedbackWorkspace({ planningMessages, aiFeedbackHistory })
               <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-mono font-bold text-violet-700">{aiFeedbackHistory.length} checks</span>
             </div>
 
-            <div className="p-4 space-y-3 max-h-[58vh] overflow-y-auto">
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               {aiFeedbackHistory.length === 0 ? (
                 <EmptyEvidenceState title="No AI feedback history" description="The student did not request AI draft feedback, or no feedback history was saved." />
               ) : (
@@ -2754,7 +2814,7 @@ function StudentAiFeedbackCard({ item, index }) {
       </div>
 
       {expanded && (
-        <div className="max-h-[360px] space-y-2 overflow-y-auto border-t border-violet-100 bg-[#FBFAFF] p-3">
+        <div className="space-y-2 border-t border-violet-100 bg-[#FBFAFF] p-3">
           {strengths.length > 0 && (
             <CompactAiFeedbackSection
               title="Strengths"
@@ -2885,6 +2945,454 @@ function formatDuration(totalSeconds = 0) {
 
   if (minutes <= 0) return `${seconds}s`;
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+const WP_LONG_PAUSE_MIN_MS = 2000;
+const WP_THINKING_PAUSE_MAX_MS = 120000;
+const WP_MIN_WORDS_FOR_STATUS = 80;
+const WP_PASTE_FLAG_LIMIT = 220;
+
+const WP_STATUS = {
+  TYPICAL: "typical_process",
+  REVIEW: "review_suggested",
+  CLOSE: "close_review_needed",
+  INSUFFICIENT: "not_enough_writing_data",
+};
+
+const WP_STATUS_LABELS = {
+  [WP_STATUS.TYPICAL]: "Typical process",
+  [WP_STATUS.REVIEW]: "Review suggested",
+  [WP_STATUS.CLOSE]: "Close review needed",
+  [WP_STATUS.INSUFFICIENT]: "Not enough writing data",
+};
+
+const WP_STATUS_REASONS = {
+  [WP_STATUS.TYPICAL]:
+    "The writing process is broadly consistent with normal drafting and revision.",
+  [WP_STATUS.REVIEW]:
+    "At least one process pattern differs from typical for this level - worth a closer look before grading.",
+  [WP_STATUS.CLOSE]:
+    "Multiple independent signals are unusual together. Look at the timeline, peer comparison, paste evidence, and playback before deciding.",
+  [WP_STATUS.INSUFFICIENT]:
+    "There is not enough typed writing here to interpret the process reliably.",
+};
+
+const WP_METRIC_DEFINITIONS = {
+  typingRate: {
+    label: "Typing rate",
+    help: "Characters typed per active minute. Typing speed is affected by proficiency, keyboard skill, and device.",
+  },
+  longPauses: {
+    label: "Long thinking pauses",
+    help: "Pauses of 2 seconds to 2 minutes per 100 words. Longer gaps are treated as idle/away time.",
+  },
+  localRevisions: {
+    label: "Local revisions",
+    help: "Medium edits per 100 words, such as deleting or rewriting part of a sentence.",
+  },
+  productProcessRatio: {
+    label: "Text survival",
+    help: "Final characters divided by typed characters. Near 1.00 means most typed text survived unchanged.",
+  },
+};
+
+const WP_PRELIMINARY_COHORTS = {
+  A0: { n: 12, typingRate: [45, 115], longPauses: [18, 58], localRevisions: [2, 18], productProcessRatio: [0.62, 0.94], pasteShare: [0, 0.18] },
+  A1: { n: 18, typingRate: [55, 125], longPauses: [15, 52], localRevisions: [3, 20], productProcessRatio: [0.60, 0.94], pasteShare: [0, 0.18] },
+  A2: { n: 31, typingRate: [70, 145], longPauses: [10, 42], localRevisions: [4, 24], productProcessRatio: [0.58, 0.93], pasteShare: [0, 0.16] },
+  B1: { n: 47, typingRate: [85, 170], longPauses: [6, 32], localRevisions: [6, 30], productProcessRatio: [0.55, 0.92], pasteShare: [0, 0.14] },
+  B2: { n: 29, typingRate: [105, 205], longPauses: [4, 26], localRevisions: [8, 35], productProcessRatio: [0.52, 0.91], pasteShare: [0, 0.12] },
+  C1: { n: 16, typingRate: [120, 235], longPauses: [3, 20], localRevisions: [10, 40], productProcessRatio: [0.50, 0.90], pasteShare: [0, 0.10] },
+  C2: { n: 10, typingRate: [130, 255], longPauses: [2, 18], localRevisions: [12, 45], productProcessRatio: [0.48, 0.90], pasteShare: [0, 0.10] },
+};
+
+const WP_COHORT_DEVIATION_SIGNALS = {
+  typingRate: {
+    below: { code: "cohort_typing_slow", label: "Typing pace below peer range", detail: "Typed more slowly than similar-level students - can be careful human writing, but worth checking against the timeline and other signals." },
+    above: { code: "cohort_typing_fast", label: "Typing pace above peer range", detail: "Typed faster than similar-level students - check the timeline and paste evidence." },
+  },
+  longPauses: {
+    below: { code: "cohort_pauses_few", label: "Fewer thinking pauses than peers", detail: "Fewer longer pauses than similar-level students - some text may have been planned or composed before typing." },
+    above: { code: "cohort_pauses_many", label: "More thinking pauses than peers", detail: "More thinking pauses than similar-level students - usually careful composing; worth checking the timeline pattern." },
+  },
+  localRevisions: {
+    below: { code: "cohort_revision_low", label: "Less in-line revision than peers", detail: "Fewer local edits than similar-level students - writers typically rework text they are actively composing." },
+    above: { code: "cohort_revision_high", label: "More in-line revision than peers", detail: "More local edits than similar-level students - suggests active, effortful composition." },
+  },
+  productProcessRatio: {
+    below: { code: "cohort_survival_low", label: "More text deleted than peers", detail: "More of the typed text was deleted than in similar-level students - suggests heavy rewriting." },
+    above: { code: "cohort_survival_high", label: "More typed text survived than peers", detail: "Less typed text was deleted than in similar-level students - most of what was typed made it to the final." },
+  },
+};
+
+function wpRound(value, places = 1) {
+  if (!Number.isFinite(Number(value))) return 0;
+  const factor = 10 ** places;
+  return Math.round(Number(value) * factor) / factor;
+}
+
+function wpNormalizeLevel(level = "B1") {
+  const normalized = String(level || "B1").trim().toUpperCase();
+  return WP_PRELIMINARY_COHORTS[normalized] ? normalized : "B1";
+}
+
+function wpGetCohort(level = "B1") {
+  const normalized = wpNormalizeLevel(level);
+  return {
+    level: normalized,
+    preliminary: true,
+    ...WP_PRELIMINARY_COHORTS[normalized],
+  };
+}
+
+function wpCompareToRange(value, range = []) {
+  const [low, high] = range;
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "unknown";
+  if (Number(value) < low) return "below";
+  if (Number(value) > high) return "above";
+  return "within";
+}
+
+function wpGetEventGaps(events = []) {
+  const times = safeArray(events)
+    .map(getEventTimeMs)
+    .filter((time) => Number.isFinite(time))
+    .sort((a, b) => a - b);
+
+  const gaps = [];
+  for (let index = 1; index < times.length; index += 1) {
+    gaps.push(times[index] - times[index - 1]);
+  }
+  return gaps;
+}
+
+function wpCalculateActiveDurationMs(events = [], submission = {}) {
+  const gaps = wpGetEventGaps(events).filter((gap) => Number.isFinite(gap) && gap > 0);
+  if (gaps.length) {
+    return gaps.reduce((sum, gap) => sum + Math.min(gap, WP_THINKING_PAUSE_MAX_MS), 0);
+  }
+
+  const start = Date.parse(submission?.startedAt || submission?.started_at || submission?.updatedAt || submission?.updated_at || "");
+  const end = Date.parse(submission?.submittedAt || submission?.submitted_at || submission?.updatedAt || submission?.updated_at || "");
+  if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+    return Math.min(end - start, WP_THINKING_PAUSE_MAX_MS);
+  }
+  return 0;
+}
+
+function wpGroupDeletionEvents(events = []) {
+  const groups = [];
+  let current = null;
+
+  for (const event of events) {
+    const type = String(event?.type || "").toLowerCase();
+    if (type !== "delete" && type !== "replace") continue;
+
+    const eventTime = getEventTimeMs(event) || 0;
+    const gap = current ? eventTime - current.lastTime : Infinity;
+    const sameArea = current && Math.abs(Number(event?.start || 0) - Number(current.lastStart || 0)) <= 3;
+
+    if (current && gap < 700 && sameArea) {
+      current.totalChars += String(event?.removedText || "").length || Math.abs(Number(event?.delta || 0));
+      current.lastTime = eventTime;
+      current.lastStart = event?.start;
+    } else {
+      if (current) groups.push(current);
+      current = {
+        firstTime: eventTime,
+        lastTime: eventTime,
+        lastStart: event?.start,
+        totalChars: String(event?.removedText || "").length || Math.abs(Number(event?.delta || 0)),
+      };
+    }
+  }
+
+  if (current) groups.push(current);
+  return groups;
+}
+
+function wpCalculateRevisionMetrics(events = [], finalWords = 0) {
+  const deletionGroups = wpGroupDeletionEvents(events);
+  const words = Math.max(1, finalWords);
+  const localRevisions = deletionGroups.filter((group) => group.totalChars >= 4 && group.totalChars <= 50).length;
+
+  return {
+    localRevisions,
+    localRevisionsPer100w: wpRound((localRevisions / words) * 100),
+  };
+}
+
+function wpCalculatePauseMetrics(events = [], finalWords = 0) {
+  const gaps = wpGetEventGaps(events);
+  const longPauses = gaps.filter((gap) => gap >= WP_LONG_PAUSE_MIN_MS && gap <= WP_THINKING_PAUSE_MAX_MS);
+  const idleGaps = gaps.filter((gap) => gap > WP_THINKING_PAUSE_MAX_MS);
+  const words = Math.max(1, finalWords);
+
+  return {
+    longPauseCount: longPauses.length,
+    longPausesPer100w: wpRound((longPauses.length / words) * 100),
+    ignoredIdlePauseCount: idleGaps.length,
+  };
+}
+
+function wpNormalizeMatchText(text = "") {
+  return String(text || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function wpGetOutlineText(submission = {}) {
+  const outline = submission?.outline || {};
+  return [
+    outline.partOne,
+    outline.partTwo,
+    outline.partThree,
+    outline.topicSentence,
+    outline.concludingSentence,
+    outline.chatOutlineText,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function wpIsOwnOutlinePaste(event = {}, submission = {}) {
+  const inserted = wpNormalizeMatchText(event?.insertedText || "");
+  const outline = wpNormalizeMatchText(wpGetOutlineText(submission));
+  if (inserted.length < 20 || outline.length < 20) return false;
+  return outline.includes(inserted) || inserted.includes(outline);
+}
+
+function wpBuildEvidence(metrics = {}, externalPasteEvents = []) {
+  const evidence = [];
+  const largestPasteChars = Math.max(0, ...externalPasteEvents.map((event) => String(event?.insertedText || "").length));
+
+  if (largestPasteChars >= WP_PASTE_FLAG_LIMIT || metrics.pasteShare >= 0.3) {
+    evidence.push({
+      code: "large_paste_or_bulk_insert",
+      label: "Large paste or bulk entry",
+      severity: metrics.pasteShare >= 0.6 ? 2 : 1,
+      detail: `${largestPasteChars} characters inserted in the largest paste-like event.`,
+    });
+  }
+
+  if (metrics.productProcessRatio >= 0.92 && metrics.localRevisionsPer100w < 1 && metrics.finalWords >= 120) {
+    evidence.push({
+      code: "linear_low_revision",
+      label: "Very little revision",
+      severity: 1,
+      detail: "Most typed text appears to survive into the final version with few local revisions.",
+    });
+  }
+
+  if (metrics.longPausesPer100w < 1 && metrics.finalWords >= 150) {
+    evidence.push({
+      code: "few_long_pauses",
+      label: "Few long pauses",
+      severity: 1,
+      detail: "There are very few longer thinking pauses for the length of the final text.",
+    });
+  }
+
+  return evidence;
+}
+
+function wpBuildCohortEvidence(positions = {}, cohort = {}) {
+  if (!cohort?.n) return [];
+
+  const evidence = [];
+  const keys = ["typingRate", "longPauses", "localRevisions", "productProcessRatio"];
+
+  for (const key of keys) {
+    const signal = WP_COHORT_DEVIATION_SIGNALS[key]?.[positions[key]];
+    if (signal) evidence.push({ ...signal, severity: 0.5 });
+  }
+
+  return evidence;
+}
+
+function wpChooseStatus(finalWords, evidence = []) {
+  if (finalWords < WP_MIN_WORDS_FOR_STATUS) return WP_STATUS.INSUFFICIENT;
+  const severity = evidence.reduce((sum, item) => sum + Number(item?.severity || 1), 0);
+  if (severity >= 3 || evidence.length >= 3) return WP_STATUS.CLOSE;
+  if (severity >= 1) return WP_STATUS.REVIEW;
+  return WP_STATUS.TYPICAL;
+}
+
+function wpBuildUnknownPositions() {
+  return {
+    typingRate: "unknown",
+    longPauses: "unknown",
+    localRevisions: "unknown",
+    productProcessRatio: "unknown",
+    pasteShare: "unknown",
+  };
+}
+
+function wpCalculateTimeline(events = [], submission = {}, bucketCount = 12) {
+  const times = events.map(getEventTimeMs).filter((time) => Number.isFinite(time));
+  const fallbackStart = Date.parse(submission?.startedAt || submission?.started_at || submission?.updatedAt || submission?.updated_at || "");
+  const fallbackEnd = Date.parse(submission?.submittedAt || submission?.submitted_at || submission?.updatedAt || submission?.updated_at || "");
+  const start = times[0] ?? (Number.isFinite(fallbackStart) ? fallbackStart : Date.now());
+  const end = times.at(-1) ?? (Number.isFinite(fallbackEnd) ? fallbackEnd : start);
+  const duration = Math.max(1, end - start);
+  const count = Math.max(1, bucketCount);
+
+  const buckets = Array.from({ length: count }, (_, index) => ({
+    index,
+    startMs: start + (duration * index) / count,
+    endMs: start + (duration * (index + 1)) / count,
+    typedChars: 0,
+    pasteChars: 0,
+    phase: "",
+  }));
+
+  events.forEach((event) => {
+    const time = getEventTimeMs(event);
+    const index = Number.isFinite(time)
+      ? Math.min(count - 1, Math.max(0, Math.floor(((time - start) / duration) * count)))
+      : 0;
+
+    const bucket = buckets[index];
+    const insertedLength = String(event?.insertedText || "").length;
+    bucket.typedChars += insertedLength;
+    bucket.phase = bucket.phase || event?.phase || "draft";
+    if (isPasteLikeWritingEvent(event)) bucket.pasteChars += insertedLength;
+  });
+
+  const maxTyped = Math.max(1, ...buckets.map((bucket) => bucket.typedChars));
+  return buckets.map((bucket) => ({
+    ...bucket,
+    intensity: wpRound(bucket.typedChars / maxTyped, 2),
+    label: `${Math.round((bucket.startMs - start) / 60000)}-${Math.round((bucket.endMs - start) / 60000)} min`,
+  }));
+}
+
+function wpGetCoachBaseline(allWritingEvents = []) {
+  const outlineEvents = safeArray(allWritingEvents)
+    .filter((event) => String(event?.phase || "") === "coach_outline")
+    .sort((a, b) => (getEventTimeMs(a) || 0) - (getEventTimeMs(b) || 0));
+
+  if (!outlineEvents.length) {
+    return { available: false, typingRate: null, localRevisionsPer100w: null };
+  }
+
+  const activeMinutes = Math.max(0.25, wpCalculateActiveDurationMs(outlineEvents) / 60000);
+  const insertedChars = outlineEvents.reduce((sum, event) => sum + String(event?.insertedText || "").length, 0);
+  const words = countWords(outlineEvents.map((event) => event?.insertedText || "").join(" "));
+  const revisions = wpCalculateRevisionMetrics(outlineEvents, words);
+
+  return {
+    available: insertedChars >= 80 || words >= 15,
+    typingRate: Math.round(insertedChars / activeMinutes),
+    localRevisionsPer100w: revisions.localRevisionsPer100w,
+  };
+}
+
+function wpAnalyzeWritingProcess({
+  submission,
+  assignmentLevel,
+  finalText,
+  replayEvents,
+  allWritingEvents,
+}) {
+  const finalWords = countWords(finalText);
+  const finalChars = String(finalText || "").length;
+  const insertedChars = replayEvents.reduce((sum, event) => sum + String(event?.insertedText || "").length, 0);
+  const removedChars = replayEvents.reduce((sum, event) => sum + String(event?.removedText || "").length, 0);
+  const pasteEvents = replayEvents
+    .filter(isPasteLikeWritingEvent)
+    .map((event) => ({
+      ...event,
+      source: wpIsOwnOutlinePaste(event, submission) ? "own_outline" : "external_or_unknown",
+    }));
+
+  const externalPasteEvents = pasteEvents.filter((event) => event.source !== "own_outline");
+  const pasteChars = externalPasteEvents.reduce((sum, event) => sum + String(event?.insertedText || "").length, 0);
+  const activeMinutes = Math.max(0.25, wpCalculateActiveDurationMs(replayEvents, submission) / 60000);
+  const typingRate = Math.round(insertedChars / activeMinutes);
+  const productProcessRatio = insertedChars ? wpRound(finalChars / insertedChars, 2) : 0;
+  const pasteShare = finalChars ? wpRound(Math.min(1, pasteChars / finalChars), 2) : 0;
+  const revisionMetrics = wpCalculateRevisionMetrics(replayEvents, finalWords);
+  const pauseMetrics = wpCalculatePauseMetrics(replayEvents, finalWords);
+
+  const metrics = {
+    finalWords,
+    finalChars,
+    insertedChars,
+    removedChars,
+    typingRate,
+    activeMinutes: wpRound(activeMinutes),
+    productProcessRatio,
+    pasteShare,
+    pasteEventCount: pasteEvents.length,
+    localRevisions: revisionMetrics.localRevisions,
+    localRevisionsPer100w: revisionMetrics.localRevisionsPer100w,
+    longPausesPer100w: pauseMetrics.longPausesPer100w,
+    ignoredIdlePauseCount: pauseMetrics.ignoredIdlePauseCount,
+  };
+
+  const cohort = wpGetCohort(assignmentLevel);
+  const positions = {
+    typingRate: wpCompareToRange(metrics.typingRate, cohort.typingRate),
+    longPauses: wpCompareToRange(metrics.longPausesPer100w, cohort.longPauses),
+    localRevisions: wpCompareToRange(metrics.localRevisionsPer100w, cohort.localRevisions),
+    productProcessRatio: wpCompareToRange(metrics.productProcessRatio, cohort.productProcessRatio),
+    pasteShare: wpCompareToRange(metrics.pasteShare, cohort.pasteShare),
+  };
+
+  const rawEvidence = [...wpBuildEvidence(metrics, externalPasteEvents), ...wpBuildCohortEvidence(positions, cohort)];
+  const status = wpChooseStatus(finalWords, rawEvidence);
+  const evidence = status === WP_STATUS.INSUFFICIENT ? [] : rawEvidence;
+  const cohortPositions = status === WP_STATUS.INSUFFICIENT ? wpBuildUnknownPositions() : positions;
+
+  return {
+    status,
+    statusLabel: WP_STATUS_LABELS[status],
+    reason: WP_STATUS_REASONS[status],
+    evidence,
+    metrics,
+    timeline: wpCalculateTimeline(replayEvents, submission),
+    coachBaseline: wpGetCoachBaseline(allWritingEvents),
+    cohortComparison: {
+      level: cohort.level,
+      n: cohort.n,
+      ranges: {
+        typingRate: cohort.typingRate,
+        longPauses: cohort.longPauses,
+        localRevisions: cohort.localRevisions,
+        productProcessRatio: cohort.productProcessRatio,
+        pasteShare: cohort.pasteShare,
+      },
+      positions: cohortPositions,
+    },
+  };
+}
+
+function wpStatusPillClasses(status) {
+  if (status === WP_STATUS.CLOSE) return "border-rose-300 bg-rose-50 text-rose-700";
+  if (status === WP_STATUS.REVIEW) return "border-amber-300 bg-amber-50 text-amber-800";
+  if (status === WP_STATUS.INSUFFICIENT) return "border-slate-300 bg-slate-50 text-slate-600";
+  return "border-emerald-300 bg-emerald-50 text-emerald-700";
+}
+
+function wpMetricTag(position) {
+  if (position === "within") return "like peers";
+  if (position === "below") return "below peers";
+  if (position === "above") return "above peers";
+  return "no peer data";
+}
+
+function wpMetricTagClasses(position) {
+  if (position === "within") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (position === "below" || position === "above") return "border-amber-200 bg-amber-50 text-amber-800";
+  return "border-slate-200 bg-slate-50 text-slate-500";
+}
+
+function wpFormatMetricValue(key, value) {
+  if (value === null || value === undefined || value === "unknown") return "-";
+  if (key === "productProcessRatio" || key === "pasteShare") return `${Math.round(Number(value) * 100)}%`;
+  if (key === "typingRate") return `${value} chars/min`;
+  if (key === "longPauses") return `${value}/100w`;
+  if (key === "localRevisions") return `${value}/100w`;
+  return String(value);
 }
 
 function getEventSnapshot(event, fallback = "") {
@@ -3583,13 +4091,32 @@ function WritingBehaviourWorkspace({
   const [processCheckOpen, setProcessCheckOpen] =
     useState(false);
 
+  const [processHelpOpen, setProcessHelpOpen] =
+    useState(false);
+
+  const processHelpRef = useRef(null);
+
   const [timelineOpen, setTimelineOpen] =
     useState(true);
 
   useEffect(() => {
     setFrameIndex(0);
     setIsPlaying(false);
+    setProcessHelpOpen(false);
   }, [submission?.id, frames.length]);
+
+  useEffect(() => {
+    if (!processHelpOpen) return undefined;
+
+    function closeProcessHelp(event) {
+      if (!processHelpRef.current?.contains(event.target)) {
+        setProcessHelpOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeProcessHelp);
+    return () => document.removeEventListener("pointerdown", closeProcessHelp);
+  }, [processHelpOpen]);
 
   useEffect(() => {
     if (
@@ -3745,73 +4272,58 @@ function WritingBehaviourWorkspace({
       safeArray(integrityLogs)
     );
 
-  const totalTypedCharacters = Math.max(
-    insertionCount,
-    finalText.length
+  const assignmentLevel =
+    submission?.assignment?.languageLevel ||
+    submission?.assignment?.language_level ||
+    submission?.assignmentDetails?.languageLevel ||
+    submission?.assignmentDetails?.language_level ||
+    submission?.languageLevel ||
+    submission?.language_level ||
+    "B1";
+
+  const processAnalysis = useMemo(
+    () =>
+      wpAnalyzeWritingProcess({
+        submission,
+        assignmentLevel,
+        finalText,
+        replayEvents,
+        allWritingEvents: writingEvents,
+      }),
+    [
+      submission,
+      assignmentLevel,
+      finalText,
+      replayEvents,
+      writingEvents,
+    ]
   );
-
-  const typingRate =
-    activeWritingSeconds > 0
-      ? Math.round(
-          totalTypedCharacters /
-            Math.max(
-              1,
-              activeWritingSeconds / 60
-            )
-        )
-      : 0;
-
-  const revisionRate =
-    finalWordCount > 0
-      ? Number(
-          (
-            (revisionCount /
-              finalWordCount) *
-            100
-          ).toFixed(1)
-        )
-      : 0;
-
-  const firstWritingFrame = frames.find(
-    (frame) =>
-      frame.text &&
-      frame.eventType !== "start"
-  );
-
-  const firstSnapshot =
-    firstWritingFrame?.text || "";
-
-  const textSurvival =
-    firstSnapshot && finalText
-      ? Math.min(
-          100,
-          Math.round(
-            (firstSnapshot
-              .split(/\s+/)
-              .filter((word) =>
-                finalText
-                  .toLowerCase()
-                  .includes(
-                    word.toLowerCase()
-                  )
-              ).length /
-              Math.max(
-                1,
-                firstSnapshot
-                  .split(/\s+/)
-                  .filter(Boolean).length
-              )) *
-              100
-          )
-        )
-      : null;
-
-  const hasEnoughData =
-    replayEvents.length >= 8 &&
-    activeWritingSeconds >= 60;
 
   const totalElapsedMs =
     frames.at(-1)?.elapsedMs || 0;
+
+  const replayStartMs =
+    getEventTimeMs(replayEvents[0]) ||
+    Date.now();
+
+  const activeAbsoluteMs =
+    replayStartMs +
+    Number(activeFrame?.elapsedMs || 0);
+
+  const visibleProcessTimeline = useMemo(() => {
+    const timeline =
+      processAnalysis?.timeline || [];
+
+    const firstActive = timeline.findIndex(
+      (bucket) =>
+        Number(bucket?.typedChars || 0) > 0 ||
+        Number(bucket?.pasteChars || 0) > 0
+    );
+
+    return firstActive > 0
+      ? timeline.slice(firstActive)
+      : timeline;
+  }, [processAnalysis]);
 
   function findFrameForEvent(event) {
     const eventId = String(
@@ -3851,8 +4363,74 @@ function WritingBehaviourWorkspace({
     );
   }
 
+  const processMetricCards = [
+    {
+      key: "typingRate",
+      value:
+        processAnalysis?.metrics?.typingRate,
+      coachValue:
+        processAnalysis?.coachBaseline
+          ?.typingRate,
+      range:
+        processAnalysis
+          ?.cohortComparison?.ranges
+          ?.typingRate,
+      position:
+        processAnalysis
+          ?.cohortComparison?.positions
+          ?.typingRate,
+    },
+    {
+      key: "longPauses",
+      value:
+        processAnalysis?.metrics
+          ?.longPausesPer100w,
+      coachValue: null,
+      range:
+        processAnalysis
+          ?.cohortComparison?.ranges
+          ?.longPauses,
+      position:
+        processAnalysis
+          ?.cohortComparison?.positions
+          ?.longPauses,
+    },
+    {
+      key: "localRevisions",
+      value:
+        processAnalysis?.metrics
+          ?.localRevisionsPer100w,
+      coachValue:
+        processAnalysis?.coachBaseline
+          ?.localRevisionsPer100w,
+      range:
+        processAnalysis
+          ?.cohortComparison?.ranges
+          ?.localRevisions,
+      position:
+        processAnalysis
+          ?.cohortComparison?.positions
+          ?.localRevisions,
+    },
+    {
+      key: "productProcessRatio",
+      value:
+        processAnalysis?.metrics
+          ?.productProcessRatio,
+      coachValue: null,
+      range:
+        processAnalysis
+          ?.cohortComparison?.ranges
+          ?.productProcessRatio,
+      position:
+        processAnalysis
+          ?.cohortComparison?.positions
+          ?.productProcessRatio,
+    },
+  ];
+
   return (
-    <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-2">
@@ -3901,25 +4479,26 @@ function WritingBehaviourWorkspace({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] p-4">
+      <div className="bg-[#F8FAFC] p-4">
         {replayEvents.length === 0 ? (
           <EmptyEvidenceState
             title="No writing journey data"
             description="New student drafting activity will appear here after Step 2 saves structured writing events."
           />
         ) : (
-          <div className="mx-auto max-w-[1350px] space-y-4">
+          <div className="w-full space-y-4">
             <div className="grid grid-cols-1 gap-4 2xl:grid-cols-[390px_minmax(0,1fr)]">
-              <div className="space-y-4">
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-                  <button
-                    type="button"
-                    aria-expanded={processCheckOpen}
-                    onClick={() =>
-                      setProcessCheckOpen((current) => !current)
-                    }
-                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
-                  >
+              <div className="space-y-4 2xl:contents">
+                <div className="relative rounded-2xl border border-slate-200 bg-white 2xl:col-start-1 2xl:row-start-1">
+                  <div className="flex items-center transition-colors hover:bg-slate-50">
+                    <button
+                      type="button"
+                      aria-expanded={processCheckOpen}
+                      onClick={() =>
+                        setProcessCheckOpen((current) => !current)
+                      }
+                      className="flex min-w-0 flex-1 items-center justify-between gap-3 px-4 py-3 text-left"
+                    >
                     <div className="flex min-w-0 items-center gap-2.5">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
                         <Gauge className="h-4 w-4" />
@@ -3936,17 +4515,15 @@ function WritingBehaviourWorkspace({
                       </div>
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                       <span
-                        className={`rounded-full border px-2 py-1 text-[9px] font-mono font-bold ${
-                          hasEnoughData
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-slate-200 bg-slate-50 text-slate-500"
-                        }`}
+                        className={`rounded-full border px-2 py-1 text-[9px] font-mono font-bold ${wpStatusPillClasses(
+                          processAnalysis.status
+                        )}`}
                       >
-                        {hasEnoughData
-                          ? "Usable"
-                          : "Limited"}
+                        {
+                          processAnalysis.statusLabel
+                        }
                       </span>
 
                       {processCheckOpen ? (
@@ -3954,57 +4531,320 @@ function WritingBehaviourWorkspace({
                       ) : (
                         <ChevronRight className="h-4 w-4 text-slate-400" />
                       )}
+                      </div>
+                    </button>
+
+                    <div ref={processHelpRef} className="relative mr-4 shrink-0">
+                      <button
+                        type="button"
+                        aria-label="What do these labels mean?"
+                        aria-expanded={processHelpOpen}
+                        onClick={() => setProcessHelpOpen((current) => !current)}
+                        className="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-slate-200 bg-white text-xs text-slate-500 hover:bg-slate-50"
+                        title="What do these labels mean?"
+                      >
+                        ?
+                      </button>
+
+                      {processHelpOpen && (
+                        <div className="absolute right-0 top-full z-[100] mt-1.5 w-[min(360px,85vw)] rounded-[10px] border border-slate-200 bg-white px-3.5 py-3 text-[0.8rem] leading-[1.55] text-slate-800 shadow-[0_4px_16px_rgba(0,0,0,0.10)]">
+                          <p className="mb-1.5 font-semibold">
+                            How this label is determined
+                          </p>
+                          <p className="mb-2">
+                            This single label combines every process signal into one of four bands: keystroke checks (pastes, fluency, revision) plus any metric that sits clearly outside the peer range for this level. The chips below the label show which signals contributed.
+                          </p>
+                          <p className="mb-1">
+                            <strong>Typical process</strong> — no unusual patterns; the writing looks like normal drafting with revisions and pauses.
+                          </p>
+                          <p className="mb-1">
+                            <strong>Review suggested</strong> — one moderate signal worth checking (e.g. a large paste, very little revision, or unusual pause distribution).
+                          </p>
+                          <p className="mb-1">
+                            <strong>Close review needed</strong> — three or more independent signals are unusual together. Look at the timeline, paste evidence, and playback before deciding.
+                          </p>
+                          <p className="mb-2">
+                            <strong>Not enough writing data</strong> — fewer than 80 final words, so process signals can't be interpreted reliably.
+                          </p>
+                          <p className="italic text-slate-500">
+                            This panel is one signal — always interpret alongside the playback. No single indicator is conclusive.
+                          </p>
+                        </div>
+                      )}
                     </div>
-                  </button>
+                  </div>
 
                   {processCheckOpen && (
                     <div className="border-t border-slate-100 p-4">
-                      <div className="grid grid-cols-2 gap-2">
-                        <ProcessMetric
-                          label="Typing rate"
-                          value={
-                            typingRate > 0
-                              ? `${typingRate} chars/min`
-                              : "Not enough data"
-                          }
-                          detail="Approximate active typing pace."
-                        />
+                      <p className="text-[10px] leading-relaxed text-slate-600">
+                        {
+                          processAnalysis.reason
+                        }
+                      </p>
 
-                        <ProcessMetric
-                          label="Local revisions"
-                          value={`${revisionRate}/100w`}
-                          detail={`${revisionCount} revision events recorded.`}
-                        />
-
-                        <ProcessMetric
-                          label="Characters added"
-                          value={insertionCount}
-                          detail={`${deletionCount} characters deleted.`}
-                        />
-
-                        <ProcessMetric
-                          label="Text survival"
-                          value={
-                            textSurvival === null
-                              ? "Not enough data"
-                              : `${textSurvival}%`
-                          }
-                          detail="How much early text remains in the final draft."
-                        />
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        {processAnalysis.evidence.length >
+                        0 ? (
+                          processAnalysis.evidence.map(
+                            (
+                              evidence,
+                              evidenceIndex
+                            ) => (
+                              <span
+                                key={`${evidence.code || "evidence"}-${evidenceIndex}`}
+                                title={
+                                  evidence.detail
+                                }
+                                className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-mono font-bold text-slate-700"
+                              >
+                                {
+                                  evidence.label
+                                }
+                              </span>
+                            )
+                          )
+                        ) : processAnalysis.status ===
+                          WP_STATUS.INSUFFICIENT ? (
+                          <p className="text-[10px] text-slate-500">
+                            Process comparison chips are hidden until there is enough typed writing (80+ final words).
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-slate-500">
+                            No specific process signals were flagged.
+                          </p>
+                        )}
                       </div>
 
-                      <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
-                        <p className="text-[10px] leading-relaxed text-blue-800">
-                          {pasteEvents.length > 0
-                            ? `${replayEvents.length} unique writing events were reconstructed into ${frames.length} replay frames. ${pasteEvents.length} paste event${pasteEvents.length === 1 ? " was" : "s were"} recorded.`
-                            : `${replayEvents.length} unique writing events were reconstructed into ${frames.length} replay frames with no saved paste events.`}
+                      {processAnalysis.metrics
+                        ?.ignoredIdlePauseCount >
+                        0 && (
+                        <p className="mt-2 text-[10px] text-slate-500">
+                          {
+                            processAnalysis
+                              .metrics
+                              .ignoredIdlePauseCount
+                          }{" "}
+                          longer gap
+                          {processAnalysis.metrics
+                            .ignoredIdlePauseCount ===
+                          1
+                            ? ""
+                            : "s"}{" "}
+                          over 2 minutes treated as idle or away time, not thinking pauses.
                         </p>
+                      )}
+
+                      {visibleProcessTimeline.length >
+                        0 && (
+                        <div className="mt-3">
+                          <div className="mb-1.5 flex items-center justify-between gap-2 text-[9px] text-slate-500">
+                            <span>
+                              Activity timeline
+                            </span>
+                            <span>
+                              Blue bars = typed chars, pink dot = paste event
+                            </span>
+                          </div>
+                          <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${visibleProcessTimeline.length}, minmax(8px, 1fr))` }}>
+                            {visibleProcessTimeline.map(
+                              (
+                                bucket,
+                                bucketIndex
+                              ) => {
+                                const bucketHeight = Math.max(
+                                  8,
+                                  Math.round(
+                                    58 *
+                                      Number(
+                                        bucket.intensity ||
+                                          0
+                                      )
+                                  )
+                                );
+
+                                const bucketActive =
+                                  activeAbsoluteMs >=
+                                    Number(
+                                      bucket.startMs
+                                    ) &&
+                                  activeAbsoluteMs <=
+                                    Number(
+                                      bucket.endMs
+                                    );
+
+                                const hasPaste =
+                                  Number(
+                                    bucket.pasteChars ||
+                                      0
+                                  ) > 0;
+
+                                return (
+                                  <div
+                                    key={`bucket_${bucketIndex}`}
+                                    title={`${bucket.label} - ${bucket.typedChars} typed chars${hasPaste ? ` - ${bucket.pasteChars} paste chars` : ""}`}
+                                    className={`relative flex items-end justify-center rounded-md border px-0.5 pb-1 pt-2 ${
+                                      bucketActive
+                                        ? "border-amber-300 bg-amber-50"
+                                        : "border-slate-200 bg-white"
+                                    }`}
+                                  >
+                                    {hasPaste && (
+                                      <span className="absolute left-1/2 top-0.5 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-rose-400" />
+                                    )}
+                                    <span
+                                      className="w-full rounded-sm bg-blue-500"
+                                      style={{ height: `${bucketHeight}px` }}
+                                    />
+                                  </div>
+                                );
+                              }
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="mt-3">
+                        <p className="text-[10px] font-bold text-slate-700">
+                          Writing-style detail
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-slate-500">
+                          {processAnalysis.status ===
+                          WP_STATUS.INSUFFICIENT
+                            ? "Peer comparison is paused until there is enough typed writing data."
+                            : "Peer comparison for each measure. Deviations from peer range feed the check above."}
+                        </p>
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {processMetricCards.map(
+                            (metric) => {
+                              const range =
+                                Array.isArray(
+                                  metric.range
+                                ) &&
+                                metric.range.length ===
+                                  2
+                                  ? metric.range
+                                  : [0, 1];
+
+                              const metricValue = Number(
+                                metric.value || 0
+                              );
+
+                              const low =
+                                Number(range[0]);
+                              const high =
+                                Number(range[1]);
+
+                              const leftPercent =
+                                high > low
+                                  ? Math.max(
+                                      0,
+                                      Math.min(
+                                        100,
+                                        ((metricValue -
+                                          low) /
+                                          (high -
+                                            low)) *
+                                          100
+                                      )
+                                    )
+                                  : 50;
+
+                              const definition =
+                                WP_METRIC_DEFINITIONS[
+                                  metric.key
+                                ];
+
+                              return (
+                                <div
+                                  key={metric.key}
+                                  className="rounded-xl border border-slate-200 bg-white p-3"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div>
+                                      <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+                                        {
+                                          definition?.label
+                                        }
+                                      </p>
+                                      <p className="mt-1 text-sm font-mono font-black text-slate-900">
+                                        {wpFormatMetricValue(
+                                          metric.key,
+                                          metric.value
+                                        )}
+                                      </p>
+                                    </div>
+                                    <span className={`rounded-full border px-2 py-1 text-[8px] font-mono font-black uppercase ${wpMetricTagClasses(metric.position)}`}>
+                                      {wpMetricTag(
+                                        metric.position
+                                      )}
+                                    </span>
+                                  </div>
+
+                                  <div className="mt-2">
+                                    <div className="relative h-2 rounded-full bg-slate-100">
+                                      <div
+                                        className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full border-2 border-white bg-blue-600 shadow"
+                                        style={{ left: `calc(${leftPercent}% - 6px)` }}
+                                      />
+                                    </div>
+                                    <div className="mt-1 flex justify-between text-[8px] font-mono text-slate-400">
+                                      <span>
+                                        {wpFormatMetricValue(
+                                          metric.key,
+                                          low
+                                        )}
+                                      </span>
+                                      <span>
+                                        {wpFormatMetricValue(
+                                          metric.key,
+                                          high
+                                        )}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  <p className="mt-2 text-[9px] leading-relaxed text-slate-500">
+                                    {definition?.help}
+                                  </p>
+                                  <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
+                                    Coach/outline baseline:{" "}
+                                    {metric.coachValue ===
+                                      null ||
+                                    metric.coachValue ===
+                                      undefined
+                                      ? "not enough data yet"
+                                      : wpFormatMetricValue(
+                                          metric.key,
+                                          metric.coachValue
+                                        )}
+                                  </p>
+                                </div>
+                              );
+                            }
+                          )}
+                        </div>
                       </div>
+
+                      <p className="mt-3 text-[9px] text-slate-500">
+                        Reference ranges are preliminary for{" "}
+                        {
+                          processAnalysis
+                            .cohortComparison
+                            ?.level
+                        }
+                        {" "}
+                        (n=
+                        {
+                          processAnalysis
+                            .cohortComparison?.n
+                        }
+                        ) and should be interpreted with playback and instructor judgment.
+                      </p>
                     </div>
                   )}
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white 2xl:col-span-2 2xl:row-start-2">
                   <button
                     type="button"
                     aria-expanded={timelineOpen}
@@ -4043,7 +4883,7 @@ function WritingBehaviourWorkspace({
                   </button>
 
                   {timelineOpen && (
-                    <div className="max-h-[380px] space-y-1.5 overflow-y-auto border-t border-slate-100 p-3">
+                    <div className="grid grid-cols-1 gap-1.5 border-t border-slate-100 p-3 sm:grid-cols-2 xl:grid-cols-3">
                       {replayEvents.map(
                         (event, index) => {
                           const eventFrameIndex =
@@ -4117,7 +4957,7 @@ function WritingBehaviourWorkspace({
                 </div>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white 2xl:col-start-2 2xl:row-start-1">
                 <div className="border-b border-slate-100 px-4 py-3">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -4274,7 +5114,7 @@ function WritingBehaviourWorkspace({
                   />
                 </div>
 
-                <div className="p-4">
+                <div className="flex min-h-0 flex-1 flex-col p-4">
                   <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
@@ -4304,7 +5144,7 @@ function WritingBehaviourWorkspace({
                     </div>
                   </div>
 
-                  <pre className="mt-3 min-h-[420px] max-h-[58vh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-white p-5 font-mono text-[12px] leading-7 text-slate-700">
+                  <pre className="mt-3 min-h-[420px] flex-1 whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-white p-5 font-mono text-[12px] leading-7 text-slate-700">
                     <PlaybackFrameText
                       frame={activeFrame}
                     />
@@ -4341,22 +5181,6 @@ function EvidencePill({ icon: Icon, label, alert = false }) {
       <Icon className="h-3.5 w-3.5" />
       {label}
     </span>
-  );
-}
-
-function ProcessMetric({ label, value, detail }) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-3">
-      <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
-      <p className="mt-1 text-sm font-mono font-black text-slate-900">
-        {value}
-      </p>
-      <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
-        {detail}
-      </p>
-    </div>
   );
 }
 
@@ -4425,11 +5249,11 @@ function AiCheckWorkspace({
               </h3>
 
               <p className="text-sm text-slate-500 leading-relaxed mt-2">
-                Praxis is checking the student text against the assignment rubric and preparing a teacher-only suggestion.
+                Praxis is checking the student text against the assignment rubric and preparing an instructor-only suggestion.
               </p>
 
               <p className="text-[11px] text-violet-700 font-bold mt-4">
-                AI suggestion only. Teacher must review before applying.
+                AI suggestion only. Instructor must review before applying.
               </p>
             </div>
           </div>
@@ -4519,7 +5343,7 @@ function AiCheckWorkspace({
                   </p>
 
                   <p className="text-[11px] font-bold text-violet-700 mt-3">
-                    AI suggestion only. Teacher must review before applying.
+                    AI suggestion only. Instructor must review before applying.
                   </p>
                 </div>
 
@@ -4638,7 +5462,7 @@ function AiCheckWorkspace({
                           </div>
 
                           <span className="shrink-0 text-[11px] font-mono font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-lg">
-                            {item.score} / {criterion.points || item.maxPoints || "—"}
+                            {item.score} / {criterion.points || item.maxPoints || " - "}
                           </span>
                         </div>
 
@@ -4746,7 +5570,7 @@ function AnnotationHighlight({ annotation, children, onDelete }) {
           showTooltip(true);
         }}
         tabIndex={0}
-        title={`${tooltipText.code} — ${tooltipText.label}: ${tooltipText.comment}`}
+        title={`${tooltipText.code}  -  ${tooltipText.label}: ${tooltipText.comment}`}
         className={`relative rounded px-0.5 cursor-help transition-all outline-none focus:ring-4 focus:ring-blue-500/10 after:content-[attr(data-code)] after:inline-flex after:ml-1 after:align-middle after:rounded after:px-1 after:py-0.5 after:text-[8px] after:font-mono after:font-black after:uppercase after:tracking-wide ${tone.highlight}`}
       >
         {children}
@@ -4907,7 +5731,7 @@ function FloatingAnnotationToolbar({
             onChange={(event) =>
               setAnnotationComment(event.target.value)
             }
-            placeholder="Write the teacher note for this selected text..."
+            placeholder="Write the instructor note for this selected text..."
             className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 outline-none focus:border-sky-500 focus:ring-4 focus:ring-sky-500/10"
           />
 
@@ -4948,7 +5772,7 @@ function MiniAnnotationButton({ codeItem, addAnnotation }) {
       type="button"
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => addAnnotation(codeItem)}
-      title={`${codeItem.code} — ${codeItem.label}`}
+      title={`${codeItem.code}  -  ${codeItem.label}`}
       className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-all ${
         isPositive
           ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
@@ -4977,36 +5801,18 @@ function MiniAnnotationButton({ codeItem, addAnnotation }) {
 function ReviewModeSwitch({
   reviewMode,
   setReviewMode,
-  hasRubric,
-  rubricScoreTotal,
-  rubricTotal,
-  gradedCriteriaCount,
-  rubricCriteriaCount,
-  onAiCheck,
-  aiReviewLoading,
-  hasAiSuggestion,
   planningMessageCount,
   studentAiFeedbackCount,
   writingReplayCount,
 }) {
   const tabs = [
     {
-      id: "text",
-      label: "Text Review",
+      id: "grading",
+      label: "Review & Grade",
       icon: BookOpen,
-      summary: "Essay",
+      summary: "Text · Rubric · AI",
       tone: "blue",
-      onClick: () => setReviewMode("text"),
-    },
-    {
-      id: "rubric",
-      label: hasRubric ? "Rubric Grading" : "Manual Grading",
-      icon: ClipboardList,
-      summary: hasRubric
-        ? `${gradedCriteriaCount}/${rubricCriteriaCount} · ${rubricScoreTotal}/${rubricTotal || 100}`
-        : `${rubricScoreTotal}/${rubricTotal || 100}`,
-      tone: "blue",
-      onClick: () => setReviewMode("rubric"),
+      onClick: () => setReviewMode("grading"),
     },
     {
       id: "planning",
@@ -5024,16 +5830,6 @@ function ReviewModeSwitch({
       tone: "amber",
       onClick: () => setReviewMode("writing"),
     },
-    {
-      id: "ai",
-      label: "AI",
-      icon: aiReviewLoading ? Loader2 : Bot,
-      summary: hasAiSuggestion ? "Ready" : "Run",
-      tone: "violet",
-      onClick: onAiCheck,
-      disabled: aiReviewLoading,
-      spinning: aiReviewLoading,
-    },
   ];
 
   const activeStyles = {
@@ -5048,7 +5844,7 @@ function ReviewModeSwitch({
   };
 
   return (
-    <div className="shrink-0 grid grid-cols-2 gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm md:grid-cols-[1.05fr_1.05fr_0.95fr_0.95fr_0.62fr]">
+    <div className="grid grid-cols-1 gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm sm:grid-cols-3">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = reviewMode === tab.id;
@@ -5099,7 +5895,7 @@ function ReviewPanelHeader() {
 
       <div className="min-w-0">
         <h2 className="font-serif text-sm font-bold text-slate-950">
-          Teacher Feedback
+          Instructor Feedback
         </h2>
 
         <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
@@ -5219,7 +6015,7 @@ function SavedAnnotationsPanel({ annotations, deleteAnnotation }) {
                     </span>
 
                     <p className="text-[10px] text-slate-500 mt-1">
-                      {annotation.label || annotation.type || "Teacher note"}
+                      {annotation.label || annotation.type || "Instructor note"}
                     </p>
 
                     <p className="text-[10px] text-slate-400 font-mono mt-1">
@@ -5466,7 +6262,7 @@ function CriterionAccordion({
                 : "border-slate-200 bg-slate-50 text-slate-400"
             }`}
           >
-            {hasScore ? entry.score : "—"} / {criterion.points}
+            {hasScore ? entry.score : " - "} / {criterion.points}
           </span>
 
           <ChevronDown
@@ -5684,7 +6480,7 @@ function ReviewSignalsPanel({
         <Info className="w-4 h-4 text-amber-700 mt-0.5 shrink-0" />
 
         <p className="text-[11px] text-amber-800 leading-relaxed">
-          Teacher-only context. Signals support review, not automatic grading.
+          Instructor-only context. Signals support review, not automatic grading.
         </p>
       </div>
 

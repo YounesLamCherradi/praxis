@@ -230,7 +230,7 @@ export function parseRubricText(text = "") {
         .replace(/^[-•*\d.)\s]+/, "")
         .trim();
 
-      const [namePart, ...descriptionParts] = cleanedLine.split(/[:–—-]/);
+      const [namePart, ...descriptionParts] = cleanedLine.split(/[:\-–]/);
 
       const name = namePart?.trim() || `Criterion ${index + 1}`;
 

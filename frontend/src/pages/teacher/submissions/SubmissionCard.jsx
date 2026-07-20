@@ -106,7 +106,7 @@ export default function SubmissionCard({ submission, onReview }) {
           <>
             <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
 
-            <span>Process signal clear and ready for teacher review</span>
+            <span>Process signal clear and ready for instructor review</span>
           </>
         )}
       </div>

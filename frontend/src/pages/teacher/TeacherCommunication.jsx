@@ -532,7 +532,7 @@ export default function TeacherCommunication() {
 
                     {activeCourses.map((course) => (
                       <option key={course.id} value={course.id}>
-                        {course.code} — {course.name}
+                        {course.code}  -  {course.name}
                       </option>
                     ))}
                   </select>
@@ -595,7 +595,7 @@ export default function TeacherCommunication() {
                             key={student.id || student.studentEmail}
                             value={student.studentEmail}
                           >
-                            {student.studentName} — {student.studentEmail}
+                            {student.studentName}  -  {student.studentEmail}
                           </option>
                         ))}
                       </select>
@@ -830,7 +830,7 @@ export default function TeacherCommunication() {
 
                   <div>
                     <p className="text-xs font-bold text-slate-900">
-                      {message.courseCode} — {message.courseName}
+                      {message.courseCode}  -  {message.courseName}
                     </p>
 
                     <p className="text-[11px] text-slate-400 mt-1">

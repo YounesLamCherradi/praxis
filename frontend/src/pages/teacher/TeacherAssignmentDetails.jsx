@@ -13,7 +13,6 @@ import {
   Clock,
   FileText,
   Hash,
-  ListChecks,
   Lock,
   MessageSquareText,
   Pencil,
@@ -342,14 +341,6 @@ export default function TeacherAssignmentDetails({
     )
   );
 
-  const ideaRequestLimit = Number(
-    valueFromAssignment(
-      aiSupportSettings.ideaRequestLimit,
-      assignment.ideaRequestLimit,
-      0
-    )
-  );
-
   const aiFeedback = feedbackChecks > 0;
 
   const autoBuildOutlineFromCoach = Boolean(
@@ -481,7 +472,7 @@ export default function TeacherAssignmentDetails({
             icon={BookOpen}
             label="Course"
             value={`${assignment.classCode || "No code"}${
-              assignment.className ? ` — ${assignment.className}` : ""
+              assignment.className ? `  -  ${assignment.className}` : ""
             }`}
           />
 
@@ -546,7 +537,7 @@ export default function TeacherAssignmentDetails({
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
             <SettingRow
               icon={MessageSquareText}
-              label="AI ideas coach"
+              label="Coach"
               description="Conversational brainstorming and planning support."
               enabled={allowAI}
             />
@@ -555,16 +546,6 @@ export default function TeacherAssignmentDetails({
               icon={Timer}
               label="Coach active-time limit"
               value={formatCoachLimit(coachTimeLimitMinutes, allowAI)}
-            />
-
-            <MetricRow
-              icon={ListChecks}
-              label="Idea-help requests"
-              value={
-                ideaRequestLimit > 0
-                  ? `${ideaRequestLimit} request${ideaRequestLimit === 1 ? "" : "s"}`
-                  : "Disabled"
-              }
             />
 
             <SettingRow

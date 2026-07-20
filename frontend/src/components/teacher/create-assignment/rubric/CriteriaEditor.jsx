@@ -25,7 +25,7 @@ export default function CriteriaEditor({
           </h4>
 
           <p className="text-[11px] text-slate-500 mt-1">
-            Use this only if the parser made a mistake or the teacher wants to
+            Use this only if the parser made a mistake or the instructor wants to
             customize the rubric.
           </p>
         </div>

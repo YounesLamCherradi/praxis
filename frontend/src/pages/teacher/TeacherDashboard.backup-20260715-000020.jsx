@@ -680,7 +680,7 @@ export default function TeacherDashboard() {
               </h1>
 
               <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
-                Teacher Dashboard
+                Instructor Dashboard
               </p>
             </div>
           </div>
@@ -770,7 +770,7 @@ export default function TeacherDashboard() {
 
             <div className="min-w-0 flex-1">
               <h4 className="text-xs font-bold text-white truncate">
-                Teacher Account
+                Instructor Account
               </h4>
 
               <p className="text-[9px] font-mono text-slate-400 truncate">

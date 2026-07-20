@@ -150,7 +150,7 @@ function getTeacherIdentity(authUser, authProfile) {
       authProfile?.name ||
       authUser?.user_metadata?.full_name ||
       authUser?.user_metadata?.name ||
-      "Teacher Account"
+      "Instructor Account"
   ).trim();
 
   const initials = name
@@ -981,7 +981,7 @@ export default function TeacherDashboard() {
       archived: willArchive,
       archivedAt: willArchive ? now : null,
       // Archived courses are removed from everyday teacher/student workflows.
-      // Restored courses remain unpublished until the teacher publishes them.
+      // Restored courses remain unpublished until the instructor publishes them.
       isPublished: willArchive ? false : managedClass.isPublished,
     };
 
@@ -1394,7 +1394,7 @@ export default function TeacherDashboard() {
       {isSidebarOpen && (
         <button
           type="button"
-          aria-label="Close teacher menu"
+          aria-label="Close instructor menu"
           onClick={() => setIsSidebarOpen(false)}
           className="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] md:hidden"
         />
@@ -1423,7 +1423,7 @@ export default function TeacherDashboard() {
               </h1>
 
               <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
-                Teacher Dashboard
+                Instructor Dashboard
               </p>
             </div>
           </div>
@@ -1693,6 +1693,16 @@ export default function TeacherDashboard() {
 
           <button
             type="button"
+            onClick={openBugReportForm}
+            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            aria-label="Report a bug"
+          >
+            <Megaphone className="h-4 w-4 text-blue-300" />
+            <span className="flex-1">Report a Bug</span>
+          </button>
+
+          <button
+            type="button"
             onClick={toggleAccountMenu}
             className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
               isAccountMenuOpen
@@ -1700,7 +1710,7 @@ export default function TeacherDashboard() {
                 : "border-transparent hover:border-slate-800 hover:bg-slate-900/70"
             }`}
             aria-expanded={isAccountMenuOpen}
-            aria-label="Open teacher account menu"
+            aria-label="Open instructor account menu"
           >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
               {teacherIdentity.initials}
@@ -1734,7 +1744,7 @@ export default function TeacherDashboard() {
               type="button"
               onClick={() => setIsSidebarOpen((current) => !current)}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
-              aria-label="Open teacher menu"
+              aria-label="Open instructor menu"
               aria-expanded={isSidebarOpen}
             >
               {isSidebarOpen ? (
@@ -1747,22 +1757,24 @@ export default function TeacherDashboard() {
             <span className="hidden sm:inline">Workspace</span>
             <ChevronRight className="hidden h-3.5 w-3.5 text-slate-300 sm:inline" />
             <span className="text-slate-950 font-bold uppercase tracking-wider font-mono">
-              {pageTitles[activeTab] || "Teacher Workspace"}
+              {pageTitles[activeTab] || "Instructor Workspace"}
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setIsSidebarOpen(false);
-              setIsCreateOpen(true);
-            }}
-            className="bg-slate-950 hover:bg-slate-800 text-white font-sans text-xs font-bold px-4 py-2 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Create Course</span>
-            <span className="sm:hidden">Create</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setIsSidebarOpen(false);
+                setIsCreateOpen(true);
+              }}
+              className="bg-slate-950 hover:bg-slate-800 text-white font-sans text-xs font-bold px-4 py-2 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Create Course</span>
+              <span className="sm:hidden">Create</span>
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-8 relative blueprint-grid">
@@ -1835,16 +1847,6 @@ export default function TeacherDashboard() {
         />
       )}
 
-
-      <button
-        type="button"
-        onClick={openBugReportForm}
-        className="fixed bottom-6 right-4 z-40 inline-flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-[0_12px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 hover:shadow-[0_16px_40px_rgba(37,99,235,0.18)] focus:outline-none focus:ring-4 focus:ring-blue-500/15 sm:right-5 md:right-6 lg:right-8"
-        aria-label="Report a bug"
-      >
-        <Megaphone className="h-4 w-4" />
-        Report a Bug
-      </button>
 
       {isPasswordPanelOpen && (
         <TeacherPasswordModal
@@ -2000,7 +2002,7 @@ function OverviewPanel({
           icon={Layers}
           label="Active Courses"
           value={`${totalClassesCount} Courses`}
-          description="Current courses shown in everyday teacher workflows."
+          description="Current courses shown in everyday instructor workflows."
           tone="blue"
         />
 
@@ -2845,7 +2847,7 @@ function TeacherBugReportModal({
             </h3>
 
             <p className="max-w-lg text-xs leading-relaxed text-slate-500">
-              Describe what happened. Praxis automatically includes your current teacher workspace and assignment context.
+              Describe what happened. Praxis automatically includes your current instructor workspace and assignment context.
             </p>
           </div>
 

@@ -225,7 +225,7 @@ function normalizeSubmissionStatus(
 
 function getReadableDate(value) {
   if (!value) {
-    return "—";
+    return " - ";
   }
 
   const date = new Date(value);
@@ -390,15 +390,15 @@ function getStudentKey(student) {
   );
 }
 
-function getTeacherKey(teacher) {
+function getTeacherKey(instructor) {
   return (
     normalizeEmail(
-      teacher?.email ||
-        teacher?.teacherEmail
+      instructor?.email ||
+        instructor?.teacherEmail
     ) ||
     String(
-      teacher?.id ||
-        teacher?.teacherId ||
+      instructor?.id ||
+        instructor?.teacherId ||
         ""
     )
   );
@@ -815,7 +815,7 @@ function deriveWorkspaceUsers({
   );
 }
 
-function deriveTeachers({
+function deriveInstructors({
   users,
   classes,
   assignments,
@@ -824,10 +824,10 @@ function deriveTeachers({
   const teacherMap = new Map();
 
   function ensureTeacher(
-    teacher
+    instructor
   ) {
     const key =
-      getTeacherKey(teacher);
+      getTeacherKey(instructor);
 
     if (!key) {
       return null;
@@ -839,20 +839,20 @@ function deriveTeachers({
     const next = {
       id:
         existing?.id ||
-        teacher?.id ||
-        teacher?.teacherId ||
+        instructor?.id ||
+        instructor?.teacherId ||
         key,
       key,
       name:
-        teacher?.name ||
-        teacher?.teacherName ||
+        instructor?.name ||
+        instructor?.teacherName ||
         existing?.name ||
-        teacher?.email ||
-        "Teacher",
+        instructor?.email ||
+        "Instructor",
       email:
         normalizeEmail(
-          teacher?.email ||
-            teacher?.teacherEmail
+          instructor?.email ||
+            instructor?.teacherEmail
         ) ||
         existing?.email ||
         "",
@@ -905,7 +905,7 @@ function deriveTeachers({
   ) {
     ensureTeacher({
       id: "teacher_default",
-      name: "Teacher Account",
+      name: "Instructor Account",
       email:
         "instructor@aui.ma",
     });
@@ -918,7 +918,7 @@ function deriveTeachers({
   return Array.from(
     teacherMap.values()
   )
-    .map((teacher) => {
+    .map((instructor) => {
       const teacherClasses =
         classes.filter(
           (course) => {
@@ -930,13 +930,13 @@ function deriveTeachers({
             if (!classKey) {
               return (
                 defaultTeacher?.key ===
-                teacher.key
+                instructor.key
               );
             }
 
             return (
               classKey ===
-              teacher.key
+              instructor.key
             );
           }
         );
@@ -980,7 +980,7 @@ function deriveTeachers({
         );
 
       return {
-        ...teacher,
+        ...instructor,
         classes:
           teacherClasses,
         assignments:
@@ -1614,10 +1614,10 @@ export default function AdminDashboard() {
       ]
     );
 
-  const teachers =
+  const instructors =
     useMemo(
       () =>
-        deriveTeachers({
+        deriveInstructors({
           users:
             workspaceUsers,
           classes,
@@ -1635,13 +1635,13 @@ export default function AdminDashboard() {
   const selectedTeacher =
     useMemo(
       () =>
-        teachers.find(
-          (teacher) =>
-            teacher.key ===
+        instructors.find(
+          (instructor) =>
+            instructor.key ===
             selectedTeacherKey
         ) || null,
       [
-        teachers,
+        instructors,
         selectedTeacherKey,
       ]
     );
@@ -1782,7 +1782,7 @@ export default function AdminDashboard() {
       ]
     );
 
-  const filteredTeachers =
+  const filteredInstructors =
     useMemo(
       () => {
         const search =
@@ -1790,19 +1790,19 @@ export default function AdminDashboard() {
             teacherSearch
           );
 
-        return teachers.filter(
-          (teacher) =>
+        return instructors.filter(
+          (instructor) =>
             !search ||
             normalizeComparable(
-              teacher.name
+              instructor.name
             ).includes(search) ||
             normalizeComparable(
-              teacher.email
+              instructor.email
             ).includes(search)
         );
       },
       [
-        teachers,
+        instructors,
         teacherSearch,
       ]
     );
@@ -2014,8 +2014,8 @@ export default function AdminDashboard() {
   const stats =
     useMemo(
       () => ({
-        teachers:
-          teachers.length,
+        instructors:
+          instructors.length,
         classes:
           classes.length,
         assignments:
@@ -2052,7 +2052,7 @@ export default function AdminDashboard() {
           ).length,
       }),
       [
-        teachers,
+        instructors,
         classes,
         assignments,
         workspaceUsers,
@@ -2100,11 +2100,11 @@ export default function AdminDashboard() {
     resetHierarchy();
   }
 
-  function openTeachers() {
+  function openInstructors() {
     setIsSidebarOpen(false);
 
     setActiveTab(
-      "teachers"
+      "instructors"
     );
 
     resetHierarchy();
@@ -2129,10 +2129,10 @@ export default function AdminDashboard() {
   }
 
   function selectTeacher(
-    teacher
+    instructor
   ) {
     setSelectedTeacherKey(
-      teacher.key
+      instructor.key
     );
 
     setSelectedClassId(
@@ -2917,17 +2917,17 @@ export default function AdminDashboard() {
   }
 
   function handleViewAsTeacher(
-    teacher
+    instructor
   ) {
     const payload = {
       teacherId:
-        teacher.id,
+        instructor.id,
       teacherKey:
-        teacher.key,
+        instructor.key,
       teacherName:
-        teacher.name,
+        instructor.name,
       teacherEmail:
-        teacher.email,
+        instructor.email,
       returnPath:
         location.pathname ||
         "/admin",
@@ -2981,7 +2981,7 @@ export default function AdminDashboard() {
       ? selectedClass.name
       : selectedTeacher
       ? selectedTeacher.name
-      : "Teachers";
+      : "Instructors";
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900 md:flex">
@@ -3092,17 +3092,17 @@ export default function AdminDashboard() {
               <AdminNavButton
                 active={
                   activeTab ===
-                  "teachers"
+                  "instructors"
                 }
                 icon={
                   GraduationCap
                 }
-                label="Teachers"
+                label="Instructors"
                 badge={
-                  stats.teachers
+                  stats.instructors
                 }
                 onClick={
-                  openTeachers
+                  openInstructors
                 }
               />
 
@@ -3229,6 +3229,16 @@ export default function AdminDashboard() {
 
           <button
             type="button"
+            onClick={openBugReportForm}
+            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            aria-label="Report a bug"
+          >
+            <Megaphone className="h-4 w-4 text-blue-300" />
+            <span className="flex-1">Report a Bug</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() =>
               setIsAccountMenuOpen(
                 (current) =>
@@ -3293,25 +3303,27 @@ export default function AdminDashboard() {
 
             <span className="truncate font-mono font-bold uppercase tracking-wider text-slate-950">
               {activeTab ===
-              "teachers"
+              "instructors"
                 ? hierarchyTitle
                 : `${activeTab} Panel`}
             </span>
           </div>
 
-          <button
-            type="button"
-            onClick={
-              () => {
-                setIsSidebarOpen(false);
-                refreshData();
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={
+                () => {
+                  setIsSidebarOpen(false);
+                  refreshData();
+                }
               }
-            }
-            className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-700"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </button>
+              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-all hover:bg-blue-700"
+            >
+              <RefreshCw className="h-4 w-4" />
+              Refresh
+            </button>
+          </div>
         </header>
 
         <div className="blueprint-grid relative flex-1 overflow-y-auto p-8">
@@ -3359,12 +3371,12 @@ export default function AdminDashboard() {
               "overview" && (
               <OverviewPanel
                 stats={stats}
-                teachers={teachers}
+                instructors={instructors}
                 processMetricRows={
                   processMetricRows
                 }
-                onOpenTeachers={
-                  openTeachers
+                onOpenInstructors={
+                  openInstructors
                 }
                 onOpenResearch={() =>
                   setActiveTab(
@@ -3375,10 +3387,10 @@ export default function AdminDashboard() {
             )}
 
             {activeTab ===
-              "teachers" && (
-              <TeachersHierarchy
-                teachers={
-                  filteredTeachers
+              "instructors" && (
+              <InstructorsHierarchy
+                instructors={
+                  filteredInstructors
                 }
                 teacherSearch={
                   teacherSearch
@@ -3510,16 +3522,6 @@ export default function AdminDashboard() {
           </div>
         </div>
       </main>
-
-      <button
-        type="button"
-        onClick={openBugReportForm}
-        className="fixed bottom-6 right-4 z-40 inline-flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-[0_12px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 hover:shadow-[0_16px_40px_rgba(37,99,235,0.18)] focus:outline-none focus:ring-4 focus:ring-blue-500/15 sm:right-5 md:right-6 lg:right-8"
-        aria-label="Report a bug"
-      >
-        <Megaphone className="h-4 w-4" />
-        Report a Bug
-      </button>
 
       {isPasswordPanelOpen && (
         <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
@@ -3655,7 +3657,7 @@ export default function AdminDashboard() {
                 </h3>
 
                 <p className="max-w-lg text-xs leading-relaxed text-slate-500">
-                  Describe what happened. Praxis automatically includes your current admin section and selected teacher, class, assignment, or submission context.
+                  Describe what happened. Praxis automatically includes your current admin section and selected instructor, class, assignment, or submission context.
                 </p>
               </div>
 
@@ -3841,9 +3843,9 @@ export default function AdminDashboard() {
 
 function OverviewPanel({
   stats,
-  teachers,
+  instructors,
   processMetricRows,
-  onOpenTeachers,
+  onOpenInstructors,
   onOpenResearch,
 }) {
   return (
@@ -3854,15 +3856,15 @@ function OverviewPanel({
         </h2>
 
         <p className="mt-1 text-sm text-slate-400">
-          Monitor teacher workspaces and research-governance status without changing teacher-owned assignments or student submission statuses.
+          Monitor instructor workspaces and research-governance status without changing instructor-owned assignments or student submission statuses.
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         <AdminMetricCard
           icon={GraduationCap}
-          label="Teachers"
-          value={stats.teachers}
+          label="Instructors"
+          value={stats.instructors}
           description={`${stats.classes} classes`}
           tone="blue"
         />
@@ -3879,7 +3881,7 @@ function OverviewPanel({
           icon={BookOpen}
           label="Assignments"
           value={stats.assignments}
-          description={`${stats.pendingReviews} pending teacher reviews`}
+          description={`${stats.pendingReviews} pending instructor reviews`}
           tone="indigo"
         />
 
@@ -3896,55 +3898,55 @@ function OverviewPanel({
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Panel
-          title="Teacher Workspaces"
-          subtitle="Open a teacher to inspect their classes and assignments."
+          title="Instructor Workspaces"
+          subtitle="Open an instructor to inspect their classes and assignments."
           rightAction={
             <button
               type="button"
-              onClick={onOpenTeachers}
+              onClick={onOpenInstructors}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700"
             >
-              View Teachers
+              View Instructors
               <ChevronRight className="h-4 w-4" />
             </button>
           }
         >
-          {teachers.length ===
+          {instructors.length ===
           0 ? (
-            <EmptyState text="No teacher workspaces found." />
+            <EmptyState text="No instructor workspaces found." />
           ) : (
             <div className="space-y-3">
-              {teachers
+              {instructors
                 .slice(0, 5)
-                .map((teacher) => (
+                .map((instructor) => (
                   <div
-                    key={teacher.key}
+                    key={instructor.key}
                     className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3"
                   >
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-900 font-mono text-xs font-black text-white">
                         {getInitials(
-                          teacher.name
+                          instructor.name
                         )}
                       </div>
 
                       <div className="min-w-0">
                         <p className="truncate text-sm font-bold text-slate-900">
-                          {teacher.name}
+                          {instructor.name}
                         </p>
 
                         <p className="truncate font-mono text-[10px] text-slate-400">
-                          {teacher.email ||
+                          {instructor.email ||
                             "No email"}{" "}
                           ·{" "}
-                          {teacher.classes.length}{" "}
+                          {instructor.classes.length}{" "}
                           classes
                         </p>
                       </div>
                     </div>
 
                     <span className="font-mono text-[10px] font-bold text-blue-700">
-                      {teacher.assignments.length}{" "}
+                      {instructor.assignments.length}{" "}
                       assignments
                     </span>
                   </div>
@@ -4004,8 +4006,8 @@ function OverviewPanel({
    TEACHER HIERARCHY
 ========================================================= */
 
-function TeachersHierarchy({
-  teachers,
+function InstructorsHierarchy({
+  instructors,
   teacherSearch,
   setTeacherSearch,
   selectedTeacher,
@@ -4031,29 +4033,29 @@ function TeachersHierarchy({
   if (!selectedTeacher) {
     return (
       <Panel
-        title="Teacher Workspaces"
-        subtitle="Select a teacher, then inspect their classes, assignments, students, submissions, and process evidence."
+        title="Instructor Workspaces"
+        subtitle="Select an instructor, then inspect their classes, assignments, students, submissions, and process evidence."
       >
         <div className="mb-4">
           <SearchInput
             value={teacherSearch}
             onChange={setTeacherSearch}
-            placeholder="Search teachers..."
+            placeholder="Search instructors..."
           />
         </div>
 
-        {teachers.length === 0 ? (
-          <EmptyState text="No teachers found." />
+        {instructors.length === 0 ? (
+          <EmptyState text="No instructors found." />
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {teachers.map(
-              (teacher) => (
+            {instructors.map(
+              (instructor) => (
                 <button
-                  key={teacher.key}
+                  key={instructor.key}
                   type="button"
                   onClick={() =>
                     onSelectTeacher(
-                      teacher
+                      instructor
                     )
                   }
                   className="group rounded-2xl border border-slate-200 bg-white p-5 text-left transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
@@ -4061,17 +4063,17 @@ function TeachersHierarchy({
                   <div className="flex items-start gap-4">
                     <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-950 font-mono text-sm font-black text-white">
                       {getInitials(
-                        teacher.name
+                        instructor.name
                       )}
                     </div>
 
                     <div className="min-w-0 flex-1">
                       <h3 className="truncate font-serif text-lg font-bold text-slate-900">
-                        {teacher.name}
+                        {instructor.name}
                       </h3>
 
                       <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
-                        {teacher.email ||
+                        {instructor.email ||
                           "No email"}
                       </p>
                     </div>
@@ -4083,21 +4085,21 @@ function TeachersHierarchy({
                     <MiniStat
                       label="Classes"
                       value={
-                        teacher.classes.length
+                        instructor.classes.length
                       }
                     />
 
                     <MiniStat
                       label="Assignments"
                       value={
-                        teacher.assignments.length
+                        instructor.assignments.length
                       }
                     />
 
                     <MiniStat
                       label="Students"
                       value={
-                        teacher.students.length
+                        instructor.students.length
                       }
                     />
                   </div>
@@ -4114,7 +4116,7 @@ function TeachersHierarchy({
     return (
       <div className="animate-fade-in-up space-y-5">
         <HierarchyBackButton
-          label="Back to Teachers"
+          label="Back to Instructors"
           onClick={onBack}
         />
 
@@ -4122,7 +4124,7 @@ function TeachersHierarchy({
           title={selectedTeacher.name}
           subtitle={
             selectedTeacher.email ||
-            "Teacher workspace"
+            "Instructor workspace"
           }
           rightAction={
             <button
@@ -4135,7 +4137,7 @@ function TeachersHierarchy({
               className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-xs font-bold text-white transition-all hover:bg-slate-800"
             >
               <Eye className="h-4 w-4" />
-              View as Teacher
+              View as Instructor
             </button>
           }
         >
@@ -4156,7 +4158,7 @@ function TeachersHierarchy({
               value={
                 selectedTeacher.assignments.length
               }
-              description="Across this teacher’s classes"
+              description="Across this instructor’s classes"
               tone="indigo"
             />
 
@@ -4179,7 +4181,7 @@ function TeachersHierarchy({
           {selectedTeacher
             .classes.length ===
           0 ? (
-            <EmptyState text="This teacher has no classes." />
+            <EmptyState text="This instructor has no classes." />
           ) : (
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {selectedTeacher.classes.map(
@@ -4240,7 +4242,7 @@ function TeachersHierarchy({
                         />
 
                         <MiniStat
-                          label="Teacher students"
+                          label="Instructor students"
                           value={
                             studentCount
                           }
@@ -4279,7 +4281,7 @@ function TeachersHierarchy({
               value={
                 selectedClassAssignments.length
               }
-              description="Teacher-owned writing tasks"
+              description="Instructor-owned writing tasks"
               tone="blue"
             />
 
@@ -4308,7 +4310,7 @@ function TeachersHierarchy({
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-[0.9fr_1.1fr]">
           <Panel
             title="Assignments"
-            subtitle="Inspect assignment submissions without editing teacher-owned status or publication settings."
+            subtitle="Inspect assignment submissions without editing instructor-owned status or publication settings."
           >
             {selectedClassAssignments.length ===
             0 ? (
@@ -4408,7 +4410,7 @@ function TeachersHierarchy({
 
           <Panel
             title="Students and Research Controls"
-            subtitle="Research flags are admin-only. They are invisible to teachers and do not change the student’s Praxis experience."
+            subtitle="Research flags are admin-only. They are invisible to instructors and do not change the student’s Praxis experience."
           >
             <div className="mb-4">
               <SearchInput
@@ -4479,7 +4481,7 @@ function TeachersHierarchy({
           selectedAssignment.title ||
           "Assignment"
         }
-        subtitle="Admin inspection is read-only. Grading, reopening, status changes, and publication remain teacher responsibilities."
+        subtitle="Admin inspection is read-only. Grading, reopening, status changes, and publication remain instructor responsibilities."
       >
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <MiniStat
@@ -4840,7 +4842,7 @@ function SubmissionInspectionModal({
         <div className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-2">
           <Panel
             title="Process Evidence"
-            subtitle="Summary only. Teacher grading and status actions are not available here."
+            subtitle="Summary only. Instructor grading and status actions are not available here."
           >
             <div className="grid grid-cols-2 gap-3">
               <MiniStat
@@ -5151,7 +5153,7 @@ function ResearchPanel({
 
         <Panel
           title="Anonymous Withdrawal Log"
-          subtitle="Only deletion date and record counts are retained—no student identity."
+          subtitle="Only deletion date and record counts are retained - no student identity."
         >
           {withdrawalLog.length ===
           0 ? (
@@ -5282,9 +5284,9 @@ function SystemPanel({
           />
 
           <MiniStat
-            label="Teachers"
+            label="Instructors"
             value={
-              stats.teachers
+              stats.instructors
             }
           />
 
@@ -5314,7 +5316,7 @@ function SystemPanel({
             </h3>
 
             <p className="mt-1 text-xs leading-relaxed text-amber-800">
-              This React version reproduces the old admin workflow against the mock store. Production must enforce admin authorization, protected research flags, pseudonymized server exports, withdrawal deletion, and View-as-Teacher auditing on the backend.
+              This React version reproduces the old admin workflow against the mock store. Production must enforce admin authorization, protected research flags, pseudonymized server exports, withdrawal deletion, and View-as-Instructor auditing on the backend.
             </p>
           </div>
         </div>

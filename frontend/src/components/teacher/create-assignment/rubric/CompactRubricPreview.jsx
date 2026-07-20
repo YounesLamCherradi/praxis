@@ -139,7 +139,7 @@ export default function CompactRubricPreview({
                             {band.label} · {band.points ?? band.score} pts
                           </div>
 
-                          <p className="text-[11px] leading-relaxed max-h-28 overflow-y-auto pr-1">
+                          <p className="text-[11px] leading-relaxed">
                             {band.description || "No descriptor provided."}
                           </p>
                         </div>

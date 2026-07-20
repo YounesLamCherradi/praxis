@@ -43,6 +43,30 @@ function countWords(text = "") {
 }
 
 const STUDENT_STEP_STORAGE_KEY = "praxis_student_step_overrides";
+const STUDENT_ACTIVE_ASSIGNMENT_KEY = "praxis_student_active_assignment";
+
+function loadActiveStudentAssignmentId() {
+  try {
+    return localStorage.getItem(STUDENT_ACTIVE_ASSIGNMENT_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function saveActiveStudentAssignmentId(assignmentId) {
+  try {
+    if (assignmentId) {
+      localStorage.setItem(
+        STUDENT_ACTIVE_ASSIGNMENT_KEY,
+        String(assignmentId)
+      );
+    } else {
+      localStorage.removeItem(STUDENT_ACTIVE_ASSIGNMENT_KEY);
+    }
+  } catch {
+    // Restoration is helpful, but storage must never block assignment access.
+  }
+}
 
 function getDraftText(submission = {}) {
   const source =
@@ -830,7 +854,7 @@ function buildWelcomeChatMessage() {
   return {
     role: "assistant",
     text:
-      "Welcome to your planning dashboard. You can brainstorm ideas here before moving to the drafting canvas.",
+      "What is your first idea for this assignment?",
     createdAt:
       new Date().toISOString(),
   };
@@ -1563,12 +1587,22 @@ export function StudentWorkspaceProvider({
   const [
     selectedAssignmentId,
     setSelectedAssignmentId,
-  ] = useState(null);
+  ] = useState(() => loadActiveStudentAssignmentId());
 
   const [
     studentStep,
     setStudentStep,
-  ] = useState(1);
+  ] = useState(() => {
+    const activeAssignmentId = loadActiveStudentAssignmentId();
+    const savedSteps = loadStudentStepOverrides();
+
+    return activeAssignmentId
+      ? Math.min(
+          4,
+          Math.max(1, Number(savedSteps[String(activeAssignmentId)] || 1))
+        )
+      : 1;
+  });
 
   const [
     studentStepOverrides,
@@ -3277,9 +3311,9 @@ export function StudentWorkspaceProvider({
       ) {
         showStudentWorkflowNotice({
           tone: "amber",
-          title: "Continue without using the Ideas Coach?",
+          title: "Continue without using the Coach?",
           message:
-            "You have not used the Ideas Coach yet. You may stay in Brainstorm, or continue to the Draft step without a coaching conversation.",
+            "You have not used the Coach yet. You may stay in Brainstorm, or continue to the Draft step without a coaching conversation.",
           primaryLabel: "Continue to Draft",
           secondaryLabel: "Stay in Brainstorm",
           pendingTransition: {
@@ -3376,7 +3410,8 @@ export function StudentWorkspaceProvider({
       const finalText = String(
         options.finalText ??
           (
-            studentStep === 3
+            (studentStep === 2 || studentStep === 3) &&
+            liveTypedText.trim()
               ? liveTypedText
               : savedFinalText
           )
@@ -3387,7 +3422,7 @@ export function StudentWorkspaceProvider({
           tone: "amber",
           title: "Final revision required",
           message:
-            "Write or revise your final version before moving to the Submit step.",
+            "Write or revise your final version before moving to the Rubric Check.",
         });
 
         return false;
@@ -3413,16 +3448,20 @@ export function StudentWorkspaceProvider({
 
       if (
         remaining > 0 &&
-        !options.skipFeedbackPrompt
+        !options.skipFeedbackPrompt &&
+        !activeSubmission?.feedbackPromptResolvedAt
       ) {
+        const currentFeedbackView =
+          Number(studentStep) === 2 ? "Draft" : "AI Feedback";
+
         showStudentWorkflowNotice({
           tone: "blue",
           title: "Feedback checks are still available",
           message: `You still have ${remaining} feedback check${
             remaining === 1 ? "" : "s"
-          } available. You may return to Feedback, or continue to Submit without using them.`,
-          primaryLabel: "Continue to Submit",
-          secondaryLabel: "Stay in Feedback",
+          } available. You may stay in ${currentFeedbackView}, or continue to the Rubric Check without using them.`,
+          primaryLabel: "Continue to Rubric",
+          secondaryLabel: `Stay in ${currentFeedbackView}`,
           pendingTransition: {
             targetStep: 4,
             options: {
@@ -3432,7 +3471,6 @@ export function StudentWorkspaceProvider({
           },
         });
 
-        rememberStudentStep(activeAssignment.id, 3);
         setTypedText(finalText);
         return false;
       }
@@ -3440,6 +3478,11 @@ export function StudentWorkspaceProvider({
       saveDraftProgress(activeAssignment.id, {
         finalText,
         wordCount: countWords(finalText),
+        feedbackPromptResolvedAt:
+          activeSubmission?.feedbackPromptResolvedAt ||
+          (options.skipFeedbackPrompt
+            ? new Date().toISOString()
+            : null),
         finalSavedAt:
           activeSubmission?.finalSavedAt ||
           new Date().toISOString(),
@@ -3509,6 +3552,7 @@ export function StudentWorkspaceProvider({
     }
 
     clearStudentWorkflowNotice();
+    saveActiveStudentAssignmentId(assignmentId);
     setSelectedAssignmentId(assignmentId);
     setStudentStep(nextStep);
 
@@ -3527,6 +3571,7 @@ export function StudentWorkspaceProvider({
   function closeStudentAssignment() {
     clearStudentWorkflowNotice();
     pauseCoachSession();
+    saveActiveStudentAssignmentId(null);
     setSelectedAssignmentId(null);
     setStudentStep(1);
     setTypedText("");

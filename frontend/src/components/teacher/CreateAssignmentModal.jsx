@@ -62,6 +62,16 @@ function normalizeCourseKey(value) {
     .replace(/\s+/g, "");
 }
 
+function clampInteger(
+  value,
+  minimum = 0,
+  maximum = Number.POSITIVE_INFINITY
+) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  const normalized = Number.isFinite(parsed) ? parsed : minimum;
+  return Math.max(minimum, Math.min(maximum, normalized));
+}
+
 export default function CreateAssignmentModal({
   classes = [],
   assignments = [],
@@ -157,7 +167,7 @@ export default function CreateAssignmentModal({
   const [assignmentType, setAssignmentType] = useState("Response");
   const [studentLevel, setStudentLevel] = useState("B1");
   const [feedbackChecks, setFeedbackChecks] = useState(2);
-  const [ideaRequestLimit, setIdeaRequestLimit] = useState(3);
+  const [ideaRequestLimit, setIdeaRequestLimit] = useState(0);
 
   const [aiTopic, setAiTopic] = useState("");
   const [aiBrief, setAiBrief] = useState("");
@@ -301,8 +311,20 @@ export default function CreateAssignmentModal({
 
     setAssignmentType(editingAssignment.assignmentType || "Response");
     setStudentLevel(editingAssignment.studentLevel || "B1");
-    setFeedbackChecks(editingAssignment.feedbackRequestLimit ?? 2);
-    setIdeaRequestLimit(editingAssignment.ideaRequestLimit ?? 3);
+    setFeedbackChecks(
+      clampInteger(
+        editingAssignment.feedbackRequestLimit ?? 2,
+        0,
+        20
+      )
+    );
+    setIdeaRequestLimit(
+      clampInteger(
+        editingAssignment.ideaRequestLimit ?? 0,
+        0,
+        20
+      )
+    );
 
     setAiTopic(editingAssignment.aiTopic || editingAssignment.topic || "");
     setAiBrief(
@@ -664,7 +686,7 @@ export default function CreateAssignmentModal({
                 `Assignment type: ${assignmentType}`,
                 `English level: ${studentLevel}`,
                 `Word range: ${minWords}-${maxWords}`,
-                aiBrief.trim() ? `Teacher brief: ${aiBrief.trim()}` : "",
+                aiBrief.trim() ? `Instructor brief: ${aiBrief.trim()}` : "",
                 description.trim()
                   ? `Current instructions: ${description.trim()}`
                   : "",
@@ -676,7 +698,7 @@ export default function CreateAssignmentModal({
                     criteria: [
                       {
                         name: "Criterion name",
-                        description: "What the teacher evaluates",
+                        description: "What the instructor evaluates",
                         points: 25,
                         bands: [
                           {
@@ -739,7 +761,7 @@ export default function CreateAssignmentModal({
       const generatedCriteria = safeArray(generatedRubric.criteria);
 
       if (!generatedCriteria.length) {
-        throw new Error("Claude returned a rubric without criteria.");
+        throw new Error("AI returned a rubric without criteria.");
       }
 
       const normalizedCriteria = generatedCriteria.map(normalizeCriterion);
@@ -775,7 +797,7 @@ export default function CreateAssignmentModal({
       setExpandedCriterionId("");
 
       setRubricGenerationError(
-        error?.message || "Claude could not generate the rubric right now."
+        error?.message || "AI could not generate the rubric right now."
       );
 
       return false;
@@ -1002,7 +1024,7 @@ export default function CreateAssignmentModal({
 
       if (!generatedInstructions.trim()) {
         throw new Error(
-          "Claude did not return student-facing assignment instructions."
+          "AI did not return student-facing assignment instructions."
         );
       }
 
@@ -1031,18 +1053,14 @@ export default function CreateAssignmentModal({
       );
 
       setFeedbackChecks(
-        Math.max(
+        clampInteger(
+          generated.feedbackRequestLimit ?? 2,
           0,
-          Number(generated.feedbackRequestLimit ?? 2)
+          20
         )
       );
 
-      setIdeaRequestLimit(
-        Math.max(
-          0,
-          Number(generated.ideaRequestLimit ?? 3)
-        )
-      );
+      setIdeaRequestLimit(0);
 
       setDueDate(
         generated.dueDate || getDefaultDueDateValue(7)
@@ -1116,7 +1134,7 @@ export default function CreateAssignmentModal({
 
       setGenerationError(
         error?.message ||
-          "Claude could not generate the assignment right now."
+          "AI could not generate the assignment right now."
       );
     } finally {
       setIsGenerating(false);
@@ -1208,14 +1226,11 @@ export default function CreateAssignmentModal({
 
     const outlineEnabled = Boolean(allowAI && autoBuildOutlineFromCoach);
 
-    const normalizedIdeaRequestLimit = Math.max(
-      0,
-      Number(ideaRequestLimit || 0)
-    );
+    const normalizedIdeaRequestLimit = 0;
 
     const normalizedFeedbackRequestLimit = Math.max(
       0,
-      Number(feedbackChecks || 0)
+      Math.floor(Number(feedbackChecks || 0) || 0)
     );
 
     const aiFeedbackEnabled = normalizedFeedbackRequestLimit > 0;
@@ -1459,16 +1474,7 @@ export default function CreateAssignmentModal({
           )}
 
           {step === 4 && (
-            <div className="space-y-4">
-              <div className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3">
-                <p className="font-mono text-[9px] font-black uppercase tracking-[0.16em] text-blue-700">
-                  Step 4 · Final Review
-                </p>
-                <p className="mt-1 text-xs text-blue-800">
-                  Review every value below. The assignment is not created until you select the final Create Assignment button.
-                </p>
-              </div>
-
+            <div>
               <ReviewStep
               creationMode={creationMode}
               title={title}
@@ -1494,6 +1500,12 @@ export default function CreateAssignmentModal({
               parsedRubricMatrix={parsedRubricMatrix}
               criteria={criteria}
               rubricTotal={rubricTotal}
+              isGeneratingRubric={isGeneratingRubric}
+              onRegenerateRubric={handleGenerateRubric}
+              onEditRubric={() => {
+                setRubricView("edit");
+                setStep(1);
+              }}
                 generatedDraft={generatedDraft}
               />
             </div>
@@ -1595,12 +1607,12 @@ function normalizeGeneratedRubricResponse(data) {
   const lastBrace = cleanedText.lastIndexOf("}");
 
   if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    throw new Error("Claude did not return a readable rubric JSON object.");
+    throw new Error("AI did not return a readable rubric JSON object.");
   }
 
   try {
     return JSON.parse(cleanedText.slice(firstBrace, lastBrace + 1));
   } catch (error) {
-    throw new Error("Claude returned rubric content that was not valid JSON.");
+    throw new Error("AI returned rubric content that was not valid JSON.");
   }
 }

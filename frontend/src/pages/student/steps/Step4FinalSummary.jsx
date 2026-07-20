@@ -466,7 +466,7 @@ function getAnnotationTone(annotation = {}) {
       badge:
         "border-sky-200 bg-sky-50 text-sky-700",
       border: "border-sky-200",
-      title: "Teacher note",
+      title: "Instructor note",
     };
   }
 
@@ -546,7 +546,7 @@ function TeacherAnnotationMark({
   const comment =
     annotation.comment ||
     annotation.label ||
-    "Teacher annotation";
+    "Instructor annotation";
 
   return (
     <>
@@ -606,7 +606,7 @@ function TeacherAnnotationMark({
 
             <div className="mt-3">
               <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
-                Teacher comment
+                Instructor comment
               </p>
 
               <p className="mt-1 text-xs leading-relaxed text-slate-700">
@@ -810,7 +810,7 @@ function TeacherFeedbackModal({
     <div className="fixed inset-0 z-[2147483646]">
       <button
         type="button"
-        aria-label="Close teacher feedback"
+        aria-label="Close instructor feedback"
         onClick={onClose}
         className="absolute inset-0 bg-slate-950/35 backdrop-blur-[2px]"
       />
@@ -823,7 +823,7 @@ function TeacherFeedbackModal({
                 <MessageSquare className="h-4 w-4 shrink-0 text-blue-700" />
 
                 <p className="font-mono text-[10px] font-black uppercase tracking-[0.18em] text-blue-700">
-                  Attempt {Number(submission?.attemptNumber || 1)} Teacher Review
+                  Attempt {Number(submission?.attemptNumber || 1)} Instructor Review
                 </p>
               </div>
 
@@ -835,19 +835,19 @@ function TeacherFeedbackModal({
 
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500">
                 <span>
-                  Review your grade, teacher comments, rubric results, and highlighted notes.
+                  Review your grade, instructor comments, rubric results, and highlighted notes.
                 </span>
 
                 <span className="hidden h-3 w-px bg-slate-200 sm:block" />
 
                 <span className="font-mono">
-                  Submitted: {formatDateTime(submission.submittedAt) || "—"}
+                  Submitted: {formatDateTime(submission.submittedAt) || " - "}
                 </span>
 
                 <span className="hidden h-3 w-px bg-slate-200 sm:block" />
 
                 <span className="font-mono">
-                  Reviewed: {formatDateTime(submission.reviewedAt) || "—"}
+                  Reviewed: {formatDateTime(submission.reviewedAt) || " - "}
                 </span>
 
                 <span className="hidden h-3 w-px bg-slate-200 sm:block" />
@@ -926,7 +926,7 @@ function TeacherFeedbackModal({
                       <p className="mt-0.5 text-3xl font-mono font-black leading-none">
                         {hasGrade
                           ? submission.score
-                          : "—"}
+                          : " - "}
                         <span className="ml-1 text-sm text-blue-200">
                           / {rubricTotal}
                         </span>
@@ -982,12 +982,12 @@ function TeacherFeedbackModal({
 
                   <div className="min-w-0">
                     <p className="font-mono text-[9px] font-black uppercase tracking-wider text-slate-400">
-                      Overall teacher comment
+                      Overall instructor comment
                     </p>
 
                     <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">
                       {submission.feedback ||
-                        "Your teacher has not added an overall comment."}
+                        "Your instructor has not added an overall comment."}
                     </p>
                   </div>
                 </div>
@@ -1015,7 +1015,7 @@ function TeacherFeedbackModal({
                   <span className="rounded-xl border border-indigo-200 bg-white px-3 py-1.5 font-mono text-sm font-black text-indigo-700">
                     {hasGrade
                       ? submission.score
-                      : "—"}{" "}
+                      : " - "}{" "}
                     / {rubricTotal}
                   </span>
                 </div>
@@ -1063,7 +1063,7 @@ function TeacherFeedbackModal({
                             <span className="shrink-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 font-mono text-xs font-black text-indigo-700">
                               {entry.score !== null
                                 ? entry.score
-                                : "—"}{" "}
+                                : " - "}{" "}
                               / {criterion.points}
                             </span>
                           </div>
@@ -1097,11 +1097,11 @@ function TeacherFeedbackModal({
 
                   <div>
                     <p className="text-xs font-bold text-amber-950">
-                      Highlighted teacher feedback
+                      Highlighted instructor feedback
                     </p>
 
                     <p className="mt-1 text-[10px] leading-relaxed text-amber-800">
-                      Hover over a highlighted phrase to see the teacher comment. Click it to keep the note open.
+                      Hover over a highlighted phrase to see the instructor comment. Click it to keep the note open.
                     </p>
                   </div>
                 </div>
@@ -1158,7 +1158,12 @@ function TeacherFeedbackModal({
    MAIN STEP
 ===================================================== */
 
-export default function Step4FinalSummary() {
+export default function Step4FinalSummary({
+  showRubricOnOpen = false,
+  onRubricSaved,
+  onRubricClosed,
+  rubricBackStep = 3,
+}) {
   const {
     activeAssignment,
     activeSubmission,
@@ -1178,6 +1183,7 @@ export default function Step4FinalSummary() {
     useState(false);
 
   const submitLockRef = useRef(false);
+  const rubricPromptedRef = useRef(false);
   const [selfRubricScores, setSelfRubricScores] =
     useState(
       activeSubmission?.selfRubricScores || {}
@@ -1191,7 +1197,8 @@ export default function Step4FinalSummary() {
     );
   }, [
     activeSubmission?.id,
-    activeSubmission?.selfRubricScores,
+    activeSubmission?.attemptNumber,
+    activeSubmission?.reopenedAt,
   ]);
 
   useEffect(() => {
@@ -1236,16 +1243,18 @@ export default function Step4FinalSummary() {
       submittedEvidence
     );
 
+  const typedTextValue = String(
+    typedText ?? ""
+  ).trim();
+
+  const hasTypedText =
+    typedTextValue.length > 0;
+
   const finalText = isSubmitted
     ? getSubmissionText(activeSubmission, typedText)
-    : String(
-        typedText ??
-          activeSubmission?.finalText ??
-          activeSubmission?.draftText ??
-          activeSubmission?.content ??
-          activeSubmission?.submittedText ??
-          ""
-      ).trim();
+    : hasTypedText
+      ? typedTextValue
+      : getSubmissionText(activeSubmission);
 
   const wordCount = countWords(finalText);
 
@@ -1340,6 +1349,23 @@ export default function Step4FinalSummary() {
     rubricCriteria.length > 0 &&
     completedSelfCriteria ===
       rubricCriteria.length;
+
+  useEffect(() => {
+    if (showRubricOnOpen && selfGradeRequired) {
+      rubricPromptedRef.current = true;
+      setShowSelfGrade(true);
+      return;
+    }
+
+    if (
+      !rubricPromptedRef.current &&
+      selfGradeRequired &&
+      !selfGradeComplete
+    ) {
+      rubricPromptedRef.current = true;
+      setShowSelfGrade(true);
+    }
+  }, [selfGradeComplete, selfGradeRequired, showRubricOnOpen]);
 
   const currentAttemptReviewed =
     Boolean(activeSubmission) &&
@@ -1587,7 +1613,8 @@ export default function Step4FinalSummary() {
   const canSubmit =
     Boolean(activeAssignment) &&
     Boolean(finalText) &&
-    !wordCountIssue &&
+    !belowMinWords &&
+    !aboveMaxWords &&
     (!selfGradeRequired ||
       selfGradeComplete) &&
     attested &&
@@ -1690,6 +1717,8 @@ export default function Step4FinalSummary() {
     setSelfGradeMessage(
       "Self-assessment saved."
     );
+
+    onRubricSaved?.();
 
     window.setTimeout(
       () => setShowSelfGrade(false),
@@ -1898,7 +1927,12 @@ export default function Step4FinalSummary() {
 
   return (
     <div className="h-full min-h-0 overflow-hidden">
-      <div className="flex h-full min-h-0 flex-col gap-3">
+      <div
+        aria-hidden={showSelfGrade ? "true" : undefined}
+        className={`flex h-full min-h-0 flex-col gap-3 ${
+          showSelfGrade ? "hidden" : ""
+        }`}
+      >
         {canResubmit && (
           <div className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5">
             <div className="flex items-start gap-2">
@@ -1910,7 +1944,7 @@ export default function Step4FinalSummary() {
                 </p>
 
                 <p className="mt-0.5 text-[11px] leading-relaxed text-amber-800">
-                  Review the teacher feedback, revise the draft, then submit the updated version.
+                  Review the instructor feedback, revise the draft, then submit the updated version.
                 </p>
               </div>
             </div>
@@ -1963,12 +1997,19 @@ export default function Step4FinalSummary() {
             }}
           />
         </div>
+      </div>
 
-        <SelfGradeDrawer
+      <SelfGradeDrawer
           open={showSelfGrade}
-          onClose={() =>
-            setShowSelfGrade(false)
-          }
+          onClose={() => {
+            if (selfGradeComplete) {
+              setShowSelfGrade(false);
+              onRubricClosed?.();
+              return;
+            }
+
+            goToStudentStep(rubricBackStep === 2 ? 2 : 3);
+          }}
           rubric={currentRubric}
           rubricCriteria={rubricCriteria}
           selfRubricScores={
@@ -1989,8 +2030,12 @@ export default function Step4FinalSummary() {
             selfGradeMessage
           }
           onSave={saveSelfAssessment}
-        />
-      </div>
+          backLabel={
+            rubricBackStep === 2
+              ? "Back to Draft"
+              : "Back to AI Feedback"
+          }
+      />
     </div>
   );
 }
@@ -2023,15 +2068,15 @@ function SubmittedStatusCard({
 
             <p className="mt-1 text-xs leading-relaxed text-slate-600">
               {hasGrade
-                ? `Your teacher has completed the review for Attempt ${attemptNumber}. Open the feedback to see comments and highlighted notes.`
+                ? `Your instructor has completed the review for Attempt ${attemptNumber}. Open the feedback to see comments and highlighted notes.`
                 : isRevisionAwaitingReview
                 ? hasPreviousTeacherReview
-                  ? `Attempt ${attemptNumber} was received. Teacher feedback for this new attempt will be available after review; feedback from Attempt ${Math.max(
+                  ? `Attempt ${attemptNumber} was received. Instructor feedback for this new attempt will be available after review; feedback from Attempt ${Math.max(
                       1,
                       attemptNumber - 1
                     )} remains available below.`
-                  : `Attempt ${attemptNumber} was received. Teacher feedback will be available after review.`
-                : "Your work is locked and currently available to your teacher."}
+                  : `Attempt ${attemptNumber} was received. Instructor feedback will be available after review.`
+                : "Your work is locked and currently available to your instructor."}
             </p>
 
             {submission?.submittedAt && (
@@ -2088,8 +2133,8 @@ function TeacherReviewLauncher({
             <h3 className="font-serif text-base font-bold text-slate-950">
               {currentAttemptPending &&
               hasTeacherReview
-                ? `Attempt ${reviewAttemptNumber} Teacher Review`
-                : "Teacher Review"}
+                ? `Attempt ${reviewAttemptNumber} Instructor Review`
+                : "Instructor Review"}
             </h3>
 
             <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
@@ -2097,7 +2142,7 @@ function TeacherReviewLauncher({
               hasTeacherReview
                 ? `Attempt ${currentAttemptNumber} feedback is not available yet. You can still review the completed feedback from Attempt ${reviewAttemptNumber}.`
                 : hasTeacherReview
-                ? `Your teacher returned ${
+                ? `Your instructor returned ${
                     hasGrade
                       ? `a grade of ${grade}/${rubricTotal}, `
                       : ""
@@ -2105,8 +2150,8 @@ function TeacherReviewLauncher({
                     annotationCount === 1 ? "" : "s"
                   }.`
                 : currentAttemptPending
-                ? `Teacher feedback for Attempt ${currentAttemptNumber} will be available after review.`
-                : "Your teacher has not published feedback yet."}
+                ? `Instructor feedback for Attempt ${currentAttemptNumber} will be available after review.`
+                : "Your instructor has not published feedback yet."}
             </p>
           </div>
         </div>
@@ -2121,7 +2166,7 @@ function TeacherReviewLauncher({
           {currentAttemptPending &&
           hasTeacherReview
             ? `View Attempt ${reviewAttemptNumber} Feedback`
-            : "Check Teacher Feedback"}
+            : "Check Instructor Feedback"}
         </button>
       </div>
     </section>
@@ -2152,7 +2197,7 @@ function FinalDraftPreview({
               </h3>
 
               <p className="mt-0.5 text-[11px] text-slate-500">
-                This exact version will be sent to your teacher.
+                This exact version will be sent to your instructor.
               </p>
             </div>
           </div>
@@ -2179,8 +2224,8 @@ function FinalDraftPreview({
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto bg-[#F8FAFC] px-5 py-5">
-        <article className="mx-auto w-full max-w-[900px] rounded-2xl border border-slate-200 bg-white px-6 py-5 shadow-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] px-6 py-5">
+        <article className="w-full">
           {finalText ? (
             <p className="whitespace-pre-wrap text-[14px] leading-7 text-slate-700">
               {finalText}
@@ -2223,47 +2268,28 @@ function FinalCheckPanel({
   const wordCountReady =
     !belowMinWords && !aboveMaxWords;
 
-  const compactStatus = !attested
-    ? "Honor confirmation required"
-    : selfGradeRequired
-    ? selfGradeComplete
-      ? `Self-grade ${selfRubricTotal}/${rubricTotal}`
-      : `${completedSelfCriteria}/${rubricCriteriaCount} rubric criteria`
-    : wordCountReady
-    ? `${wordCount} words ready`
-    : `${wordCount} words`;
-
   return (
-    <aside className="self-start overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
           <div className="flex items-start gap-2">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
 
             <div>
               <h3 className="text-sm font-bold text-slate-900">
-                Final Check
+                Submit Assignment
               </h3>
 
               <p className="mt-0.5 text-[11px] text-slate-500">
-                Complete the required actions, then submit.
+                Review the automatic summary, confirm your work, and submit.
               </p>
             </div>
           </div>
 
-          <span
-            className={`shrink-0 rounded-lg border px-2.5 py-1.5 text-[9px] font-mono font-bold ${
-              canSubmit
-                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                : "border-amber-200 bg-amber-50 text-amber-800"
-            }`}
-          >
-            {canSubmit ? "Ready" : compactStatus}
-          </span>
         </div>
       </div>
 
-      <div className="space-y-3 p-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
         {selfGradeRequired && (
           <button
             type="button"
@@ -2312,70 +2338,48 @@ function FinalCheckPanel({
 
 
 
-        <label
-          className={`flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-3 transition-all ${
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-[#F8FAFC]">
+          <SubmissionReadinessRow
+            label="Draft"
+            value={`${wordCount} words`}
+            ready={wordCountReady}
+          />
+          <SubmissionReadinessRow
+            label="AI feedback"
+            value={hasAiFeedback ? "Reviewed" : "Not used"}
+            ready={true}
+            optional={!hasAiFeedback}
+          />
+          {selfGradeRequired && (
+            <SubmissionReadinessRow
+              label="Rubric check"
+              value={selfGradeComplete ? "Complete" : `${completedSelfCriteria}/${rubricCriteriaCount} complete`}
+              ready={selfGradeComplete}
+            />
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setAttested(!attested)}
+          aria-pressed={attested}
+          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-all ${
             attested
               ? "border-emerald-200 bg-emerald-50"
               : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
           }`}
         >
-          <input
-            type="checkbox"
-            checked={attested}
-            onChange={(event) => setAttested(event.target.checked)}
-            className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-          />
-
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className={`h-4 w-4 shrink-0 ${attested ? "text-emerald-700" : "text-amber-700"}`} />
-              <p className="text-xs font-bold text-slate-900">Academic Honor Confirmation</p>
-            </div>
+          <ShieldCheck className={`mt-0.5 h-4 w-4 shrink-0 ${attested ? "text-emerald-700" : "text-amber-700"}`} />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-slate-900">
+              {attested ? "Academic honor confirmed" : "Confirm this is your own work"}
+            </p>
             <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
-              I confirm that this submission represents my own work, that I reviewed the final draft, and that I am ready to submit it to my teacher.
+              I reviewed the final draft and am ready to submit it to my instructor.
             </p>
           </div>
-
           {attested && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />}
-        </label>
-
-        <div
-          className={`rounded-xl border px-3 py-2.5 ${
-            hasAiFeedback
-              ? "border-violet-200 bg-violet-50"
-              : "border-slate-200 bg-slate-50"
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <Sparkles
-              className={`h-4 w-4 ${
-                hasAiFeedback
-                  ? "text-violet-700"
-                  : "text-slate-400"
-              }`}
-            />
-
-            <p className="text-[10px] font-bold text-slate-700">
-              {hasAiFeedback
-                ? "AI draft feedback checked"
-                : "AI draft feedback not used"}
-            </p>
-          </div>
-        </div>
-
-        {!wordCountReady && (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-
-              <p className="text-[10px] leading-relaxed text-amber-800">
-                {belowMinWords
-                  ? `Add ${Number(minWords) - wordCount} more words to reach the minimum.`
-                  : `Remove ${wordCount - Number(maxWords)} words to meet the maximum.`}
-              </p>
-            </div>
-          </div>
-        )}
+        </button>
 
         {submitMessage && (
           <div
@@ -2391,7 +2395,7 @@ function FinalCheckPanel({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-2">
+        <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-2 bg-white px-1 pt-2">
           <button
             type="button"
             onClick={onBack}
@@ -2431,6 +2435,148 @@ function FinalCheckPanel({
   );
 }
 
+function SubmissionReadinessRow({ label, value, ready, optional = false }) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 last:border-b-0">
+      <span className="text-[11px] font-bold text-slate-700">{label}</span>
+      <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${
+        ready ? "text-emerald-700" : "text-amber-700"
+      }`}>
+        {ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+        {value}{optional ? " · optional" : ""}
+      </span>
+    </div>
+  );
+}
+
+function HorizontalRubricCriteria({
+  rubricCriteria,
+  selfRubricScores,
+  openCriterionKey,
+  onOpenCriterion,
+  onSelectBand,
+}) {
+  const activeIndex = Math.max(
+    0,
+    rubricCriteria.findIndex(
+      (criterion, index) =>
+        `${criterion.id || "criterion"}::${index}` === openCriterionKey
+    )
+  );
+
+  const activeCriterion = rubricCriteria[activeIndex];
+  const activeSelection = selfRubricScores?.[activeCriterion?.id];
+
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2 overflow-x-auto pb-0.5">
+        {rubricCriteria.map((criterion, index) => {
+          const criterionKey = `${criterion.id || "criterion"}::${index}`;
+          const selected = selfRubricScores?.[criterion.id];
+          const selectedBand = safeArray(criterion.bands).find(
+            (band) => String(band.id) === String(selected?.bandId)
+          );
+          const isActive = index === activeIndex;
+
+          return (
+            <button
+              key={criterionKey}
+              type="button"
+              aria-pressed={isActive}
+              onClick={() => onOpenCriterion(criterionKey)}
+              className={`min-w-[190px] flex-1 rounded-xl border px-3 py-2 text-left transition-all ${
+                isActive
+                  ? "border-blue-300 bg-blue-50 shadow-sm ring-2 ring-blue-500/10"
+                  : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="line-clamp-1 text-[11px] font-bold leading-4 text-slate-900">
+                    {criterion.name}
+                  </p>
+                  <p className={`mt-0.5 text-[8px] font-semibold ${selectedBand ? "text-emerald-700" : "text-slate-400"}`}>
+                    {selectedBand ? selectedBand.label : "Not assessed"}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[9px] font-mono font-bold text-slate-500">
+                  {criterion.points} pts
+                </span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {activeCriterion && (
+        <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
+          <div className="border-b border-blue-100 bg-blue-50/70 px-4 py-2.5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-blue-600">
+                  Criterion {activeIndex + 1} of {rubricCriteria.length}
+                </p>
+                <h3 className="mt-0.5 text-sm font-bold text-slate-950">
+                  {activeCriterion.name}
+                </h3>
+                {activeCriterion.description && (
+                  <p className="mt-0.5 line-clamp-2 max-w-5xl text-[10px] leading-4 text-slate-500">
+                    {activeCriterion.description}
+                  </p>
+                )}
+              </div>
+              <span className="rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-[10px] font-mono font-bold text-blue-700">
+                {activeCriterion.points} points
+              </span>
+            </div>
+          </div>
+
+          <div className="grid gap-2 p-2.5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+            {safeArray(activeCriterion.bands).map((band) => {
+              const isSelected =
+                String(activeSelection?.bandId) === String(band.id);
+
+              return (
+                <button
+                  key={band.id}
+                  type="button"
+                  onClick={() =>
+                    onSelectBand(activeCriterion, band, activeIndex)
+                  }
+                  className={`h-full rounded-xl border px-3 py-2.5 text-left transition-all ${
+                    isSelected
+                      ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/10"
+                      : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                  }`}
+                >
+                  <div className="flex h-full items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-900">
+                        {band.label}
+                      </p>
+                      {band.description && (
+                        <p
+                          className="mt-1 line-clamp-7 text-[9px] leading-[1.45] text-slate-500"
+                          title={band.description}
+                        >
+                          {band.description}
+                        </p>
+                      )}
+                    </div>
+                    <span className="shrink-0 font-mono text-xs font-black text-blue-700">
+                      {band.points}/{activeCriterion.points}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 /* =====================================================
    SELF-GRADE DRAWER
 ===================================================== */
@@ -2448,6 +2594,7 @@ function SelfGradeDrawer({
   selfRubricPercentage,
   selfGradeMessage,
   onSave,
+  backLabel,
 }) {
   const [openCriterionKey, setOpenCriterionKey] =
     useState(null);
@@ -2487,11 +2634,7 @@ function SelfGradeDrawer({
   ]);
 
   function toggleCriterion(criterionKey) {
-    setOpenCriterionKey((current) =>
-      current === criterionKey
-        ? null
-        : criterionKey
-    );
+    setOpenCriterionKey(criterionKey);
   }
 
   function handleSelectBand(
@@ -2516,24 +2659,14 @@ function SelfGradeDrawer({
       setOpenCriterionKey(
         `${nextCriterion.id || "criterion"}::${nextCriterionIndex}`
       );
-    } else {
-      setOpenCriterionKey(null);
     }
   }
 
   if (!open) return null;
 
-  return createPortal(
-    <div className="fixed inset-0 z-[2147483646]">
-      <button
-        type="button"
-        aria-label="Close self-assessment"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-950/35 backdrop-blur-[2px]"
-      />
-
-      <aside className="absolute inset-y-0 right-0 flex w-[min(96vw,560px)] flex-col border-l border-slate-200 bg-white shadow-2xl">
-        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+  return (
+      <section className="flex w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
           <div>
             <div className="flex items-center gap-2">
               <ClipboardList className="h-4 w-4 text-blue-700" />
@@ -2563,7 +2696,7 @@ function SelfGradeDrawer({
           </button>
         </header>
 
-        <div className="flex-1 overflow-y-auto bg-[#F8FAFC] p-4">
+        <div className="bg-[#F8FAFC] p-3">
           {rubricCriteria.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
               <Info className="mx-auto h-7 w-7 text-slate-300" />
@@ -2573,203 +2706,33 @@ function SelfGradeDrawer({
               </p>
             </div>
           ) : (
-            <div className="space-y-2">
-              {rubricCriteria.map(
-                (criterion, index) => {
-                  const selected =
-                    selfRubricScores?.[
-                      criterion.id
-                    ];
-
-                  const criterionKey =
-                    `${criterion.id || "criterion"}::${index}`;
-
-                  const isOpen =
-                    openCriterionKey ===
-                    criterionKey;
-
-                  const selectedBand =
-                    safeArray(
-                      criterion.bands
-                    ).find(
-                      (band) =>
-                        String(band.id) ===
-                        String(
-                          selected?.bandId
-                        )
-                    );
-
-                  return (
-                    <section
-                      key={criterionKey}
-                      className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition-colors ${
-                        isOpen
-                          ? "border-blue-200"
-                          : "border-slate-200"
-                      }`}
-                    >
-                      <button
-                        type="button"
-                        aria-expanded={isOpen}
-                        onClick={() =>
-                          toggleCriterion(
-                            criterionKey
-                          )
-                        }
-                        className={`flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-colors ${
-                          isOpen
-                            ? "bg-blue-50/70"
-                            : "bg-white hover:bg-slate-50"
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm font-bold text-slate-900">
-                              {criterion.name}
-                            </h3>
-
-                            {selectedBand && (
-                              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-bold text-emerald-700">
-                                {selectedBand.label}
-                              </span>
-                            )}
-                          </div>
-
-                          {isOpen &&
-                            criterion.description && (
-                              <p className="mt-1 text-[11px] leading-5 text-slate-500">
-                                {
-                                  criterion.description
-                                }
-                              </p>
-                            )}
-
-                          {!isOpen &&
-                            selectedBand && (
-                              <p className="mt-1 text-[10px] font-medium text-slate-500">
-                                Selected:{" "}
-                                {
-                                  selectedBand.points
-                                }
-                                /
-                                {
-                                  criterion.points
-                                }{" "}
-                                points
-                              </p>
-                            )}
-
-                          {!isOpen &&
-                            !selectedBand && (
-                              <p className="mt-1 text-[10px] text-slate-400">
-                                Not assessed yet
-                              </p>
-                            )}
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-2">
-                          <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-mono font-bold text-slate-500">
-                            {criterion.points} pts
-                          </span>
-
-                          <ChevronDown
-                            className={`h-4 w-4 text-slate-400 transition-transform ${
-                              isOpen
-                                ? "rotate-180"
-                                : ""
-                            }`}
-                          />
-                        </div>
-                      </button>
-
-                      {isOpen && (
-                        <div className="border-t border-blue-100 bg-white p-3">
-                          <div className="grid gap-2">
-                            {safeArray(
-                              criterion.bands
-                            ).map((band) => {
-                              const isSelected =
-                                String(
-                                  selected?.bandId
-                                ) ===
-                                String(
-                                  band.id
-                                );
-
-                              return (
-                                <button
-                                  key={band.id}
-                                  type="button"
-                                  onClick={() =>
-                                    handleSelectBand(
-                                      criterion,
-                                      band,
-                                      index
-                                    )
-                                  }
-                                  className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
-                                    isSelected
-                                      ? "border-blue-300 bg-blue-50 ring-2 ring-blue-500/10"
-                                      : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div className="min-w-0">
-                                      <p className="text-xs font-bold text-slate-900">
-                                        {
-                                          band.label
-                                        }
-                                      </p>
-
-                                      {band.description && (
-                                        <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                                          {
-                                            band.description
-                                          }
-                                        </p>
-                                      )}
-                                    </div>
-
-                                    <span className="shrink-0 font-mono text-xs font-black text-blue-700">
-                                      {
-                                        band.points
-                                      }
-                                      /
-                                      {
-                                        criterion.points
-                                      }
-                                    </span>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      )}
-                    </section>
-                  );
-                }
-              )}
-            </div>
+            <HorizontalRubricCriteria
+              rubricCriteria={rubricCriteria}
+              selfRubricScores={selfRubricScores}
+              openCriterionKey={openCriterionKey}
+              onOpenCriterion={toggleCriterion}
+              onSelectBand={handleSelectBand}
+            />
           )}
         </div>
 
-        <footer className="shrink-0 border-t border-slate-200 bg-white p-4">
-          <div className="rounded-xl border border-blue-100 bg-blue-50 p-3">
+        <footer className="shrink-0 border-t border-slate-200 bg-white p-3">
+          <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+          <div className="shrink-0 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 xl:w-[250px]">
             <div className="flex items-end justify-between gap-3">
               <div>
                 <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-600">
                   Progress
                 </p>
 
-                <p className="mt-1 text-[11px] font-bold text-slate-800">
+                <p className="mt-0.5 text-[10px] font-bold text-slate-800">
                   {completedSelfCriteria}/
                   {rubricCriteria.length} criteria
                 </p>
               </div>
 
               <div className="text-right">
-                <p className="font-mono text-lg font-black text-blue-800">
+                <p className="font-mono text-base font-black text-blue-800">
                   {selfRubricTotal}/
                   {rubricTotal}
                 </p>
@@ -2782,18 +2745,20 @@ function SelfGradeDrawer({
           </div>
 
           {selfGradeMessage && (
-            <p className="mt-2 text-[10px] font-semibold text-amber-700">
+            <p className="min-w-0 flex-1 text-[10px] font-semibold text-amber-700 xl:px-2">
               {selfGradeMessage}
             </p>
           )}
 
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="grid flex-1 grid-cols-2 gap-2 xl:max-w-[720px]">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
             >
-              Cancel
+              {completedSelfCriteria === rubricCriteria.length
+                ? "Close Rubric"
+                : backLabel || "Back to AI Feedback"}
             </button>
 
             <button
@@ -2803,15 +2768,14 @@ function SelfGradeDrawer({
                 completedSelfCriteria !==
                 rubricCriteria.length
               }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
               <CheckCircle2 className="h-4 w-4" />
-              Save Self-Grade
+              Save & Continue to Submit
             </button>
           </div>
+          </div>
         </footer>
-      </aside>
-    </div>,
-    document.body
+      </section>
   );
 }

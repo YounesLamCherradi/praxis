@@ -180,7 +180,7 @@ function parseRubricText(text = "") {
         .replace(/^[-•*\d.)\s]+/, "")
         .trim();
 
-      const [namePart, ...descriptionParts] = cleanedLine.split(/[:–—-]/);
+      const [namePart, ...descriptionParts] = cleanedLine.split(/[:\-–]/);
 
       const name = namePart?.trim() || `Criterion ${index + 1}`;
 
@@ -310,7 +310,7 @@ export default function TeacherRubrics() {
     const options = new Map();
 
     classes.forEach((cls) => {
-      if (cls.code) options.set(cls.code, `${cls.code} — ${cls.name}`);
+      if (cls.code) options.set(cls.code, `${cls.code}  -  ${cls.name}`);
     });
 
     assignments.forEach((assignment) => {
@@ -319,7 +319,7 @@ export default function TeacherRubrics() {
       if (code) {
         options.set(
           code,
-          `${code}${assignment.className ? ` — ${assignment.className}` : ""}`
+          `${code}${assignment.className ? `  -  ${assignment.className}` : ""}`
         );
       }
     });
@@ -1145,7 +1145,7 @@ function RubricModal({ record, assignments, onClose, onSave }) {
 
                     {assignments.map((assignmentItem) => (
                       <option key={assignmentItem.id} value={assignmentItem.id}>
-                        {assignmentItem.title} —{" "}
+                        {assignmentItem.title}  - {" "}
                         {assignmentItem.classCode || assignmentItem.className}
                       </option>
                     ))}

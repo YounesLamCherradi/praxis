@@ -2,6 +2,8 @@ const { defineConfig, devices } = require("@playwright/test");
 require("dotenv/config");
 
 const isCI = Boolean(process.env.CI);
+const isHeaded = process.env.E2E_HEADED === "1";
+const browserChannel = process.env.PLAYWRIGHT_BROWSER_CHANNEL || "chrome";
 
 module.exports = defineConfig({
   testDir: "./tests/e2e",
@@ -25,7 +27,9 @@ module.exports = defineConfig({
   ],
   use: {
     baseURL: process.env.E2E_BASE_URL || "https://praxiswrite.com",
-    headless: isCI,
+    // Headless is the dependable local default. Set E2E_HEADED=1 when you want
+    // to watch Chrome interact with the app.
+    headless: !isHeaded,
     screenshot: "only-on-failure",
     video: "retain-on-failure",
     trace: "on-first-retry",
@@ -33,7 +37,10 @@ module.exports = defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      // Ubuntu 26.04 is newer than Playwright's bundled Chromium support. Use
+      // the installed stable Chrome channel by default; this also works on CI
+      // runners that provide Google Chrome.
+      use: { ...devices["Desktop Chrome"], channel: browserChannel },
     },
   ],
 });

@@ -80,6 +80,17 @@ function toNumber(value, fallback, minimum = null, maximum = null) {
   return result;
 }
 
+function toInteger(value, fallback, minimum = null, maximum = null) {
+  const normalized = toNumber(
+    value,
+    fallback,
+    minimum,
+    maximum
+  );
+
+  return Math.floor(normalized);
+}
+
 function normalizeAssignmentType(value) {
   const clean = getText(value).toLowerCase();
 
@@ -213,7 +224,7 @@ export function normalizeGeneratedAssignment(data) {
       minWords: 250,
       maxWords: 400,
       feedbackRequestLimit: 2,
-      ideaRequestLimit: 3,
+      ideaRequestLimit: 0,
       dueDate: "",
       classCode: "",
       aiSupport: {
@@ -289,7 +300,7 @@ export function normalizeGeneratedAssignment(data) {
     minWords,
     maxWords,
 
-    feedbackRequestLimit: toNumber(
+    feedbackRequestLimit: toInteger(
       parsed.feedbackRequestLimit ??
         parsed.feedbackChecks,
       2,
@@ -297,10 +308,10 @@ export function normalizeGeneratedAssignment(data) {
       10
     ),
 
-    ideaRequestLimit: toNumber(
+    ideaRequestLimit: toInteger(
       parsed.ideaRequestLimit ??
         parsed.ideaChecks,
-      3,
+      0,
       0,
       10
     ),
@@ -352,14 +363,14 @@ export function normalizeGeneratedAssignment(data) {
 export function buildAssignmentGenerationSystemPrompt() {
   return `You are Praxis Assignment Builder.
 
-A teacher will describe a writing assignment in one plain-English message.
+An instructor will describe a writing assignment in one plain-English message.
 Infer and create the complete assignment configuration.
 
 Important rules:
 - Create assignment instructions only. Never write a student answer or sample essay.
-- Preserve every explicit teacher requirement.
+- Preserve every explicit instructor requirement.
 - Infer sensible classroom defaults for omitted details.
-- Use the teacher's wording as the source of truth.
+- Use the instructor's wording as the source of truth.
 - Keep student instructions clear, concise, and appropriate for the inferred CEFR level.
 - Select only a course from the provided available-course list.
 - If no course is mentioned, select the first available course.
@@ -368,11 +379,10 @@ Important rules:
 - If no level is stated, use "B1".
 - If no word range is stated, use 250 to 400 words.
 - If no feedback limit is stated, use 2. feedbackRequestLimit=0 disables AI draft feedback.
-- If no idea-help limit is stated, use 3.
-- ideaRequestLimit is independent from the conversational Ideas Coach. Do not set it to 0 merely because the Coach is disabled.
-- Unless the teacher says otherwise, enable the Ideas Coach with unlimited active time (chatTimeLimit=0) and automatic outline.
+- Set ideaRequestLimit to 0 because separate planning-note requests are out of scope.
+- Unless the instructor says otherwise, enable Coach with unlimited active time (chatTimeLimit=0) and automatic outline.
 - chatTimeLimit meanings: -1 disabled, 0 unlimited, positive number limited minutes.
-- When the Ideas Coach is disabled, return ideasCoach=false, chatTimeLimit=-1, and autoOutlineFromChat=false. Keep ideaRequestLimit unchanged.
+- When Coach is disabled, return ideasCoach=false, chatTimeLimit=-1, and autoOutlineFromChat=false.
 - Do not generate writing playback, focus tracking, large-insertion detection, honor confirmation, paste policy, submission locking, or other integrity fields. They are not assignment-level fields in the restored old Praxis model.
 - Align the task with the provided rubric when a rubric is present.
 - Return ONLY valid JSON. No markdown and no commentary.
@@ -380,7 +390,7 @@ Important rules:
 Return this exact JSON shape:
 {
   "title": "assignment title",
-  "description": "short teacher-facing summary",
+  "description": "short instructor-facing summary",
   "instructions": "student-facing instructions",
   "requirements": ["requirement 1", "requirement 2"],
   "assignmentType": "Response | Definition | Argument | Narrative | Compare and Contrast | Process Paragraph | Reflection | Summary | Analysis | Other",
@@ -388,7 +398,7 @@ Return this exact JSON shape:
   "minWords": 250,
   "maxWords": 400,
   "feedbackRequestLimit": 2,
-  "ideaRequestLimit": 3,
+  "ideaRequestLimit": 0,
   "dueDate": "YYYY-MM-DDTHH:mm",
   "classId": "available course id",
   "classCode": "available course code",
@@ -427,7 +437,7 @@ export function buildAssignmentGenerationUserPrompt({
     "Available courses:",
     formatCourses(availableCourses),
     "",
-    "Teacher's plain-English assignment description:",
+    "Instructor's plain-English assignment description:",
     `"""${getText(teacherRequest)}"""`,
     "",
     rubricContext

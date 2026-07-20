@@ -308,7 +308,7 @@ export default function AssignmentTray() {
                 {status === "submitted" && (
                   <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
                     <p className="text-[11px] font-bold text-indigo-700">
-                      Submitted — awaiting professor review.
+                      Submitted, awaiting instructor review.
                     </p>
                   </div>
                 )}
@@ -316,7 +316,7 @@ export default function AssignmentTray() {
                 {status === "reopened" && (
                   <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3">
                     <p className="text-[11px] font-bold text-sky-700">
-                      Your teacher requested a revision. The restored workflow starts again at brainstorming.
+                      Your instructor requested a revision. The restored workflow starts again at brainstorming.
                     </p>
                   </div>
                 )}

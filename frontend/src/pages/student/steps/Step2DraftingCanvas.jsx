@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
 import {
   AlertTriangle,
@@ -293,9 +294,11 @@ export default function Step2DraftingCanvas() {
     setTypedText,
     goToStudentStep,
     saveDraftProgress,
+    studentWorkflowNotice,
   } = useStudentWorkspace();
 
   const [integrityWarning, setIntegrityWarning] = useState("");
+  const [pendingPaste, setPendingPaste] = useState(null);
   const [integrityLogs, setIntegrityLogs] = useState([]);
   const [chatOutlineText, setChatOutlineText] = useState(
     activeSubmission?.outline?.chatOutlineText || ""
@@ -329,6 +332,7 @@ export default function Step2DraftingCanvas() {
   const copyPasteLogsRef = useRef(
     safeArray(activeSubmission?.copyPasteLogs)
   );
+  const draftEditorRef = useRef(null);
   const focusLossLogsRef = useRef(
     safeArray(activeSubmission?.focusLossLogs)
   );
@@ -360,6 +364,26 @@ export default function Step2DraftingCanvas() {
 
   const hasDraftText = draftValue.trim().length > 0;
   const wordCount = countWords(draftValue);
+  const rubricCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
+    ? assignment.rubricSchema.criteria
+    : Array.isArray(assignment?.rubric)
+      ? assignment.rubric
+      : [];
+  const savedRubricScores = activeSubmission?.selfRubricScores || {};
+  const rubricComplete = rubricCriteria.length === 0 || rubricCriteria.every(
+    (criterion) => {
+      const score = savedRubricScores?.[criterion.id];
+      return Boolean(score?.bandId || score?.score !== undefined);
+    }
+  );
+  const rubricTransitionNoticeOpen = Boolean(
+    studentWorkflowNotice &&
+      Number(studentWorkflowNotice?.pendingTransition?.targetStep) === 4
+  );
+  const workflowAlertSlot =
+    typeof document !== "undefined"
+      ? document.getElementById("student-workflow-alert-slot")
+      : null;
 
   const minWords = Number(
     assignment?.wordCountMin ??
@@ -648,7 +672,7 @@ export default function Step2DraftingCanvas() {
         setChatOutlineText(nextText);
         persistChatOutline(nextText, nextMeta);
         setOutlineStatus(
-          "Outline ready — edit it freely before you write."
+          "Outline ready  -  edit it freely before you write."
         );
       } else {
         persistChatOutline(currentText, nextMeta);
@@ -807,7 +831,7 @@ export default function Step2DraftingCanvas() {
       addedChars: insertedText.length,
       deletedChars: removedText.length,
 
-      // Exact operation coordinates used by teacher playback.
+      // Exact operation coordinates used by instructor playback.
       // `start` and `end` refer to the text before this edit.
       start: prefix,
       end: prefix + removedText.length,
@@ -947,7 +971,7 @@ export default function Step2DraftingCanvas() {
       });
 
       showWarning(
-        `Large text insertion detected (${change.addedChars} characters). Your teacher may review writing activity for this assignment.`
+        `Large text insertion detected (${change.addedChars} characters). Your instructor may review writing activity for this assignment.`
       );
     }
 
@@ -1012,17 +1036,71 @@ export default function Step2DraftingCanvas() {
       event.preventDefault();
 
       showWarning(
-        "Pasting is blocked for this assignment based on your teacher’s settings."
+        "Pasting is blocked for this assignment based on your instructor’s settings."
       );
 
       return;
     }
 
     if (settings.pastePolicy === "warn") {
-      showWarning(
-        "Paste detected. You can continue, but your teacher may review paste activity for this assignment."
-      );
+      event.preventDefault();
+      setPendingPaste({
+        text: pastedText,
+        start: pasteEvent.start,
+        end: pasteEvent.end,
+        draftBefore: pasteEvent.draftBefore,
+      });
     }
+  }
+
+  function resolvePendingPaste(keepPastedText) {
+    if (!pendingPaste) return;
+
+    if (!keepPastedText) {
+      setPendingPaste(null);
+      showWarning("Paste canceled. Continue writing in your own words.");
+      requestAnimationFrame(() => draftEditorRef.current?.focus());
+      return;
+    }
+
+    const before = String(pendingPaste.draftBefore || "");
+    const start = Math.max(0, Number(pendingPaste.start || 0));
+    const end = Math.max(start, Number(pendingPaste.end ?? start));
+    const nextValue = `${before.slice(0, start)}${pendingPaste.text}${before.slice(end)}`;
+
+    appendWritingEvent({
+      type: "paste_insert",
+      action: "insertFromPaste",
+      draftText: nextValue,
+      snapshot: nextValue,
+      text: nextValue,
+      wordCount: countWords(nextValue),
+      charCount: nextValue.length,
+      insertedText: pendingPaste.text,
+      removedText: before.slice(start, end),
+      addedChars: pendingPaste.text.length,
+      deletedChars: end - start,
+      start,
+      end,
+      position: start,
+      eventGroup: "Paste",
+      preview: safePreview(pendingPaste.text, 160),
+    });
+
+    lastValueRef.current = nextValue;
+    setTypedText(nextValue);
+    scheduleAutosave(nextValue);
+    setPendingPaste(null);
+    showWarning(
+      "Paste detected. You can continue, but your instructor may review paste activity for this assignment."
+    );
+
+    requestAnimationFrame(() => {
+      const editor = draftEditorRef.current;
+      const caret = start + pendingPaste.text.length;
+      editor?.focus();
+      editor?.setSelectionRange(caret, caret);
+    });
   }
 
   function handleCopy() {
@@ -1076,7 +1154,7 @@ export default function Step2DraftingCanvas() {
       event.preventDefault();
 
       showWarning(
-        "Drag and drop is disabled for this assignment based on your teacher’s settings."
+        "Drag and drop is disabled for this assignment based on your instructor’s settings."
       );
     }
   }
@@ -1163,10 +1241,33 @@ export default function Step2DraftingCanvas() {
     }
   }
 
+  function handleContinueForward() {
+    if (!hasDraftText) {
+      showWarning("Write part of your draft before continuing.");
+      return;
+    }
+
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    const savedAt = persistWritingEvidence(draftValue);
+    setLastSavedAt(savedAt);
+    setSaveStatus("saved");
+
+    goToStudentStep(4, {
+      draftText: draftValue,
+      currentText: draftValue,
+      finalText: draftValue,
+      skipFeedbackPrompt: rubricComplete,
+    });
+  }
+
   return (
-    <div className="flex min-h-full flex-col gap-3 pb-2">
+    <div className="flex h-full min-h-0 flex-col gap-3 pb-2">
       {/* Compact progress and editor toolbar */}
-      <div className="sticky top-0 z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
+      <div className="z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -1218,19 +1319,40 @@ export default function Step2DraftingCanvas() {
                 Back to Coach
               </button>
 
-              <button
-                type="button"
-                onClick={handleReviewDraft}
-                disabled={!canReview}
-                className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all sm:w-auto ${
-                  canReview
-                    ? "bg-blue-600 text-white shadow-md shadow-blue-600/20 hover:bg-blue-700"
-                    : "cursor-not-allowed bg-slate-100 text-slate-400"
-                }`}
-              >
-                Continue to Feedback
-                <ArrowRight className="h-4 w-4" />
-              </button>
+              <div className="grid flex-1 grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1 sm:flex-none">
+                <button
+                  type="button"
+                  aria-current="page"
+                  className="rounded-lg bg-white px-4 py-2.5 text-xs font-bold text-blue-700 shadow-sm"
+                >
+                  Draft
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReviewDraft}
+                  disabled={!canReview}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg px-4 py-2.5 text-xs font-bold text-slate-500 transition-all hover:bg-white hover:text-blue-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  AI Feedback
+                </button>
+              </div>
+
+              {rubricTransitionNoticeOpen ? (
+                <div className="hidden items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs font-bold text-blue-700 xl:inline-flex">
+                  Choose an option above
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleContinueForward}
+                  disabled={!hasDraftText}
+                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                >
+                  {rubricComplete ? "Continue to Submit" : "Continue to Rubric Check"}
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              )}
             </div>
           </div>
 
@@ -1254,12 +1376,17 @@ export default function Step2DraftingCanvas() {
         </div>
       </div>
 
-      {integrityWarning && (
-        <div className="shrink-0 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800 flex items-start gap-2">
-          <ShieldAlert className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{integrityWarning}</span>
-        </div>
-      )}
+      {integrityWarning && workflowAlertSlot &&
+        createPortal(
+          <div
+            role="status"
+            className="flex max-w-md items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-semibold leading-4 text-amber-800 shadow-sm"
+          >
+            <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>{integrityWarning}</span>
+          </div>,
+          workflowAlertSlot
+        )}
 
       {outlineRebuildPrompt && (
         <div className="shrink-0 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950 shadow-sm">
@@ -1306,13 +1433,13 @@ export default function Step2DraftingCanvas() {
           When the automatic outline is enabled, the editable outline
           appears as a right-side planning panel on desktop. */}
       <div
-        className={`grid w-full shrink-0 gap-3 ${
+        className={`grid min-h-[300px] w-full flex-1 gap-3 ${
           showChatOutline
             ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_420px]"
             : "grid-cols-1"
         }`}
       >
-        <section className="flex h-[clamp(420px,46vh,520px)] min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="shrink-0 flex flex-col gap-2 border-b border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1350,7 +1477,8 @@ export default function Step2DraftingCanvas() {
           </div>
 
           <textarea
-            aria-label="Draft editor — write your essay here"
+            ref={draftEditorRef}
+            aria-label="Draft editor  -  write your essay here"
             value={draftValue}
             onChange={handleDraftChange}
             onPaste={handlePaste}
@@ -1378,6 +1506,53 @@ export default function Step2DraftingCanvas() {
         )}
       </div>
 
+      {pendingPaste && (
+        <div
+          className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="presentation"
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="paste-review-title"
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-200 bg-amber-50 text-amber-700">
+                <ShieldAlert className="h-5 w-5" />
+              </div>
+
+              <div>
+                <h2 id="paste-review-title" className="text-base font-bold text-slate-900">
+                  Paste detected
+                </h2>
+                <p className="mt-1 text-sm leading-6 text-slate-600">
+                  Keep pasted text only when it is fair use, such as a short quotation you are analyzing. Paste activity may be reviewed by your instructor.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => resolvePendingPaste(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Remove Pasted Text
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => resolvePendingPaste(true)}
+                className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700"
+              >
+                Keep Pasted Text
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1390,13 +1565,13 @@ function ChatOutlinePanel({
   onRebuild,
 }) {
   return (
-    <section className="flex h-[clamp(420px,46vh,520px)] min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-blue-200 border-t-4 border-t-blue-600 bg-white p-4 shadow-sm">
+    <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-blue-200 border-t-4 border-t-blue-600 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-blue-700" />
             <h2 className="text-xs font-black uppercase tracking-wider text-slate-900">
-              Outline — short notes only
+              Outline  -  short notes only
             </h2>
           </div>
 

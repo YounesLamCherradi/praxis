@@ -68,7 +68,7 @@ export const DEFAULT_AI_SUPPORT_SETTINGS = {
   // Restored meaning: 0 = unlimited active Coach time.
   coachTimeLimitMinutes: 0,
 
-  ideaRequestLimit: 3,
+  ideaRequestLimit: 0,
   feedbackRequestLimit: 2,
   autoBuildOutlineFromCoach: true,
 

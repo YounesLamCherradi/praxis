@@ -208,7 +208,7 @@ export default function RubricSetupStep({
                 </div>
 
                 <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  Claude will create the rubric later from the assignment details.
+                  AI will create the rubric later from the assignment details.
                 </p>
               </button>
 
@@ -258,7 +258,7 @@ export default function RubricSetupStep({
                       <option key={rubric.id} value={rubric.id}>
                         {rubric.title}
                         {rubric.sourceAssignmentTitle
-                          ? ` — from ${rubric.sourceAssignmentTitle}`
+                          ? `  -  from ${rubric.sourceAssignmentTitle}`
                           : ""}
                       </option>
                     ))}
@@ -293,13 +293,13 @@ export default function RubricSetupStep({
                 </div>
 
                 <h4 className="mt-4 font-serif text-base font-bold text-slate-950">
-                  Claude will generate the rubric for you
+                  AI will generate the rubric for you
                 </h4>
 
                 <p className="mt-2 text-xs leading-relaxed text-slate-500">
                   Continue with the assignment details and settings first.
-                  Claude will use the topic, assignment type, English level,
-                  word range, instructions, and teacher brief to generate the
+                  AI will use the topic, assignment type, English level,
+                  word range, instructions, and instructor brief to generate the
                   rubric when you enter the Review step.
                 </p>
 

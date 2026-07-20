@@ -485,7 +485,7 @@ export default function StudentDashboard() {
   );
 
   /*
-   * This mirrors the teacher dashboard review-inbox rule:
+   * This mirrors the instructor dashboard review-inbox rule:
    * only current Submitted/Late attempts from current assignments count.
    * On the student side, the list is additionally restricted to this student.
    */
@@ -722,19 +722,10 @@ export default function StudentDashboard() {
     readNotificationIds,
   ]);
 
-  const outlineEnabledForCurrentAssignment = Boolean(
-    activeAssignment?.autoOutlineFromChat ??
-      activeAssignment?.autoBuildOutlineFromCoach ??
-      activeAssignment?.generateOutlineFromCoach ??
-      activeAssignment?.aiSupportSettings?.autoOutlineFromChat ??
-      activeAssignment?.aiSupportSettings?.autoBuildOutlineFromCoach ??
-      false
-  );
-
-  const useWideDraftWorkspace =
-    Boolean(selectedAssignmentId) &&
-    Number(studentStep) === 2 &&
-    outlineEnabledForCurrentAssignment;
+  // Keep the assignment shell stable while students move between tabs.
+  // Changing the page max-width for Draft only made Draft & Feedback jump
+  // horizontally when AI Feedback opened.
+  const useWideDraftWorkspace = Boolean(selectedAssignmentId);
 
   function markStudentNotificationRead(
     notificationId
@@ -1222,14 +1213,14 @@ export default function StudentDashboard() {
 
       if (!matchedCourse) {
         setEnrollError(
-          "Invalid course code. Please check the code provided by your professor."
+          "Invalid course code. Please check the code provided by your instructor."
         );
         return;
       }
 
       if (matchedCourse.isPublished === false) {
         setEnrollError(
-          "This course is currently unpublished. Please contact your professor."
+          "This course is currently unpublished. Please contact your instructor."
         );
         return;
       }
@@ -1731,6 +1722,16 @@ export default function StudentDashboard() {
 
           <button
             type="button"
+            onClick={openBugReportForm}
+            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            aria-label="Report a bug"
+          >
+            <Megaphone className="h-4 w-4 text-blue-300" />
+            <span className="flex-1">Report a Bug</span>
+          </button>
+
+          <button
+            type="button"
             onClick={toggleAccountMenu}
             className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
               isAccountMenuOpen
@@ -1822,7 +1823,7 @@ export default function StudentDashboard() {
                   </h3>
 
                   <p className="text-xs text-slate-500 max-w-xl">
-                    Has your professor provided a course code? Enter
+                    Has your instructor provided a course code? Enter
                     it to load your writing workspace and assigned
                     prompts.
                   </p>
@@ -1858,7 +1859,7 @@ export default function StudentDashboard() {
                     icon={Clock}
                     label="Awaiting Review"
                     value={`${pendingReviewCount} Tasks`}
-                    description="Submitted work currently waiting for teacher review."
+                    description="Submitted work currently waiting for instructor review."
                     tone="indigo"
                   />
 
@@ -1891,16 +1892,6 @@ export default function StudentDashboard() {
           </div>
         </div>
       </main>
-
-      <button
-        type="button"
-        onClick={openBugReportForm}
-        className="fixed bottom-6 right-4 z-40 inline-flex items-center gap-2.5 rounded-full border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-800 shadow-[0_12px_34px_rgba(15,23,42,0.18)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 hover:shadow-[0_16px_40px_rgba(37,99,235,0.18)] focus:outline-none focus:ring-4 focus:ring-blue-500/15 sm:right-5 md:right-6 lg:right-8"
-        aria-label="Report a bug"
-      >
-        <Megaphone className="h-4 w-4" />
-        Report a Bug
-      </button>
 
       {isPasswordPanelOpen && (
         <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
@@ -2226,7 +2217,7 @@ export default function StudentDashboard() {
 
               <div className="space-y-1">
                 <h3 className="text-lg font-bold text-slate-900">
-                  Join a Professor&apos;s Course
+                  Join an Instructor&apos;s Course
                 </h3>
 
                 <p className="text-xs leading-relaxed text-slate-500">

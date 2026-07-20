@@ -346,6 +346,16 @@
     return evidence;
   }
 
+  function buildUnknownPositions() {
+    return {
+      typingRate: "unknown",
+      longPauses: "unknown",
+      localRevisions: "unknown",
+      productProcessRatio: "unknown",
+      pasteShare: "unknown",
+    };
+  }
+
   function analyzeSubmission(submission = {}, assignment = {}, options = {}) {
     const events = getEssayEvents(submission);
     const processEvents = normalizeProcessEvents(submission);
@@ -398,8 +408,10 @@
       productProcessRatio: cohorts.compareToRange ? cohorts.compareToRange(metrics.productProcessRatio, cohort.productProcessRatio) : "unknown",
       pasteShare: cohorts.compareToRange ? cohorts.compareToRange(metrics.pasteShare, cohort.pasteShare) : "unknown",
     };
-    const evidence = [...buildEvidence(metrics, externalPasteEvents), ...buildCohortEvidence(positions, cohort)];
-    const status = chooseStatus(finalWords, evidence);
+    const rawEvidence = [...buildEvidence(metrics, externalPasteEvents), ...buildCohortEvidence(positions, cohort)];
+    const status = chooseStatus(finalWords, rawEvidence);
+    const evidence = status === STATUS.INSUFFICIENT ? [] : rawEvidence;
+    const cohortPositions = status === STATUS.INSUFFICIENT ? buildUnknownPositions() : positions;
     const coachBaseline = getCoachMotorBaseline({ ...submission, processEvents });
     const excludedSources = safeArray(options.exclusionSources);
     const excludedFromAnalytics = Boolean(options.excludedFromAnalytics || excludedSources.length);
@@ -436,7 +448,7 @@
           productProcessRatio: cohort.productProcessRatio,
           pasteShare: cohort.pasteShare,
         },
-        positions,
+        positions: cohortPositions,
       },
     };
   }

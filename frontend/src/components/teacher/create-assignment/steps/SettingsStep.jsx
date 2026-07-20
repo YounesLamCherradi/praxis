@@ -2,7 +2,6 @@ import React from "react";
 import {
   Bot,
   Clock3,
-  ListChecks,
   ShieldCheck,
 } from "lucide-react";
 
@@ -17,6 +16,16 @@ function NumberSetting({
   disabled = false,
   maximum = 120,
 }) {
+  function clampInteger(value) {
+    const parsed = Number.parseInt(String(value ?? ""), 10);
+    const normalized = Number.isFinite(parsed) ? parsed : 0;
+
+    return Math.max(
+      0,
+      Math.min(maximum, normalized)
+    );
+  }
+
   return (
     <label
       className={`space-y-2 rounded-xl border p-4 transition-colors ${
@@ -38,15 +47,7 @@ function NumberSetting({
         value={value}
         disabled={disabled}
         onChange={(event) =>
-          onChange(
-            Math.max(
-              0,
-              Math.min(
-                maximum,
-                Number(event.target.value || 0)
-              )
-            )
-          )
+          onChange(clampInteger(event.target.value))
         }
         className={`w-full rounded-xl border border-slate-200 bg-white p-3 font-mono text-xs font-bold text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 ${
           disabled ? "cursor-not-allowed" : ""
@@ -66,9 +67,6 @@ export default function SettingsStep({
 
   coachTimeLimitMinutes,
   setCoachTimeLimitMinutes,
-
-  ideaRequestLimit,
-  setIdeaRequestLimit,
 
   autoBuildOutlineFromCoach,
   setAutoBuildOutlineFromCoach,
@@ -96,7 +94,7 @@ export default function SettingsStep({
         </h3>
 
         <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-          Configure the original Praxis Coach, separate Idea Help, notes-only outline, and AI feedback request limits.
+          Configure Coach chat, notes-only outline, and AI feedback request limits.
         </p>
       </div>
 
@@ -107,13 +105,13 @@ export default function SettingsStep({
           </h4>
 
           <p className="mt-1 text-xs text-slate-500">
-            A value of 0 keeps the original special meaning shown below.
+            A value of 0 keeps the special meaning shown below.
           </p>
         </div>
 
         <ToggleRow
           icon={Bot}
-          label="AI ideas coach"
+          label="Coach"
           description="Students can brainstorm and plan before drafting. Turning this off stores disableChatbot=true and chatTimeLimit=-1."
           checked={allowAI}
           onChange={handleCoachToggle}
@@ -129,15 +127,6 @@ export default function SettingsStep({
             disabled={!allowAI}
           />
 
-          <NumberSetting
-            icon={ListChecks}
-            label="Idea-help requests"
-            description="0 disables separate Idea Help. This limit is independent from the conversational Ideas Coach."
-            value={ideaRequestLimit}
-            onChange={setIdeaRequestLimit}
-            maximum={20}
-          />
-
           <div
             className={`flex items-start justify-between gap-4 rounded-xl border p-4 ${
               allowAI
@@ -151,7 +140,7 @@ export default function SettingsStep({
               </p>
 
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Convert planning chat into editable notes when the student reaches the drafting step. Requires the Ideas Coach.
+                Convert planning chat into editable notes when the student reaches the drafting step. Requires Coach.
               </p>
             </div>
 
@@ -188,7 +177,7 @@ export default function SettingsStep({
 
         {!allowAI && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
-            The conversational Ideas Coach, its timer, and automatic Coach outline are disabled. Separate Idea Help and AI draft feedback remain available according to their own request limits.
+            Coach chat, its timer, and automatic Coach outline are disabled. AI draft feedback remains available according to its request limit.
           </div>
         )}
       </section>

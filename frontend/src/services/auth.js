@@ -111,7 +111,7 @@ export async function signIn(
   if (!data.profile?.id || !data.profile?.role) {
     clearSession();
     throw new Error(
-      "Your account setup is incomplete. Please contact your teacher or administrator."
+      "Your account setup is incomplete. Please contact your instructor or administrator."
     );
   }
 

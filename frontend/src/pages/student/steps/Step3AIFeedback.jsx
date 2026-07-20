@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowRight,
   ChevronLeft,
   ChevronRight,
@@ -471,7 +470,7 @@ function buildDraftFeedbackRequest({
   return {
     maxTokens: 900,
     temperature: 0.2,
-    system: `You are a careful writing teacher giving feedback to an ESL student.
+    system: `You are a careful writing instructor giving feedback to an ESL student.
 
 Return ONLY a JSON array containing 2 to 4 feedback objects.
 
@@ -1076,17 +1075,27 @@ export default function Step3AIFeedback() {
     activeAssignment?.aiFeedback !== false &&
     activeAssignment?.allowAI !== false;
 
-  const feedbackLimit = Number(
-    activeAssignment?.feedbackRequestLimit ??
-      activeAssignment?.feedbackChecks ??
-      activeSubmission?.feedbackRequestLimit ??
-      0
+  const feedbackLimit = Math.max(
+    0,
+    Math.floor(
+      Number(
+        activeAssignment?.feedbackRequestLimit ??
+          activeAssignment?.feedbackChecks ??
+          activeSubmission?.feedbackRequestLimit ??
+          0
+      ) || 0
+    )
   );
 
   const feedbackHistory = safeArray(activeSubmission?.feedbackHistory);
 
   const feedbackChecksUsed =
-    Number(activeSubmission?.feedbackChecksUsed || 0) ||
+    Math.max(
+      0,
+      Math.floor(
+        Number(activeSubmission?.feedbackChecksUsed || 0) || 0
+      )
+    ) ||
     feedbackHistory.filter((item) => {
       const role = String(item?.role || "").toLowerCase();
       const type = String(item?.type || "").toLowerCase();
@@ -1114,7 +1123,10 @@ export default function Step3AIFeedback() {
     );
 
     setFeedback(savedFeedback || null);
-    setViewMode("edit");
+    // This component is opened from the shared "AI Feedback" tab. Always
+    // keep that tab active; without a saved review it presents the existing
+    // request-feedback action instead of mounting a second draft screen.
+    setViewMode("feedback");
     setShowGeneralNotes(false);
     setActiveHighlightIndex(0);
     setSelectedIssueId("");
@@ -1422,18 +1434,10 @@ export default function Step3AIFeedback() {
 
       if (!container || !target) return;
 
-      const containerRect = container.getBoundingClientRect();
-      const targetRect = target.getBoundingClientRect();
-
-      const targetTop =
-        container.scrollTop +
-        (targetRect.top - containerRect.top) -
-        container.clientHeight / 2 +
-        targetRect.height / 2;
-
-      container.scrollTo({
-        top: Math.max(0, targetTop),
+      target.scrollIntoView({
         behavior,
+        block: "center",
+        inline: "nearest",
       });
     });
   }
@@ -1456,7 +1460,7 @@ export default function Step3AIFeedback() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-sm font-bold text-slate-900">
-                  Final Revision
+                  Draft & Feedback
                 </h3>
 
                 <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-mono font-bold text-blue-700">
@@ -1501,14 +1505,18 @@ export default function Step3AIFeedback() {
               <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
                 <button
                   type="button"
-                  onClick={() => { setSelectedIssueId(""); setViewMode("edit"); }}
+                  onClick={() => {
+                    setSelectedIssueId("");
+                    goToStudentStep(2, {
+                      draftText,
+                      currentText: draftText,
+                    });
+                  }}
                   className={`rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
-                    viewMode === "edit"
-                      ? "bg-white text-blue-700 shadow-sm"
-                      : "text-slate-500 hover:text-slate-900"
+                    "text-slate-500 hover:bg-white hover:text-blue-700"
                   }`}
                 >
-                  Edit Revision
+                  Draft
                 </button>
 
                 <button
@@ -1586,8 +1594,8 @@ export default function Step3AIFeedback() {
             className="min-h-[470px] w-full resize-none bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:bg-white"
           />
         ) : (
-          <div className="bg-[#F8FAFC] p-3 sm:p-4">
-            <article className="relative mx-auto flex h-[clamp(430px,calc(100vh-485px),610px)] min-h-[430px] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="bg-[#F8FAFC]">
+            <article className="relative w-full bg-[#F8FAFC]">
               <div className="relative z-10 shrink-0 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
@@ -1608,18 +1616,6 @@ export default function Step3AIFeedback() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedIssueId("");
-                        setViewMode("edit");
-                      }}
-                      className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-bold text-blue-700 transition-all hover:bg-blue-100"
-                    >
-                      <ArrowLeft className="h-3.5 w-3.5" />
-                      Back to Edit Revision
-                    </button>
-
                     {highlightedCount > 0 && (
                       <div className="flex items-center gap-2">
                         <button
@@ -1685,9 +1681,9 @@ export default function Step3AIFeedback() {
 
               <div
                 ref={feedbackScrollRef}
-                className="min-h-0 flex-1 scroll-smooth overflow-y-auto px-5 py-5 sm:px-7 sm:py-6"
+                className="w-full scroll-smooth px-5 py-5 sm:px-7 sm:py-6"
               >
-                <div className="mx-auto max-w-5xl">
+                <div className="w-full">
                   <HighlightedDraftPreview
                     reviewedText={reviewedText}
                     issues={issues}
@@ -1733,7 +1729,6 @@ export default function Step3AIFeedback() {
                 </div>
               </div>
 
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white to-transparent" />
             </article>
           </div>
         )}
@@ -1742,19 +1737,10 @@ export default function Step3AIFeedback() {
       <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[11px] leading-relaxed text-slate-500">
-            Use AI Feedback to locate issues, then return to Edit Revision and improve the paragraph in your own words.
+            Use AI Feedback to locate issues, then return to Draft and revise in your own words.
           </p>
 
           <div className="flex items-center justify-between gap-2 sm:justify-end">
-            <button
-              type="button"
-              onClick={() => goToStudentStep(2)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back to Draft
-            </button>
-
             {feedbackTransitionNoticeOpen ? (
               <div className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-blue-50 px-5 py-3 text-xs font-bold text-blue-700">
                 Choose an option above
@@ -1770,7 +1756,7 @@ export default function Step3AIFeedback() {
                     : "cursor-not-allowed bg-slate-100 text-slate-400"
                 }`}
               >
-                Continue to Submit
+                Continue to Rubric Check
                 <ArrowRight className="h-4 w-4" />
               </button>
             )}

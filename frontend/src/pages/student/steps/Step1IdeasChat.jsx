@@ -5,40 +5,15 @@ import {
   ArrowRight,
   Bot,
   User,
-  Sparkles,
   Loader2,
   ShieldAlert,
-  CheckCircle2,
 } from "lucide-react";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
 
-const STARTER_PROMPTS = [];
-
 function getText(value) {
   return String(value || "").trim();
-}
-
-function getIdeaBulletText(value) {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-
-  if (value && typeof value === "object") {
-    const textCandidate =
-      value.text ||
-      value.idea ||
-      value.bullet ||
-      value.content ||
-      value.message ||
-      value.title ||
-      "";
-
-    return String(textCandidate || "").trim();
-  }
-
-  return "";
 }
 
 function normalizeChatMessage(msg) {
@@ -228,15 +203,15 @@ RULES:
 1. Ask ONE question at a time. Keep it short and friendly.
 2. NEVER write text the student could copy into their assignment.
 3. If a student seems stuck or says they don't know, don't keep pushing. Instead, offer a simple, structured prompt like: "What are your two or three main ideas?" or "Which of those ideas would make the most sense to write about first?"
-4. Help the student organise their thinking by asking questions like: "What is the most important thing you want to say?", "Which idea would come first — and why?", "What example could you use to explain that?"
+4. Help the student organise their thinking by asking questions like: "What is the most important thing you want to say?", "Which idea would come first, and why?", "What example could you use to explain that?"
 5. If the student asks you to write for them, gently redirect with a question instead.
-6. Match your vocabulary to CEFR level ${languageLevel} — keep it simple and encouraging.
+6. Match your vocabulary to CEFR level ${languageLevel}; keep it simple and encouraging.
 7. Never repeat the same question twice in a conversation.
 8. After two or three useful student replies, briefly check whether they already have enough ideas to begin drafting. Ask a choice-style question such as: "Do you feel ready to draft now, or do you want one more planning question?"
 9. If the student seems ready, tell them clearly to click the Next button to move into the draft area. Do not tell them to write sentences in the chat.
-10. Do not accept vague ideas too quickly. If the student gives something broad like "ask the teacher" or "do research", ask a follow-up such as "What exactly would you ask?" or "Why would that help?" before moving on.
+10. Do not accept vague ideas too quickly. If the student gives something broad like "ask the instructor" or "do research", ask a follow-up such as "What exactly would you ask?" or "Why would that help?" before moving on.
 11. Before you move from one main idea or step to the next, ask whether the student feels satisfied with the current one or wants to develop it a little more.
-12. If the student gives a weak first step, ask them to make it more specific before you accept it. For example, turn "ask the teacher" into one concrete question they could ask.
+12. If the student gives a weak first step, ask them to make it more specific before you accept it. For example, turn "ask the instructor" into one concrete question they could ask.
 13. When the assignment is about process or steps, help the student improve each step before moving to the next one.
 14. Never say "share it here" or ask the student to draft their first sentence in chat. The chat is only for planning.
 
@@ -244,6 +219,62 @@ Assignment title: "${assignmentTitle}"
 Task: "${assignmentPrompt}"
 
 Start by asking the student what topic or idea they are thinking about. If they struggle to answer, suggest they think about two or three possible ideas and pick the one they feel most confident about.`;
+}
+
+function buildOpeningCoachPrompt({
+  assignmentTitle,
+  assignmentPrompt,
+  assignmentType,
+  languageLevel,
+  assignmentGuidelines,
+  studentFocus,
+  rubricText,
+}) {
+  return `Read this assignment and ask ONE short, specific planning question that challenges the student to make an important decision before drafting.
+
+Rules:
+- Ask only one question, with no greeting or explanation.
+- Make it specific to this assignment. Never ask "What is your first idea?"
+- Do not provide an answer, thesis, or wording the student could copy.
+- For an argument, probe a position, counterargument, evidence choice, or consequence.
+- For another task, probe its most important choice, detail, comparison, sequence, or interpretation.
+- Use CEFR ${languageLevel} vocabulary and no more than 35 words.
+
+Title: ${assignmentTitle}
+Type: ${assignmentType}
+Task: ${assignmentPrompt}
+${assignmentGuidelines ? `Requirements: ${assignmentGuidelines}` : ""}
+${studentFocus ? `Student focus:\n${studentFocus}` : ""}
+${rubricText ? `Rubric:\n${rubricText}` : ""}`;
+}
+
+function buildOpeningCoachMessage({
+  assignmentTitle,
+  assignmentPrompt,
+  assignmentType,
+}) {
+  const cleanPrompt = getText(assignmentPrompt);
+  const type = String(assignmentType || "").toLowerCase();
+  let text;
+
+  if (type === "argument" || /argu|position|agree|disagree/i.test(cleanPrompt)) {
+    text = `What is the strongest reason someone might disagree with your position on “${assignmentTitle},” and what evidence could help you answer them?`;
+  } else if (type === "narrative") {
+    text = `Which specific moment would best reveal why “${assignmentTitle}” matters, and what detail would make that moment clear to a reader?`;
+  } else if (type === "compare") {
+    text = `Which difference matters most in “${assignmentTitle},” and what example would prove its importance?`;
+  } else if (type === "process") {
+    text = `Which step in “${assignmentTitle}” is most likely to confuse a reader, and what detail would make it easier to follow?`;
+  } else {
+    const taskFocus = cleanPrompt.replace(/\s+/g, " ").slice(0, 110);
+    text = `The task asks you to consider “${taskFocus || assignmentTitle}.” What decision must you make first, and what evidence will guide it?`;
+  }
+
+  return {
+    role: "assistant",
+    text,
+    createdAt: new Date().toISOString(),
+  };
 }
 
 export default function Step1IdeasChat() {
@@ -263,8 +294,6 @@ export default function Step1IdeasChat() {
   const [coachError, setCoachError] = useState("");
 
   const [nowTick, setNowTick] = useState(Date.now());
-  const [ideaResponses, setIdeaResponses] = useState([]);
-  const [ideaLoading, setIdeaLoading] = useState(false);
 
   const [
     showCoachSkipConfirm,
@@ -273,6 +302,7 @@ export default function Step1IdeasChat() {
 
   const chatEndRef = useRef(null);
   const requestInFlightRef = useRef(false);
+  const openingRequestKeyRef = useRef("");
 
   const assignment = useMemo(() => {
     return (
@@ -414,17 +444,6 @@ export default function Step1IdeasChat() {
   const chatAvailable = aiAllowed && !coachTimeExpired;
   const hasUserMessages = messages.some((msg) => msg.role === "user");
 
-
-  const ideaRequestLimit = Math.max(
-    0,
-    Number(assignment?.ideaRequestLimit ?? 3)
-  );
-
-  const ideasRemaining = Math.max(
-    0,
-    ideaRequestLimit - ideaResponses.length
-  );
-
   const autoBuildOutlineFromCoach =
     Boolean(
       aiAllowed &&
@@ -497,23 +516,128 @@ export default function Step1IdeasChat() {
       activeSubmission?.chatHistory ||
       [];
 
-    if (savedPlanningMessages.length > 0) {
-      setMessages(savedPlanningMessages.map(normalizeChatMessage));
+    const normalizedSavedMessages = savedPlanningMessages
+      .map(normalizeChatMessage)
+      .filter((message) => message.text);
+    const hasStudentReply = normalizedSavedMessages.some(
+      (message) => message.role === "user"
+    );
+    const hasNonGenericCoachOpening = normalizedSavedMessages.some(
+      (message) =>
+        message.role === "assistant" &&
+        !/welcome to your planning dashboard|what is your first idea/i.test(
+          message.text
+        )
+    );
+
+    if (
+      normalizedSavedMessages.length > 0 &&
+      (hasStudentReply || hasNonGenericCoachOpening)
+    ) {
+      setMessages(normalizedSavedMessages);
+      setNowTick(Date.now());
+      return;
+    }
+
+    if (aiAllowed) {
+      const requestKey = String(assignmentId || assignmentTitle);
+      if (openingRequestKeyRef.current === requestKey) return;
+
+      openingRequestKeyRef.current = requestKey;
+      setIsThinking(true);
+      setCoachError("");
+
+      const fallbackMessage = normalizeChatMessage(
+        buildOpeningCoachMessage({
+          assignmentTitle,
+          assignmentPrompt,
+          assignmentType,
+        })
+      );
+
+      const generateOpeningQuestion = async () => {
+        let openingMessage = fallbackMessage;
+
+        try {
+          const response = await fetch(AI_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              system: buildOpeningCoachPrompt({
+                assignmentTitle,
+                assignmentPrompt,
+                assignmentType,
+                languageLevel,
+                assignmentGuidelines,
+                studentFocus,
+                rubricText,
+              }),
+              messages: [
+                {
+                  role: "user",
+                  content: "Ask the opening planning question now.",
+                },
+              ],
+            }),
+          });
+          const contentType = response.headers.get("content-type") || "";
+          const data = contentType.includes("application/json")
+            ? await response.json()
+            : { error: await response.text() };
+
+          if (!response.ok) {
+            throw new Error(data?.error || "Opening Coach request failed.");
+          }
+
+          const generatedText = getText(
+            data.response || data.reply || data.message
+          );
+
+          if (generatedText) {
+            openingMessage = normalizeChatMessage({
+              role: "assistant",
+              text: generatedText,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        } catch (error) {
+          console.error("AI Coach opening question error:", error);
+        } finally {
+          setMessages([openingMessage]);
+          setIsThinking(false);
+
+          if (assignmentId && typeof saveDraftProgress === "function") {
+            saveDraftProgress(assignmentId, {
+              chatHistory: [openingMessage],
+              planningChatMessages: [openingMessage],
+              planningCoachHistory: [openingMessage],
+              planningChatUpdatedAt: new Date().toISOString(),
+              coachOpeningGeneratedFromAssignment: true,
+            });
+          }
+        }
+      };
+
+      generateOpeningQuestion();
     } else {
       setMessages([]);
     }
-
-    setIdeaResponses(
-      Array.isArray(activeSubmission?.ideaResponses)
-        ? activeSubmission.ideaResponses
-        : []
-    );
 
     setNowTick(Date.now());
   }, [
     activeSubmission?.id,
     activeSubmission?.assignmentId,
     activeAssignment?.id,
+    aiAllowed,
+    assignmentId,
+    assignmentTitle,
+    assignmentPrompt,
+    assignmentType,
+    languageLevel,
+    assignmentGuidelines,
+    studentFocus,
+    rubricText,
+    saveDraftProgress,
   ]);
 
   useEffect(() => {
@@ -589,123 +713,6 @@ export default function Step1IdeasChat() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
 
-  function generateLocalIdeas() {
-    const topic =
-      assignmentTitle ||
-      "the topic";
-
-    const previousIdea =
-      ideaResponses.at(-1)?.rewrittenIdea || "";
-
-    if (assignmentType === "argument") {
-      return [
-        `Choose one clear opinion about ${topic}.`,
-        `Think of one real example that supports your opinion about ${topic}.`,
-        "Add one note that explains why the example matters.",
-        previousIdea
-          ? "Try a different reason so you have another option."
-          : "Think of another reason as a backup idea.",
-      ];
-    }
-
-    if (assignmentType === "narrative") {
-      return [
-        `Pick one moment connected to ${topic}.`,
-        "Think about what you saw, heard, or felt.",
-        "Decide how the moment begins and ends.",
-        "Choose one small detail that helps the reader picture it.",
-      ];
-    }
-
-    return [
-      `Choose one main idea about ${topic}.`,
-      "Think of one fact, example, or reason that fits.",
-      "Explain the idea in a way a classmate would understand.",
-      previousIdea
-        ? "Try another angle if the first idea feels too broad."
-        : "Keep the topic small and clear.",
-    ];
-  }
-
-  async function handleIdeaRequest() {
-    if (
-      ideaLoading ||
-      ideasRemaining <= 0 ||
-      !assignmentId
-    ) {
-      return;
-    }
-
-    setIdeaLoading(true);
-    setCoachError("");
-
-    let aiBullets = [];
-
-    try {
-      const response = await fetch(AI_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          maxTokens: 350,
-          temperature: 0.3,
-          system: `You are a writing coach helping a ${languageLevel} student generate planning ideas. Return ONLY a JSON array of up to 4 short ideas. Use note-form phrases, not complete sentences the student could copy. Do not write any part of the assignment.`,
-          prompt: `Assignment title: ${assignmentTitle}\nAssignment type: ${assignmentType}\nTask: ${assignmentPrompt}\nStudent planning chat:\n${messages
-            .map((message) => `${message.role === "assistant" ? "Coach" : "Student"}: ${message.text}`)
-            .join("\n")}\n\nReturn short planning ideas as JSON.`,
-        }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data?.error || "Idea request failed.");
-
-      const raw = String(data?.response || data?.reply || data?.message || "").trim();
-      const start = raw.indexOf("[");
-      const end = raw.lastIndexOf("]");
-      const parsed = JSON.parse(start >= 0 && end > start ? raw.slice(start, end + 1) : raw);
-      aiBullets = Array.isArray(parsed)
-        ? parsed
-            .map((item) => getIdeaBulletText(item))
-            .filter(Boolean)
-            .slice(0, 4)
-        : [];
-
-      if (!aiBullets.length) throw new Error("No usable ideas returned.");
-    } catch (error) {
-      console.error("Idea help fallback:", error);
-      aiBullets = generateLocalIdeas();
-    }
-
-    const nextResponses = [
-      ...ideaResponses,
-      {
-        id: `idea_${Date.now()}`,
-        requestedAt: new Date().toISOString(),
-        aiBullets,
-        rewrittenIdea: "",
-        whyChosen: "",
-      },
-    ];
-
-    setIdeaResponses(nextResponses);
-    saveDraftProgress(assignmentId, {
-      ideaResponses: nextResponses,
-    });
-    setIdeaLoading(false);
-  }
-
-  function updateIdeaResponse(index, field, value) {
-    const nextResponses = ideaResponses.map((response, responseIndex) =>
-      responseIndex === index
-        ? { ...response, [field]: value }
-        : response
-    );
-
-    setIdeaResponses(nextResponses);
-    saveDraftProgress(assignmentId, {
-      ideaResponses: nextResponses,
-    });
-  }
-
   async function sendMessageToCoach(messageText) {
     const cleanMessage = messageText.trim();
 
@@ -759,7 +766,7 @@ export default function Step1IdeasChat() {
       if (!response.ok) {
         throw new Error(
           data?.error ||
-            `Ideas Coach request failed with status ${response.status}.`
+            `Coach request failed with status ${response.status}.`
         );
       }
 
@@ -777,18 +784,18 @@ export default function Step1IdeasChat() {
 
       persistMessages([...nextMessages, coachMessage]);
     } catch (error) {
-      console.error("Claude Ideas Coach error:", error);
+      console.error("Claude Coach error:", error);
 
       const errorText =
         error?.message ||
-        "The Ideas Coach could not respond right now. Please try again.";
+        "The Coach could not respond right now. Please try again.";
 
       setCoachError(errorText);
 
       const errorMessage = {
         role: "assistant",
         text:
-          "I could not connect to the Ideas Coach right now. Please check the backend and try again.",
+          "I could not connect to the Coach right now. Please check the backend and try again.",
         createdAt: new Date().toISOString(),
         isError: true,
       };
@@ -803,11 +810,6 @@ export default function Step1IdeasChat() {
   async function handleSendMessage(e) {
     e.preventDefault();
     await sendMessageToCoach(chatInput);
-  }
-
-  async function handleStarterPrompt(prompt) {
-    if (isThinking || requestInFlightRef.current || !chatAvailable) return;
-    await sendMessageToCoach(prompt);
   }
 
   function completeContinueToDraft({
@@ -902,164 +904,7 @@ export default function Step1IdeasChat() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
-      <div
-        className={`grid min-h-0 flex-1 gap-3 ${
-          ideaRequestLimit > 0
-            ? "grid-cols-1 lg:grid-cols-[minmax(300px,350px)_minmax(0,1fr)]"
-            : "grid-cols-1"
-        }`}
-      >
-        {ideaRequestLimit > 0 && (
-          <aside className="flex min-h-[380px] flex-col overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/50 shadow-sm lg:min-h-0">
-            <header className="relative z-20 shrink-0 border-b border-emerald-200 bg-white/80 px-4 py-3 backdrop-blur">
-              <div className="group relative">
-                <button
-                  type="button"
-                  onClick={handleIdeaRequest}
-                  disabled={ideaLoading || ideasRemaining <= 0}
-                  aria-describedby="idea-help-tooltip"
-                  className="grid w-full grid-cols-[1fr_auto_1fr] items-center rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-[11px] font-bold text-emerald-800 shadow-sm transition-all hover:border-emerald-300 hover:bg-emerald-50 focus:outline-none focus:ring-4 focus:ring-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <span className="justify-self-start">
-                    {ideaLoading ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Sparkles className="h-3.5 w-3.5" />
-                    )}
-                  </span>
-
-                  <span className="px-2 text-center">
-                    {ideaLoading
-                      ? "Preparing ideas..."
-                      : ideasRemaining > 0
-                      ? "Get Idea Help"
-                      : "No requests remaining"}
-                  </span>
-
-                  <span className="justify-self-end rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1 font-mono text-[9px] font-bold text-emerald-700">
-                    {ideasRemaining} left
-                  </span>
-                </button>
-
-                <div
-                  id="idea-help-tooltip"
-                  role="tooltip"
-                  className="pointer-events-none absolute left-1/2 top-[calc(100%+0.5rem)] z-40 w-[min(260px,calc(100vw-3rem))] -translate-x-1/2 rounded-xl border border-slate-200 bg-slate-950 px-3 py-2 text-center text-[10px] font-medium leading-relaxed text-white opacity-0 shadow-xl transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100"
-                >
-                  Request short planning notes, then rewrite one in your own words.
-                </div>
-              </div>
-            </header>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">
-              {ideaResponses.length > 0 ? (
-                <div className="space-y-3">
-                  {ideaResponses.map((response, index) => (
-                    <article
-                      key={response.id || index}
-                      className="rounded-2xl border border-emerald-100 bg-white p-3 shadow-sm"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-mono text-[9px] font-black uppercase tracking-[0.14em] text-emerald-700">
-                          Idea set {index + 1}
-                        </p>
-
-                        {(response.rewrittenIdea || response.whyChosen) && (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-bold text-emerald-700">
-                            <CheckCircle2 className="h-3 w-3" />
-                            In progress
-                          </span>
-                        )}
-                      </div>
-
-                      <ul className="mt-3 space-y-2 text-[11px] leading-relaxed text-slate-700">
-                        {Array.isArray(response.aiBullets) &&
-                          response.aiBullets.map((idea, ideaIndex) => (
-                            <li
-                              key={`${getIdeaBulletText(idea) || "idea"}-${ideaIndex}`}
-                              className="flex gap-2 rounded-lg bg-emerald-50/60 px-2.5 py-2"
-                            >
-                              <span className="mt-0.5 font-bold text-emerald-700">
-                                •
-                              </span>
-
-                              <span>{getIdeaBulletText(idea)}</span>
-                            </li>
-                          ))}
-                      </ul>
-
-                      <div className="mt-3 space-y-2">
-                        <div>
-                          <label
-                            htmlFor={`rewritten-idea-${index}`}
-                            className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-500"
-                          >
-                            Rewrite one idea
-                          </label>
-
-                          <textarea
-                            id={`rewritten-idea-${index}`}
-                            value={response.rewrittenIdea || ""}
-                            onChange={(event) =>
-                              updateIdeaResponse(
-                                index,
-                                "rewrittenIdea",
-                                event.target.value
-                              )
-                            }
-                            rows={3}
-                            placeholder="Write the idea in your own words."
-                            className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-emerald-400 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                          />
-                        </div>
-
-                        <div>
-                          <label
-                            htmlFor={`idea-reason-${index}`}
-                            className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-500"
-                          >
-                            Why this idea?
-                          </label>
-
-                          <textarea
-                            id={`idea-reason-${index}`}
-                            value={response.whyChosen || ""}
-                            onChange={(event) =>
-                              updateIdeaResponse(
-                                index,
-                                "whyChosen",
-                                event.target.value
-                              )
-                            }
-                            rows={3}
-                            placeholder="Explain why this idea fits your assignment."
-                            className="w-full resize-y rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-emerald-400 focus:bg-white focus:ring-4 focus:ring-emerald-500/10"
-                          />
-                        </div>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex h-full min-h-[220px] items-center justify-center text-center">
-                  <div className="max-w-[240px]">
-                    <span className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl border border-emerald-200 bg-white text-emerald-700 shadow-sm">
-                      <Sparkles className="h-5 w-5" />
-                    </span>
-
-                    <h4 className="mt-3 text-xs font-bold text-slate-900">
-                      Need a starting point?
-                    </h4>
-
-                    <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                      Request short notes, choose one, and develop it in your own words.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </aside>
-        )}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3">
 
         <section className="flex min-h-[480px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
           <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
@@ -1071,11 +916,11 @@ export default function Step1IdeasChat() {
 
                 <div className="min-w-0">
                   <h3 className="text-xs font-bold text-slate-950">
-                    Ideas Coach
+                    Coach
                   </h3>
 
                   <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                    One planning question at a time—no submission-ready writing.
+                    One planning question at a time - no submission-ready writing.
                   </p>
                 </div>
               </div>
@@ -1090,36 +935,12 @@ export default function Step1IdeasChat() {
               </div>
             </div>
 
-            {chatAvailable &&
-              !hasUserMessages &&
-              STARTER_PROMPTS.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {STARTER_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      type="button"
-                      onClick={() =>
-                        handleStarterPrompt(prompt)
-                      }
-                      disabled={
-                        isThinking ||
-                        requestInFlightRef.current
-                      }
-                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-[#F8FAFC] px-3 py-1.5 text-[10px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <Sparkles className="h-3 w-3" />
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              )}
-
             {!aiAllowed && (
               <CompactAlert
                 tone="amber"
                 icon={ShieldAlert}
-                title="AI Ideas Coach is disabled."
-                message="Idea Help remains available according to its separate request limit."
+                title="Coach is disabled."
+                message="Continue directly to drafting."
               />
             )}
 
@@ -1190,7 +1011,7 @@ export default function Step1IdeasChat() {
 
                     <div className="flex items-center gap-2 rounded-2xl rounded-tl-none border border-blue-100 bg-white p-3 text-xs text-slate-600 shadow-sm">
                       <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                      Ideas Coach is preparing a short reply...
+                      Coach is preparing a short reply...
                     </div>
                   </div>
                 )}
@@ -1201,15 +1022,23 @@ export default function Step1IdeasChat() {
               <div className="flex h-full min-h-[260px] items-center justify-center text-center">
                 <div className="max-w-sm">
                   <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-700 shadow-sm">
-                    <Bot className="h-5 w-5" />
+                    {isThinking ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : (
+                      <Bot className="h-5 w-5" />
+                    )}
                   </span>
 
                   <h3 className="mt-3 font-serif text-base font-bold text-slate-900">
-                    Start with one planning question
+                    {isThinking
+                      ? "Coach is reading your assignment"
+                      : "Coach will begin the conversation"}
                   </h3>
 
                   <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                    Ask about ideas, structure, examples, or anything unclear in the assignment.
+                    {isThinking
+                      ? "Preparing one specific question to help you make an important planning decision."
+                      : "Your first planning question will appear here automatically."}
                   </p>
                 </div>
               </div>
@@ -1243,7 +1072,7 @@ export default function Step1IdeasChat() {
                 }
                 placeholder={
                   !aiAllowed
-                    ? "The Ideas Coach is disabled."
+                    ? "The Coach is disabled."
                     : coachTimeExpired
                     ? "Coach time is finished. Continue to the draft."
                     : isThinking
@@ -1262,7 +1091,7 @@ export default function Step1IdeasChat() {
                   !chatInput.trim()
                 }
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                aria-label="Send message to Ideas Coach"
+                aria-label="Send message to Coach"
               >
                 {isThinking ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1274,7 +1103,7 @@ export default function Step1IdeasChat() {
 
             <div className="mt-3 flex flex-col gap-3 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-[10px] leading-relaxed text-slate-500">
-                Your Idea Help notes and Coach conversation are saved automatically.
+                Your Coach conversation is saved automatically.
               </p>
 
               <button
@@ -1298,11 +1127,11 @@ export default function Step1IdeasChat() {
             </div>
 
             <h3 className="mt-4 font-serif text-lg font-bold text-slate-950">
-              Continue without using the Ideas Coach?
+              Continue without using the Coach?
             </h3>
 
             <p className="mt-2 text-xs leading-relaxed text-slate-500">
-              You have not sent a planning message to the Coach. Your separate Idea Help notes, if any, will remain saved.
+              You have not sent a planning message to the Coach yet.
             </p>
 
             <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

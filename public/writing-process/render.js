@@ -174,13 +174,17 @@
           <div class="process-chip-row">
             ${analysis.evidence.map((item) => `<span class="process-chip" title="${escapeHtml(item.detail)}">${escapeHtml(item.label)}</span>`).join("")}
           </div>
-        ` : `<p class="subtle" style="margin:0 0 12px;">No specific process signals were flagged.</p>`}
+        ` : analysis.status === root.STATUS?.INSUFFICIENT
+          ? `<p class="subtle" style="margin:0 0 12px;">Process comparison chips are hidden until there is enough typed writing (80+ final words).</p>`
+          : `<p class="subtle" style="margin:0 0 12px;">No specific process signals were flagged.</p>`}
         ${idlePauseNote}
         ${renderTimeline(analysis.timeline)}
         <div class="process-detail-head">
           <p class="mini-label" style="margin:0;">Writing-style detail</p>
           <p class="subtle" style="margin:2px 0 0;font-size:0.78rem;">
-            Peer comparison for each measure. Deviations from the reference group feed the check above — hover the chips above to see which ones contributed.
+            ${analysis.status === root.STATUS?.INSUFFICIENT
+              ? "Peer comparison is paused until there is enough typed writing data."
+              : "Peer comparison for each measure. Deviations from the reference group feed the check above — hover the chips above to see which ones contributed."}
           </p>
         </div>
         <div class="process-metric-grid">

@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useStudentWorkspace } from "../../contexts/StudentWorkspaceContext";
 
 import Step1IdeasChat from "./steps/Step1IdeasChat";
@@ -175,6 +175,39 @@ export default function ActiveAssignmentWorkflow() {
       activeSubmission
     );
 
+  const rubricCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
+    ? assignment.rubricSchema.criteria
+    : Array.isArray(assignment?.rubric)
+      ? assignment.rubric
+      : [];
+  const selfRubricScores = activeSubmission?.selfRubricScores || {};
+  const rubricComplete = rubricCriteria.length === 0 || rubricCriteria.every(
+    (criterion) => {
+      const entry = selfRubricScores?.[criterion.id];
+      return Boolean(entry?.bandId || entry?.score !== undefined);
+    }
+  );
+  const [finalStageView, setFinalStageView] = useState(() =>
+    rubricComplete ? "submit" : "rubric"
+  );
+  const lastDraftFeedbackStepRef = useRef(3);
+
+  useEffect(() => {
+    setFinalStageView(rubricComplete ? "submit" : "rubric");
+  }, [activeAssignment?.id]);
+
+  useEffect(() => {
+    if (studentStep === 2 || studentStep === 3) {
+      lastDraftFeedbackStepRef.current = studentStep;
+    }
+  }, [studentStep]);
+
+  useEffect(() => {
+    if (rubricCriteria.length === 0 && finalStageView === "rubric") {
+      setFinalStageView("submit");
+    }
+  }, [rubricCriteria.length, finalStageView]);
+
   useEffect(() => {
     if (!activeAssignment) {
       return;
@@ -216,51 +249,71 @@ export default function ActiveAssignmentWorkflow() {
 
   const steps = [
     {
-      id: 1,
-      label: "Brainstorm",
+      id: "coach",
+      targetStep: 1,
+      label: "Coach",
       icon: MessageSquare,
       enabled: aiIdeasCoach && !assignmentLocked,
-      disabledReason: "AI ideas coach is disabled.",
+      disabledReason: "Coach is disabled.",
+      active: studentStep === 1,
+      completed: studentStep > 1 || wordCount > 0 || assignmentLocked,
     },
     {
-      id: 2,
-      label: "Draft",
+      id: "draft-feedback",
+      targetStep: studentStep === 3 ? 3 : 2,
+      label: "Draft & Feedback",
       icon: PenTool,
       enabled: !assignmentLocked,
       disabledReason: "This assignment is locked after submission.",
+      active: studentStep === 2 || studentStep === 3,
+      completed: studentStep === 4 || assignmentLocked,
     },
     {
-      id: 3,
-      label: "Feedback",
+      id: "rubric",
+      targetStep: 4,
+      label: "Rubric",
       icon: ClipboardCheck,
       enabled:
-        aiDraftFeedback &&
+        rubricCriteria.length > 0 &&
         wordCount > 0 &&
         !assignmentLocked,
-      disabledReason: !aiDraftFeedback
-        ? "AI draft feedback is disabled."
-        : "Write a draft before requesting feedback.",
+      disabledReason:
+        rubricCriteria.length === 0
+          ? "No rubric is attached to this assignment."
+          : "Write a draft before checking the rubric.",
+      active:
+        studentStep === 4 &&
+        finalStageView === "rubric" &&
+        !assignmentLocked,
+      completed: rubricComplete || assignmentLocked,
     },
     {
-      id: 4,
+      id: "submit",
+      targetStep: 4,
       label: "Submit",
       icon: Lock,
-      enabled: wordCount > 0 || assignmentLocked,
-      disabledReason: "Write your draft before final submission.",
+      enabled: (wordCount > 0 && rubricComplete) || assignmentLocked,
+      disabledReason: !rubricComplete
+        ? "Complete the rubric check before submitting."
+        : "Write your draft before final submission.",
+      active:
+        studentStep === 4 &&
+        (assignmentLocked || finalStageView === "submit"),
+      completed: assignmentLocked,
     },
   ];
 
   const activeStepMeta =
-    steps.find((step) => step.id === studentStep) || steps[0];
+    steps.find((step) => step.active) || steps[0];
 
   const activeStepTitle =
     studentStep === 1
       ? "Step 1: Plan Your Ideas"
-      : studentStep === 2
-        ? "Step 2: Draft Your Response"
-        : studentStep === 3
-          ? "Step 3: Review AI Feedback"
-          : "Step 4: Submit Assignment";
+      : studentStep === 2 || studentStep === 3
+        ? "Step 2: Draft & Feedback"
+          : assignmentLocked || finalStageView === "submit"
+            ? "Step 4: Submit Assignment"
+            : "Step 3: Rubric Check";
 
   function renderActiveStepComponent() {
     if (assignmentLocked && studentStep !== 4) {
@@ -278,8 +331,8 @@ export default function ActiveAssignmentWorkflow() {
           <Step1IdeasChat />
         ) : (
           <LockedStepMessage
-            title="AI ideas coach disabled"
-            message="Your teacher disabled brainstorming chat for this assignment. Continue directly to drafting."
+            title="Coach disabled"
+            message="Your instructor disabled brainstorming chat for this assignment. Continue directly to drafting."
           />
         );
 
@@ -292,12 +345,19 @@ export default function ActiveAssignmentWorkflow() {
         ) : (
           <LockedStepMessage
             title="AI draft feedback disabled"
-            message="Your teacher disabled AI draft feedback for this assignment. Continue to final submission."
+            message="Your instructor disabled AI draft feedback for this assignment. Continue to final submission."
           />
         );
 
       case 4:
-        return <Step4FinalSummary />;
+        return (
+          <Step4FinalSummary
+            showRubricOnOpen={finalStageView === "rubric"}
+            onRubricSaved={() => setFinalStageView("submit")}
+            onRubricClosed={() => setFinalStageView("submit")}
+            rubricBackStep={lastDraftFeedbackStepRef.current}
+          />
+        );
 
       default:
         return aiIdeasCoach ? (
@@ -340,41 +400,110 @@ export default function ActiveAssignmentWorkflow() {
             </h2>
           </div>
 
-          <div className="flex max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-[#F8FAFC] p-1 xl:ml-auto">
-            {steps.map((step) => {
-              const Icon = step.icon;
-              const isActive = studentStep === step.id;
+          <div
+            id="student-workflow-alert-slot"
+            className="flex min-w-0 flex-1 justify-center"
+          />
+
+          <div className="flex max-w-full items-center overflow-x-auto rounded-2xl border border-slate-200 bg-[#F8FAFC] p-1.5 xl:ml-auto">
+            {steps.map((step, index) => {
+              const isActive = step.active;
               const isLocked = !step.enabled;
+              const isCompleted = step.completed && !isActive;
+              const statusLabel = isActive
+                ? step.id === "rubric" && rubricComplete
+                  ? "Reviewing"
+                  : "In progress"
+                : isCompleted
+                  ? "Complete"
+                  : isLocked
+                    ? "Locked"
+                    : "Not started";
 
               return (
-                <button
-                  key={step.id}
-                  type="button"
-                  aria-disabled={isLocked}
-                  title={step.label}
-                  onClick={() => {
-                    if (isLocked) {
-                      showStudentWorkflowNotice?.({
-                        tone: "amber",
-                        title: `${step.label} is not available yet`,
-                        message: step.disabledReason,
-                      });
-                      return;
-                    }
+                <React.Fragment key={step.id}>
+                  {index > 0 && (
+                    <span
+                      aria-hidden="true"
+                      className={`h-px w-3 shrink-0 sm:w-5 ${
+                        isCompleted || isActive ? "bg-blue-300" : "bg-slate-200"
+                      }`}
+                    />
+                  )}
 
-                    goToStudentStep(step.id);
-                  }}
-                  className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
-                    isActive
-                      ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
-                      : isLocked
-                        ? "cursor-pointer text-slate-300 hover:bg-amber-50 hover:text-amber-700"
-                        : "text-slate-500 hover:bg-blue-50 hover:text-blue-700"
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{step.label}</span>
-                </button>
+                  <button
+                    type="button"
+                    aria-label={step.label}
+                    aria-current={isActive ? "step" : undefined}
+                    aria-disabled={isLocked}
+                    title={`${step.label} · ${statusLabel}`}
+                    onClick={() => {
+                      if (isLocked) {
+                        showStudentWorkflowNotice?.({
+                          tone: "amber",
+                          title: `${step.label} is not available yet`,
+                          message: step.disabledReason,
+                        });
+                        return;
+                      }
+
+                      if (step.id === "rubric") {
+                        setFinalStageView("rubric");
+                      } else if (step.id === "submit") {
+                        setFinalStageView("submit");
+                      }
+
+                      goToStudentStep(
+                        step.targetStep,
+                        step.id === "submit"
+                          ? { skipFeedbackPrompt: true }
+                          : undefined
+                      );
+                    }}
+                    className={`flex min-w-[112px] items-center gap-2 whitespace-nowrap rounded-xl border px-2.5 py-2 text-left transition-all ${
+                      isActive
+                        ? "border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                        : isCompleted
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+                          : isLocked
+                            ? "cursor-pointer border-transparent text-slate-300 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-700"
+                            : "border-transparent bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-black ${
+                        isActive
+                          ? "border-white/40 bg-white/15 text-white"
+                          : isCompleted
+                            ? "border-emerald-300 bg-white text-emerald-700"
+                            : isLocked
+                              ? "border-slate-200 bg-slate-100 text-slate-400"
+                              : "border-blue-200 bg-blue-50 text-blue-700"
+                      }`}
+                    >
+                      {isCompleted ? (
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      ) : isLocked ? (
+                        <Lock className="h-3 w-3" />
+                      ) : (
+                        index + 1
+                      )}
+                    </span>
+
+                    <span className="min-w-0">
+                      <span className="block text-[11px] font-bold leading-tight">
+                        {step.label}
+                      </span>
+                      <span
+                        className={`mt-0.5 block text-[8px] font-mono font-bold uppercase tracking-wide ${
+                          isActive ? "text-blue-100" : "opacity-70"
+                        }`}
+                      >
+                        {statusLabel}
+                      </span>
+                    </span>
+                  </button>
+                </React.Fragment>
               );
             })}
           </div>
@@ -454,11 +583,15 @@ function WorkflowNoticeBox({
       notice?.primaryLabel
   );
 
-  return (
+  const noticeCard = (
     <div
-      role="status"
-      aria-live="polite"
-      className={`mt-3 shrink-0 rounded-2xl border px-4 py-3 shadow-sm ${style.shell}`}
+      role={hasPendingAction ? "dialog" : "status"}
+      aria-modal={hasPendingAction ? "true" : undefined}
+      aria-label={notice?.title || "Check this step"}
+      aria-live={hasPendingAction ? undefined : "polite"}
+      className={`w-full rounded-2xl border px-4 py-4 shadow-xl ${style.shell} ${
+        hasPendingAction ? "max-w-lg" : "mt-3 shrink-0"
+      }`}
     >
       <div className="flex items-start gap-3">
         <span
@@ -523,6 +656,16 @@ function WorkflowNoticeBox({
       </div>
     </div>
   );
+
+  if (hasPendingAction) {
+    return (
+      <div className="fixed inset-0 z-[2147483645] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+        {noticeCard}
+      </div>
+    );
+  }
+
+  return noticeCard;
 }
 
 function CompactAssignmentBrief({

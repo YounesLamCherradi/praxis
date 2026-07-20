@@ -1034,7 +1034,7 @@ function persistTeacherCollections({
   const currentData = getPraxisData();
 
   /*
-    Assignment and rubric changes must never write a possibly stale teacher
+    Assignment and rubric changes must never write a possibly stale instructor
     submissions array over newer student submissions in the shared store.
   */
   savePraxisData({
@@ -1830,7 +1830,7 @@ export function TeacherWorkspaceProvider({ children }) {
 
       /*
         The persisted list is primary because it may contain a student
-        submission created after this teacher provider was mounted.
+        submission created after this instructor provider was mounted.
       */
       const completeSubmissions = mergeSubmissionCollections(
         currentData.submissions || [],
@@ -2064,7 +2064,7 @@ export function TeacherWorkspaceProvider({ children }) {
       reopenedBy:
         options.reopenedBy ||
         options.teacherEmail ||
-        "Teacher",
+        "Instructor",
 
       revisionRequestedAt: now,
       revisionMessage:

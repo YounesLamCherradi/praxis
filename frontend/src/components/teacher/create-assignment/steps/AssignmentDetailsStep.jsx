@@ -45,7 +45,7 @@ function getClassLabel(cls) {
   if (!cls) return "Unnamed course";
 
   if (cls.code && cls.name) {
-    return `${cls.code} — ${cls.name}`;
+    return `${cls.code}  -  ${cls.name}`;
   }
 
   return cls.code || cls.name || "Unnamed course";
@@ -498,7 +498,7 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
             </p>
 
             <p className="mt-1 text-[10px] leading-relaxed text-blue-800">
-              Review the Ideas Coach, active-time limit, idea-help limit, outline,
+              Review Coach chat, active-time limit, outline,
               and AI feedback request limit in Step 3.
             </p>
           </div>

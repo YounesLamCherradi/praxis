@@ -578,7 +578,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
                 <option value="">{activeClasses.length === 0 ? "No active courses" : "Select a course"}</option>
                 {activeClasses.map((cls) => (
                   <option key={cls.id} value={cls.id}>
-                    {cls.code ? `${cls.code} — ${cls.name}` : cls.name}
+                    {cls.code ? `${cls.code}  -  ${cls.name}` : cls.name}
                   </option>
                 ))}
               </select>
