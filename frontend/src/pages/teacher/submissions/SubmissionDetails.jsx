@@ -2161,8 +2161,8 @@ These are instructor-only review signals and are not automatic grades.`;
               integrityLogs={integrityLogs}
             />
           ) : (
-            <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1.8fr)_minmax(360px,0.9fr)]">
-              <div className="min-w-0 space-y-3">
+            <div className="grid grid-cols-1 items-start gap-2 xl:grid-cols-[minmax(0,1.95fr)_minmax(290px,0.62fr)] 2xl:grid-cols-[minmax(0,2.05fr)_minmax(300px,0.58fr)]">
+              <div className="min-w-0 space-y-2">
                 <StudentTextReviewPanel
                   studentTextRef={studentTextRef}
                   captureSelectedText={captureSelectedText}
@@ -2180,11 +2180,11 @@ These are instructor-only review signals and are not automatic grades.`;
                       <ClipboardList className="h-4 w-4 shrink-0 text-blue-700" />
                       <div className="min-w-0">
                         <h2 className="truncate font-serif text-base font-bold text-slate-950">Rubric</h2>
-                        <p className="mt-0.5 text-[11px] text-slate-500">Open one criterion at a time and score it against the student text above.</p>
+                        <p className="mt-0.5 text-[11px] text-slate-500">Score each criterion in one horizontal row to reduce scrolling.</p>
                       </div>
                     </div>
                   </div>
-                  <div className="bg-[#F8FAFC] p-3">
+                  <div className="bg-[#F8FAFC] p-2.5">
                     {currentRubric ? (
                       <RubricScorePanel
                         rubric={currentRubric}
@@ -2305,7 +2305,7 @@ function UnifiedFeedbackPanel({
   saveMessage,
 }) {
   return (
-    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm xl:max-w-[340px] xl:justify-self-end">
       <div className="border-b border-slate-200 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -6067,19 +6067,52 @@ function RubricScorePanel({
   aiSuggestion,
   applyAiRubricScores,
 }) {
-  const firstUngraded =
-    rubricCriteria.find((criterion) => {
-      const entry = getScoreEntry(rubricScores, criterion.id);
-      return entry.score === "" || entry.score === null;
-    })?.id || rubricCriteria[0]?.id;
+  const firstUngradedIndex = rubricCriteria.findIndex((criterion) => {
+    const entry = getScoreEntry(rubricScores, criterion.id);
+    return entry.score === "" || entry.score === null;
+  });
 
-  const [openCriterionId, setOpenCriterionId] = useState(firstUngraded || null);
+  const defaultCriterionKey =
+    rubricCriteria.length > 0
+      ? `${rubricCriteria[0].id || "criterion"}::0`
+      : null;
+
+  const firstUngradedKey =
+    firstUngradedIndex >= 0
+      ? `${rubricCriteria[firstUngradedIndex].id || "criterion"}::${firstUngradedIndex}`
+      : defaultCriterionKey;
+
+  const [openCriterionKey, setOpenCriterionKey] = useState(
+    firstUngradedKey
+  );
 
   useEffect(() => {
-    if (!openCriterionId && firstUngraded) {
-      setOpenCriterionId(firstUngraded);
+    if (!rubricCriteria.length) {
+      return;
     }
-  }, [firstUngraded, openCriterionId]);
+
+    const currentStillExists = rubricCriteria.some(
+      (criterion, index) =>
+        `${criterion.id || "criterion"}::${index}` === openCriterionKey
+    );
+
+    if (!currentStillExists) {
+      setOpenCriterionKey(firstUngradedKey || defaultCriterionKey);
+    }
+  }, [rubricCriteria, openCriterionKey, firstUngradedKey, defaultCriterionKey]);
+
+  const activeIndex = Math.max(
+    0,
+    rubricCriteria.findIndex(
+      (criterion, index) =>
+        `${criterion.id || "criterion"}::${index}` === openCriterionKey
+    )
+  );
+
+  const activeCriterion = rubricCriteria[activeIndex] || null;
+  const activeEntry = activeCriterion
+    ? getScoreEntry(rubricScores, activeCriterion.id)
+    : null;
 
   function handleBandSelection(criterion, band) {
     selectBand(criterion, band);
@@ -6088,23 +6121,25 @@ function RubricScorePanel({
       (item) => String(item.id) === String(criterion.id)
     );
 
-    const nextUngraded = rubricCriteria
-      .slice(currentIndex + 1)
-      .find((item) => {
+    const nextUngradedIndex = rubricCriteria.findIndex(
+      (item, index) => {
+        if (index <= currentIndex) return false;
         const entry = getScoreEntry(rubricScores, item.id);
         return entry.score === "" || entry.score === null;
-      });
+      }
+    );
 
-    if (nextUngraded) {
+    if (nextUngradedIndex >= 0) {
+      const nextKey = `${rubricCriteria[nextUngradedIndex].id || "criterion"}::${nextUngradedIndex}`;
       window.setTimeout(() => {
-        setOpenCriterionId(nextUngraded.id);
+        setOpenCriterionKey(nextKey);
       }, 120);
     }
   }
 
   return (
-    <div className="mx-auto max-w-[1100px] space-y-2">
-      <div className="rounded-xl border border-slate-200 bg-white p-3">
+    <div className="w-full space-y-2">
+      <div className="rounded-xl border border-slate-200 bg-white p-2.5">
         <div className="mb-2 flex flex-col gap-2 border-b border-slate-100 pb-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -6140,28 +6175,157 @@ function RubricScorePanel({
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          {rubricCriteria.map((criterion, index) => {
-            const entry = getScoreEntry(rubricScores, criterion.id);
-            const isOpen = openCriterionId === criterion.id;
+        <div className="space-y-2.5">
+          <div className="flex gap-2 overflow-x-auto pb-0.5">
+            {rubricCriteria.map((criterion, index) => {
+              const criterionKey = `${criterion.id || "criterion"}::${index}`;
+              const selected = getScoreEntry(rubricScores, criterion.id);
+              const selectedBand = safeArray(criterion.bands).find(
+                (band) => String(band.id) === String(selected?.bandId)
+              );
+              const isActive = criterionKey === openCriterionKey;
 
-            return (
-              <CriterionAccordion
-                key={criterion.id}
-                index={index}
-                criterion={criterion}
-                entry={entry}
-                isOpen={isOpen}
-                onToggle={() =>
-                  setOpenCriterionId(isOpen ? null : criterion.id)
-                }
-                selectBand={handleBandSelection}
-                adjustCriterionScore={adjustCriterionScore}
-                updateCriterionScore={updateCriterionScore}
-                updateCriterionComment={updateCriterionComment}
-              />
-            );
-          })}
+              return (
+                <button
+                  key={criterionKey}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => setOpenCriterionKey(criterionKey)}
+                  className={`min-w-[180px] flex-1 rounded-xl border px-3 py-2 text-left transition-all ${
+                    isActive
+                      ? "border-blue-300 bg-blue-50 shadow-sm ring-2 ring-blue-500/10"
+                      : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="line-clamp-1 text-[11px] font-bold leading-4 text-slate-900">
+                        {criterion.name}
+                      </p>
+                      <p
+                        className={`mt-0.5 text-[8px] font-semibold ${
+                          selectedBand ? "text-emerald-700" : "text-slate-400"
+                        }`}
+                      >
+                        {selectedBand ? selectedBand.label : "Not assessed"}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[9px] font-mono font-bold text-slate-500">
+                      {criterion.points} pts
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {activeCriterion && activeEntry && (
+            <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
+              <div className="border-b border-blue-100 bg-blue-50/70 px-4 py-2.5">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[9px] font-mono font-black uppercase tracking-wider text-blue-600">
+                      Criterion {activeIndex + 1} of {rubricCriteria.length}
+                    </p>
+                    <h3 className="mt-0.5 text-sm font-bold text-slate-950">
+                      {activeCriterion.name}
+                    </h3>
+                    {activeCriterion.description && (
+                      <p className="mt-0.5 line-clamp-2 max-w-5xl text-[10px] leading-4 text-slate-500">
+                        {activeCriterion.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <span className="rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-[10px] font-mono font-bold text-blue-700">
+                    {activeCriterion.points} points
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid gap-2 p-2.5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+                {safeArray(activeCriterion.bands).map((band) => {
+                  const isSelected =
+                    String(activeEntry.bandId || "") === String(band.id);
+
+                  return (
+                    <button
+                      key={band.id}
+                      type="button"
+                      onClick={() => handleBandSelection(activeCriterion, band)}
+                      className={`h-full rounded-xl border px-3 py-2.5 text-left transition-all ${
+                        isSelected
+                          ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/10"
+                          : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                      }`}
+                    >
+                      <div className="flex h-full items-start justify-between gap-4">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-900">
+                            {band.label}
+                          </p>
+                          {band.description && (
+                            <p
+                              className="mt-1 line-clamp-6 text-[9px] leading-[1.45] text-slate-500"
+                              title={band.description}
+                            >
+                              {band.description}
+                            </p>
+                          )}
+                        </div>
+                        <span className="shrink-0 font-mono text-xs font-black text-blue-700">
+                          {band.points}/{activeCriterion.points}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-slate-200 bg-[#F8FAFC] p-2.5">
+                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[140px_minmax(0,1fr)]">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => adjustCriterionScore(activeCriterion, -0.5)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+                    >
+                      <Minus className="h-3.5 w-3.5" />
+                    </button>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max={activeCriterion.points}
+                      step="0.5"
+                      value={activeEntry.score}
+                      onChange={(event) =>
+                        updateCriterionScore(activeCriterion, event.target.value)
+                      }
+                      className="w-20 rounded-lg border border-slate-200 bg-white px-2 py-2 text-center text-xs font-bold focus:border-blue-500 focus:outline-none"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => adjustCriterionScore(activeCriterion, 0.5)}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <input
+                    value={activeEntry.comment}
+                    onChange={(event) =>
+                      updateCriterionComment(activeCriterion.id, event.target.value)
+                    }
+                    placeholder="Optional criterion comment..."
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[11px] focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="mt-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2">
@@ -6206,8 +6370,6 @@ function CriterionAccordion({
   index,
   criterion,
   entry,
-  isOpen,
-  onToggle,
   selectBand,
   adjustCriterionScore,
   updateCriterionScore,
@@ -6220,14 +6382,8 @@ function CriterionAccordion({
   const hasScore = entry.score !== "" && entry.score !== null;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <button
-        type="button"
-        onClick={onToggle}
-        className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left transition-all ${
-          isOpen ? "bg-blue-50" : "bg-white hover:bg-[#F8FAFC]"
-        }`}
-      >
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white p-2.5">
+      <div className="grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,210px)_minmax(0,1fr)_minmax(0,300px)] xl:items-center">
         <div className="flex min-w-0 items-center gap-2.5">
           <span
             className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border text-[10px] font-mono font-black ${
@@ -6252,11 +6408,9 @@ function CriterionAccordion({
                 : "Not graded"}
             </p>
           </div>
-        </div>
 
-        <div className="flex shrink-0 items-center gap-2">
           <span
-            className={`rounded-lg border px-2 py-1 text-[10px] font-mono font-bold ${
+            className={`ml-auto shrink-0 rounded-lg border px-2 py-1 text-[10px] font-mono font-bold ${
               hasScore
                 ? "border-blue-100 bg-white text-blue-700"
                 : "border-slate-200 bg-slate-50 text-slate-400"
@@ -6264,103 +6418,80 @@ function CriterionAccordion({
           >
             {hasScore ? entry.score : " - "} / {criterion.points}
           </span>
-
-          <ChevronDown
-            className={`h-4 w-4 text-slate-400 transition-transform ${
-              isOpen ? "rotate-180" : ""
-            }`}
-          />
         </div>
-      </button>
 
-      {isOpen && (
-        <div className="space-y-2 border-t border-slate-200 p-3">
-          {criterion.description && (
-            <p className="text-[10px] leading-relaxed text-slate-500">
-              {criterion.description}
-            </p>
-          )}
+        <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 2xl:grid-cols-3">
+          {criterion.bands?.map((band) => {
+            const isSelected =
+              String(entry.bandId || "") === String(band.id);
 
-          <div className="space-y-1.5">
-            {criterion.bands?.map((band) => {
-              const isSelected =
-                String(entry.bandId || "") === String(band.id);
-
-              return (
-                <button
-                  key={band.id}
-                  type="button"
-                  onClick={() => selectBand(criterion, band)}
-                  className={`w-full rounded-lg border px-3 py-2 text-left transition-all ${
-                    isSelected
-                      ? "border-blue-300 bg-blue-50 ring-2 ring-blue-500/10"
-                      : "border-slate-200 bg-[#F8FAFC] hover:border-blue-200 hover:bg-white"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-bold text-slate-900">
-                        {band.label}
-                      </p>
-
-                      {band.description && (
-                        <p className="mt-0.5 text-[10px] leading-relaxed text-slate-500">
-                          {band.description}
-                        </p>
-                      )}
-                    </div>
-
-                    <span className="shrink-0 rounded-md border border-blue-100 bg-white px-2 py-1 text-[10px] font-mono font-bold text-blue-700">
-                      {band.points}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="grid grid-cols-1 gap-2 lg:grid-cols-[145px_minmax(0,1fr)]">
-            <div className="flex items-center gap-1.5">
+            return (
               <button
+                key={band.id}
                 type="button"
-                onClick={() => adjustCriterionScore(criterion, -0.5)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+                onClick={() => selectBand(criterion, band)}
+                title={band.description || band.label}
+                className={`rounded-lg border px-2.5 py-1.5 text-left transition-all ${
+                  isSelected
+                    ? "border-blue-300 bg-blue-50 ring-2 ring-blue-500/10"
+                    : "border-slate-200 bg-[#F8FAFC] hover:border-blue-200 hover:bg-white"
+                }`}
               >
-                <Minus className="h-3.5 w-3.5" />
-              </button>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-[11px] font-bold text-slate-900">
+                    {band.label}
+                  </span>
 
-              <input
-                type="number"
-                min="0"
-                max={criterion.points}
-                step="0.5"
-                value={entry.score}
-                onChange={(event) =>
-                  updateCriterionScore(criterion, event.target.value)
-                }
-                className="w-20 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-2 text-center text-xs font-bold focus:border-blue-500 focus:outline-none"
-              />
-
-              <button
-                type="button"
-                onClick={() => adjustCriterionScore(criterion, 0.5)}
-                className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
-              >
-                <Plus className="h-3.5 w-3.5" />
+                  <span className="shrink-0 rounded-md border border-blue-100 bg-white px-1.5 py-0.5 text-[10px] font-mono font-bold text-blue-700">
+                    {band.points}
+                  </span>
+                </div>
               </button>
-            </div>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[140px_minmax(0,1fr)] xl:grid-cols-1 2xl:grid-cols-[140px_minmax(0,1fr)]">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => adjustCriterionScore(criterion, -0.5)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
 
             <input
-              value={entry.comment}
+              type="number"
+              min="0"
+              max={criterion.points}
+              step="0.5"
+              value={entry.score}
               onChange={(event) =>
-                updateCriterionComment(criterion.id, event.target.value)
+                updateCriterionScore(criterion, event.target.value)
               }
-              placeholder="Optional criterion comment..."
-              className="w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-[11px] focus:border-blue-500 focus:outline-none"
+              className="w-20 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-2 text-center text-xs font-bold focus:border-blue-500 focus:outline-none"
             />
+
+            <button
+              type="button"
+              onClick={() => adjustCriterionScore(criterion, 0.5)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-blue-200 hover:text-blue-700"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
           </div>
+
+          <input
+            value={entry.comment}
+            onChange={(event) =>
+              updateCriterionComment(criterion.id, event.target.value)
+            }
+            placeholder="Optional criterion comment..."
+            className="w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-[11px] focus:border-blue-500 focus:outline-none"
+          />
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -6426,7 +6557,7 @@ function FeedbackPanel({ feedback, setFeedback }) {
         value={feedback}
         onChange={(event) => setFeedback(event.target.value)}
         placeholder="Write clear, actionable feedback for the student..."
-        className="mt-2 flex-1 min-h-[260px] w-full resize-none rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4 text-xs leading-6 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+        className="mt-2 flex-1 min-h-[210px] w-full resize-none rounded-2xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs leading-6 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
       />
 
       <div className="mt-2 flex items-start gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">

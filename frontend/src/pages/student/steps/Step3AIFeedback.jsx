@@ -1418,28 +1418,13 @@ export default function Step3AIFeedback() {
     feedback?.createdAt
   );
 
-  function jumpToHighlight(index, behavior = "smooth") {
+  function jumpToHighlight(index) {
     if (!highlightedCount) return;
 
     const nextIndex =
       (index + highlightedCount) % highlightedCount;
 
     setActiveHighlightIndex(nextIndex);
-
-    window.requestAnimationFrame(() => {
-      const container = feedbackScrollRef.current;
-      const target = container?.querySelector(
-        `[data-feedback-highlight-index="${nextIndex}"]`
-      );
-
-      if (!container || !target) return;
-
-      target.scrollIntoView({
-        behavior,
-        block: "center",
-        inline: "nearest",
-      });
-    });
   }
 
   function handleSelectIssue(issue, number, highlightIndex) {

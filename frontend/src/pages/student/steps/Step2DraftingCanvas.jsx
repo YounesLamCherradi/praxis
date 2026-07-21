@@ -321,6 +321,9 @@ export default function Step2DraftingCanvas() {
   const warningTimerRef = useRef(null);
   const autosaveTimerRef = useRef(null);
   const outlineAutosaveTimerRef = useRef(null);
+  const outlineAssignmentRef = useRef(String(
+    activeAssignment?.id || activeSubmission?.assignmentId || ""
+  ));
   const autoOutlineAttemptedRef = useRef(false);
   const outlineRequestInFlightRef = useRef(false);
   const writingEventsRef = useRef(
@@ -507,6 +510,16 @@ export default function Step2DraftingCanvas() {
   }, []);
 
   useEffect(() => {
+    const nextAssignmentId = String(assignmentId || "");
+
+    // A brand-new attempt receives its persisted submission ID on the first
+    // save. That is not an assignment change and must not overwrite notes the
+    // student is currently editing with a transient/stale submission snapshot.
+    if (outlineAssignmentRef.current === nextAssignmentId) {
+      return;
+    }
+
+    outlineAssignmentRef.current = nextAssignmentId;
     const savedOutline =
       activeSubmission?.outline ||
       activeSubmission?.planningOutline ||
@@ -522,7 +535,7 @@ export default function Step2DraftingCanvas() {
     setOutlineBusy(false);
     autoOutlineAttemptedRef.current = false;
     outlineRequestInFlightRef.current = false;
-  }, [activeSubmission?.id, assignmentId]);
+  }, [assignmentId]);
 
   function persistChatOutline(nextText, nextMeta) {
     if (

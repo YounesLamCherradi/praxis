@@ -278,6 +278,44 @@ function safeArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function isPasteLikeEvent(event = {}) {
+  const type = String(
+    event.type ||
+      event.eventType ||
+      event.action ||
+      event.kind ||
+      ""
+  ).toLowerCase();
+
+  const group = String(
+    event.eventGroup ||
+      event.group ||
+      ""
+  ).toLowerCase();
+
+  return type.includes("paste") || group === "paste";
+}
+
+function getPasteReplayEvents(source = {}) {
+  const copyPasteLogs = safeArray(source.copyPasteLogs);
+
+  if (copyPasteLogs.length > 0) {
+    return copyPasteLogs;
+  }
+
+  let replayEvents = safeArray(source.writingReplayEvents);
+
+  if (replayEvents.length === 0) {
+    replayEvents = safeArray(source.writingReplay);
+  }
+
+  if (replayEvents.length === 0) {
+    replayEvents = safeArray(source.writingEvents);
+  }
+
+  return replayEvents.filter(isPasteLikeEvent);
+}
+
 function stripJsonFence(value = "") {
   const text = String(value || "").trim();
   const fenceMatch = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -557,51 +595,33 @@ function GradeSheetModal({ open, onClose, data }) {
     data.submission || {};
 
   const criteria =
-    safeArray(
-      data.rubricCriteria
-    );
+    safeArray(data.rubricCriteria);
 
   const planningMessages =
-    safeArray(
-      data.planningChatMessages
-    );
+    safeArray(data.planningChatMessages);
 
   const aiFeedback =
-    safeArray(
-      data.studentAiFeedbackHistory
-    );
+    safeArray(data.studentAiFeedbackHistory);
 
   const replayEvents =
-    safeArray(
-      data.writingReplayEvents
-    );
+    getPasteReplayEvents(data);
 
   const writingEvents =
-    safeArray(
-      data.writingEvents
-    );
+    safeArray(data.writingEvents);
 
   const annotations =
-    safeArray(
-      data.annotations
-    );
+    safeArray(data.annotations);
 
   const finalText =
-    getSubmissionText(
-      submission
-    );
+    getSubmissionText(submission);
 
   const finalScore =
-    hasGradeSheetValue(
-      data.finalScore
-    )
+    hasGradeSheetValue(data.finalScore)
       ? data.finalScore
       : null;
 
   const rubricTotal =
-    hasGradeSheetValue(
-      data.rubricTotal
-    )
+    hasGradeSheetValue(data.rubricTotal)
       ? data.rubricTotal
       : null;
 
@@ -617,8 +637,7 @@ function GradeSheetModal({ open, onClose, data }) {
     );
 
   const totalEditingEvents =
-    replayEvents.length ||
-    writingEvents.length;
+    replayEvents.length;
 
   const insertionCount =
     replayEvents.filter((event) =>
@@ -646,8 +665,7 @@ function GradeSheetModal({ open, onClose, data }) {
     planningMessages.length;
 
   const replayCount =
-    replayEvents.length ||
-    writingEvents.length;
+    replayEvents.length;
 
   const annotationCount =
     annotations.length;
@@ -1040,7 +1058,7 @@ function GradeSheetModal({ open, onClose, data }) {
                 </p>
               ) : (
                 <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200">
-                  <div className="hidden grid-cols-[1.3fr_1fr_110px] gap-4 bg-slate-50 px-4 py-2 font-mono text-[9px] font-black uppercase tracking-wider text-slate-400 md:grid">
+                  <div className="hidden grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_110px] gap-4 bg-slate-50 px-4 py-2 font-mono text-[9px] font-black uppercase tracking-wider text-slate-400 md:grid">
                     <span>Criterion</span>
                     <span>
                       Selected band and evidence
@@ -1079,7 +1097,7 @@ function GradeSheetModal({ open, onClose, data }) {
                               criterion.reportKey ||
                               `${criterion.id || "criterion"}::${index}`
                             }
-                            className="grid gap-3 px-4 py-4 md:grid-cols-[1.3fr_1fr_110px] md:gap-4"
+                            className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1.6fr)_minmax(0,1.1fr)_110px] md:gap-4"
                           >
                             <div>
                               <p className="text-sm font-bold text-slate-900">
@@ -1803,26 +1821,10 @@ function buildFallbackGradeSheetData({
         );
 
   const writingReplayEvents =
-    safeArray(
-      selectedSubmission.writingReplayEvents
-    ).length > 0
-      ? safeArray(
-          selectedSubmission.writingReplayEvents
-        )
-      : safeArray(
-          selectedSubmission.writingReplay
-        ).length > 0
-      ? safeArray(
-          selectedSubmission.writingReplay
-        )
-      : safeArray(
-          selectedSubmission.writingEvents
-        );
+    getPasteReplayEvents(selectedSubmission);
 
   const writingEvents =
-    safeArray(
-      selectedSubmission.writingEvents
-    );
+    safeArray(selectedSubmission.writingEvents);
 
   const copyPasteLogs =
     safeArray(

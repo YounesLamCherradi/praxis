@@ -14,6 +14,7 @@ import {
   FileText,
   Hash,
   Lock,
+  ListChecks,
   MessageSquareText,
   Pencil,
   PlayCircle,
@@ -235,6 +236,7 @@ function formatDisplayDate(value) {
 export default function TeacherAssignmentDetails({
   modalMode = false,
   onClose,
+  assignment: assignmentProp = null,
 }) {
   const {
     selectedAssignment,
@@ -244,8 +246,12 @@ export default function TeacherAssignmentDetails({
   } = useTeacherWorkspace();
 
   const [rubricExpanded, setRubricExpanded] = useState(false);
+  const [openRubricCriterionKey, setOpenRubricCriterionKey] = useState(null);
 
-  const assignment = selectedAssignment;
+  // The create flow can update the local assignment selection one render
+  // before the shared workspace selection settles.  Accept the assignment
+  // owned by the modal so that transition can never render an empty dialog.
+  const assignment = assignmentProp || selectedAssignment;
 
   const submissionMetrics = useMemo(() => {
     if (!assignment) {
@@ -579,7 +585,24 @@ export default function TeacherAssignmentDetails({
               <div className="overflow-hidden rounded-xl border border-blue-100 bg-blue-50">
                 <button
                   type="button"
-                  onClick={() => setRubricExpanded((current) => !current)}
+                  onClick={() =>
+                    setRubricExpanded((current) => {
+                      const next = !current;
+
+                      if (
+                        next &&
+                        openRubricCriterionKey === null &&
+                        rubricCriteria.length > 0
+                      ) {
+                        const firstCriterion = rubricCriteria[0];
+                        setOpenRubricCriterionKey(
+                          String(firstCriterion.id || "criterion-0")
+                        );
+                      }
+
+                      return next;
+                    })
+                  }
                   className="flex w-full items-center justify-between gap-4 p-4 text-left"
                 >
                   <div>
@@ -616,28 +639,90 @@ export default function TeacherAssignmentDetails({
 
                 {rubricExpanded && (
                   <div className="space-y-2 border-t border-blue-100 bg-white p-3">
-                    {rubricCriteria.map((criterion, index) => (
-                      <div
-                        key={criterion.id || `${criterion.name}-${index}`}
-                        className="flex items-start justify-between gap-4 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3"
-                      >
-                        <div>
-                          <p className="text-xs font-bold text-slate-900">
-                            {criterion.name || `Criterion ${index + 1}`}
-                          </p>
+                    {rubricCriteria.map((criterion, index) => {
+                      const criterionKey = String(
+                        criterion.id || `criterion-${index}`
+                      );
+                      const isOpen =
+                        openRubricCriterionKey === criterionKey ||
+                        (openRubricCriterionKey === null && index === 0);
 
-                          {criterion.description && (
-                            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                              {criterion.description}
-                            </p>
+                      return (
+                        <div
+                          key={criterion.id || `${criterion.name}-${index}`}
+                          className="overflow-hidden rounded-xl border border-slate-200 bg-[#F8FAFC]"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenRubricCriterionKey((current) =>
+                                current === criterionKey ? null : criterionKey
+                              )
+                            }
+                            className="flex w-full items-start justify-between gap-4 px-4 py-3 text-left"
+                            aria-expanded={isOpen}
+                          >
+                            <div>
+                              <p className="text-xs font-bold text-slate-900">
+                                {criterion.name || `Criterion ${index + 1}`}
+                              </p>
+
+                              {criterion.description && (
+                                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                                  {criterion.description}
+                                </p>
+                              )}
+                            </div>
+
+                            <div className="flex shrink-0 items-center gap-2">
+                              <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] font-bold text-slate-700">
+                                {criterion.points ?? criterion.maxScore ?? 0} pts
+                              </span>
+                              {isOpen ? (
+                                <ChevronUp className="h-4 w-4 text-slate-400" />
+                              ) : (
+                                <ChevronDown className="h-4 w-4 text-slate-400" />
+                              )}
+                            </div>
+                          </button>
+
+                          {isOpen && (
+                            <div className="border-t border-slate-200 bg-white p-3">
+                              {Array.isArray(criterion.bands) &&
+                              criterion.bands.length > 0 ? (
+                                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                  {criterion.bands.map((band, bandIndex) => (
+                                    <div
+                                      key={band.id || `${criterion.id || index}-band-${bandIndex}`}
+                                      className="rounded-lg border border-slate-200 bg-white p-2.5"
+                                    >
+                                      <div className="flex items-center justify-between gap-2">
+                                        <p className="text-[11px] font-bold text-slate-900">
+                                          {band.label || band.name || `Band ${bandIndex + 1}`}
+                                        </p>
+                                        <span className="shrink-0 rounded-md border border-blue-100 bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-blue-700">
+                                          {band.points ?? band.score ?? 0}
+                                        </span>
+                                      </div>
+
+                                      {band.description && (
+                                        <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
+                                          {band.description}
+                                        </p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <p className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-500">
+                                  No score bands were defined for this criterion.
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
-
-                        <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] font-bold text-slate-700">
-                          {criterion.points ?? criterion.maxScore ?? 0} pts
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

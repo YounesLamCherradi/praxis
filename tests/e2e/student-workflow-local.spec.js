@@ -180,6 +180,74 @@ test.describe("Local student assignment workflow", () => {
     expect(savedOpening).toBe(generatedQuestion);
   });
 
+  test("saved Coach conversation survives Draft to Coach navigation", async ({ page }) => {
+    let generateRequests = 0;
+    await page.route("**/api/generate", (route) => {
+      generateRequests += 1;
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ response: "This should not replace saved chat." }),
+      });
+    });
+
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.submissions[0].planningChatMessages = [];
+      data.submissions[0].planningCoachHistory = [];
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+      localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
+        student_flow_assignment: 2,
+      }));
+    });
+
+    await page.goto("/student");
+    await page.getByRole("button", { name: /Continue Assignment/ }).click();
+    await expect(page.getByText("Draft Editor", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Back to Coach", exact: true }).click();
+
+    await expect(page.getByText("I want to argue against it.", { exact: true })).toBeVisible();
+    expect(generateRequests).toBe(0);
+  });
+
+  test("editing the draft does not clear saved planning notes", async ({ page }) => {
+    const savedNotes = "- Protect innocent people\n- Explain irreversible mistakes";
+    await page.addInitScript((notes) => {
+      if (sessionStorage.getItem("planning_notes_fixture_ready")) return;
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.assignments[0].autoOutlineFromChat = true;
+      data.submissions[0].outline = {
+        chatOutlineText: notes,
+        chatOutlineMeta: { edited: true },
+      };
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+      localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
+        student_flow_assignment: 2,
+      }));
+      sessionStorage.setItem("planning_notes_fixture_ready", "1");
+    }, savedNotes);
+
+    await page.goto("/student");
+    await page.getByRole("button", { name: /Continue Assignment/ }).click();
+
+    const notes = page.getByRole("textbox", { name: "Editable planning outline" });
+    const draft = page.getByRole("textbox", { name: /Draft editor/ });
+    await expect(notes).toHaveValue(savedNotes);
+    const editedNotes = `${savedNotes}\n- Add a concrete case`;
+    await notes.fill(editedNotes);
+    await page.waitForTimeout(500);
+    await draft.fill("A newly edited draft that triggers persistence without replacing notes.");
+    await page.waitForTimeout(700);
+    await expect(notes).toHaveValue(editedNotes);
+
+    await page.getByRole("button", { name: "Back to Coach", exact: true }).click();
+    await page.getByRole("button", { name: "Continue to Draft", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Editable planning outline" })).toHaveValue(editedNotes);
+
+    await page.reload();
+    await expect(page.getByRole("textbox", { name: "Editable planning outline" })).toHaveValue(editedNotes);
+  });
+
   test("paste warning uses the in-app review modal", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
@@ -274,8 +342,11 @@ test.describe("Local student assignment workflow", () => {
       exact: true,
     });
     await goodBand.click();
-    const secondCriterion = page.getByRole("button", { name: /Evidence & Support/ });
-    await expect(secondCriterion).toHaveAttribute("aria-expanded", "true");
+    const secondCriterion = page
+      .getByRole("button", { name: /Evidence & Support/ })
+      .filter({ has: page.getByText("Evidence & Support", { exact: true }) })
+      .first();
+    await expect(secondCriterion).toHaveAttribute("aria-pressed", "true");
     await goodBand.click();
     await page.getByRole("button", { name: "Save & Continue to Submit", exact: true }).click();
 

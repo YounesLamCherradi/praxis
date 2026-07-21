@@ -501,6 +501,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
   const activeAssignmentStatus = activeAssignment
     ? normalizeAssignmentStatus(activeAssignment)
     : "Draft";
+  const detailsAssignment = selectedAssignment || activeAssignment;
 
   return (
     <>
@@ -755,7 +756,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
 
       {/* Details View Portal Overlay */}
       {view === "details" &&
-        selectedAssignment &&
+        detailsAssignment &&
         createPortal(
           <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-y-auto p-3 sm:p-5">
             <div
@@ -768,6 +769,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
             <div className="relative z-10 my-4 max-h-[92vh] w-full max-w-[1450px] overflow-y-auto rounded-3xl border border-slate-200 bg-[#F8FAFC] p-4 shadow-2xl sm:p-6">
               <TeacherAssignmentDetails
                 modalMode
+                assignment={detailsAssignment}
                 onClose={() => {
                   setSelectedAssignment(null);
                   setView("list");

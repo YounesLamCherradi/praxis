@@ -510,11 +510,22 @@ export default function Step1IdeasChat() {
   }
 
   useEffect(() => {
-    const savedPlanningMessages =
-      activeSubmission?.planningChatMessages ||
-      activeSubmission?.planningCoachHistory ||
-      activeSubmission?.chatHistory ||
-      [];
+    // Empty arrays are truthy. Selecting them with `||` discarded a populated
+    // chatHistory on remount and made the Coach start a new conversation.
+    const savedPlanningMessages = [
+      activeSubmission?.planningChatMessages,
+      activeSubmission?.planningCoachHistory,
+      activeSubmission?.chatHistory,
+      activeSubmission?.planningMessages,
+      activeSubmission?.coachChatHistory,
+      activeSubmission?.planningChat,
+    ].find(
+      (candidate) =>
+        Array.isArray(candidate) &&
+        candidate.some((message) =>
+          getText(message?.text || message?.content || message?.message)
+        )
+    ) || [];
 
     const normalizedSavedMessages = savedPlanningMessages
       .map(normalizeChatMessage)
@@ -848,10 +859,28 @@ export default function Step1IdeasChat() {
         skippedCoach ? now : null,
     };
 
+    const existingPlanningOutline =
+      activeSubmission?.outline ||
+      activeSubmission?.planningOutline ||
+      {};
+    const hasSavedPlanningOutline = Boolean(
+      getText(existingPlanningOutline?.chatOutlineText) ||
+      (Array.isArray(existingPlanningOutline?.notes) &&
+        existingPlanningOutline.notes.some((note) => getText(note))) ||
+      (Array.isArray(existingPlanningOutline?.sections) &&
+        existingPlanningOutline.sections.some(
+          (section) =>
+            getText(section?.title) ||
+            (Array.isArray(section?.items) &&
+              section.items.some((item) => getText(item)))
+        ))
+    );
+
     if (
       !skippedCoach &&
       autoBuildOutlineFromCoach &&
-      hasUserMessages
+      hasUserMessages &&
+      !hasSavedPlanningOutline
     ) {
       patch.outline =
         buildNotesOnlyOutline(
