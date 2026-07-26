@@ -36,7 +36,8 @@ import {
   Gauge,
 } from "lucide-react";
 
-import { useTeacherWorkspace } from "../../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../../hooks/useTeacherWorkspace";
+import { buildReplayTimeline } from "../../../utils/replayTimeline";
 
 const ANNOTATION_CODES = [
   { code: "CS", label: "Comma splice", type: "mechanics" },
@@ -1963,7 +1964,7 @@ These are instructor-only review signals and are not automatic grades.`;
     };
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (readOnly) {
       setSaveMessage(
         "Previous attempts are read-only. Review the current attempt instead."
@@ -2093,30 +2094,40 @@ These are instructor-only review signals and are not automatic grades.`;
       ? annotationsRef.current
       : annotations;
 
-    const saveAccepted = onSaveReview(submission.id, {
-      status: "Graded",
-      feedback,
-      score: finalScore,
-      annotations: annotationsToSave,
+    let saveAccepted;
+    try {
+      saveAccepted = await onSaveReview(submission.id, {
+        status: "Graded",
+        feedback,
+        score: finalScore,
+        annotations: annotationsToSave,
 
-      rubricId: currentRubric?.id || null,
-      rubricTitle: currentRubric?.title || null,
-      rubricScores: currentRubric ? cleanedRubricScores : {},
-      rubricTotal: currentRubric?.totalPoints || null,
-      rubricCalculatedScore: currentRubric ? calculatedRubricScore : null,
-      rubricOverride: currentRubric ? finalOverrideEnabled : false,
+        rubricId: currentRubric?.id || null,
+        rubricTitle: currentRubric?.title || null,
+        rubricScores: currentRubric ? cleanedRubricScores : {},
+        rubricTotal: currentRubric?.totalPoints || null,
+        rubricCalculatedScore: currentRubric ? calculatedRubricScore : null,
+        rubricOverride: currentRubric ? finalOverrideEnabled : false,
 
-      aiTeacherReviewSuggestion: aiSuggestion || null,
-      aiTeacherReviewGenerated: Boolean(aiSuggestion),
-      aiTeacherReviewUsed:
-        aiRubricApplied || aiFeedbackApplied,
-      aiRubricSuggestionApplied:
-        aiRubricApplied,
-      aiFeedbackSuggestionApplied:
-        aiFeedbackApplied,
+        aiTeacherReviewSuggestion: aiSuggestion || null,
+        aiTeacherReviewGenerated: Boolean(aiSuggestion),
+        aiTeacherReviewUsed:
+          aiRubricApplied || aiFeedbackApplied,
+        aiRubricSuggestionApplied:
+          aiRubricApplied,
+        aiFeedbackSuggestionApplied:
+          aiFeedbackApplied,
 
-      reviewedAt: new Date().toISOString(),
-    });
+        reviewedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Review save failed:", error);
+      setSaveMessage(
+        error?.message ||
+          "The review could not be saved. Please refresh and try again."
+      );
+      return;
+    }
 
     if (saveAccepted === false) {
       setSaveMessage(
@@ -3924,6 +3935,27 @@ function buildPlaybackFrames(
       text,
       pushFrame,
     });
+
+    /*
+     * Every editor event also carries the complete draft after that edit.
+     * Treat it as the authoritative checkpoint so a delayed, duplicated, or
+     * partially persisted operation can never make later replay frames lose
+     * text that the student had already written.
+     */
+    const recordedSnapshot = String(getEventSnapshot(event, "") || "");
+    if (recordedSnapshot && recordedSnapshot !== text) {
+      text = recordedSnapshot;
+      pushFrame({
+        text,
+        label: getEventLabel(event),
+        timeMs:
+          eventTimeMs +
+          Math.max(1, countPlaybackOperations(event)) *
+            intraEventDelayMs,
+        caret: text.length,
+        event,
+      });
+    }
   });
 
   if (finalText && finalText !== text) {
@@ -4077,6 +4109,10 @@ function WritingBehaviourWorkspace({
   );
 
   const replayEvents = playbackData.events;
+  const replayTimeline = useMemo(
+    () => buildReplayTimeline(replayEvents),
+    [replayEvents]
+  );
   const frames = playbackData.frames;
 
   const [frameIndex, setFrameIndex] =
@@ -4098,6 +4134,7 @@ function WritingBehaviourWorkspace({
 
   const [timelineOpen, setTimelineOpen] =
     useState(true);
+  const [replayFallbackStartMs] = useState(() => Date.now());
 
   useEffect(() => {
     setFrameIndex(0);
@@ -4304,7 +4341,7 @@ function WritingBehaviourWorkspace({
 
   const replayStartMs =
     getEventTimeMs(replayEvents[0]) ||
-    Date.now();
+    replayFallbackStartMs;
 
   const activeAbsoluteMs =
     replayStartMs +
@@ -4871,7 +4908,7 @@ function WritingBehaviourWorkspace({
 
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-mono font-bold text-slate-600">
-                        {replayEvents.length} events
+                        {replayTimeline.length} activities
                       </span>
 
                       {timelineOpen ? (
@@ -4884,16 +4921,19 @@ function WritingBehaviourWorkspace({
 
                   {timelineOpen && (
                     <div className="grid grid-cols-1 gap-1.5 border-t border-slate-100 p-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {replayEvents.map(
+                      {replayTimeline.map(
                         (event, index) => {
                           const eventFrameIndex =
                             findFrameForEvent(event);
 
                           const isActive =
-                            activeFrame?.sourceEventKey ===
-                              event.__replayKey ||
-                            activeFrame?.sourceEventId ===
-                              event.id;
+                            event.timelineEventKeys?.includes(
+                              String(
+                                activeFrame?.sourceEventKey ||
+                                  activeFrame?.sourceEventId ||
+                                  ""
+                              )
+                            );
 
                           const isPaste =
                             isPasteLikeWritingEvent(event);
@@ -4919,7 +4959,8 @@ function WritingBehaviourWorkspace({
                                 <div className="min-w-0">
                                   <div className="flex items-center gap-1.5">
                                     <p className="truncate text-[11px] font-bold text-slate-900">
-                                      {getEventLabel(event)}
+                                      {event.timelineLabel ||
+                                        getEventLabel(event)}
                                     </p>
 
                                     {isPaste && (
@@ -4930,7 +4971,8 @@ function WritingBehaviourWorkspace({
                                   </div>
 
                                   <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                                    {event.preview ||
+                                    {event.timelinePreview ||
+                                      event.preview ||
                                       `${event.wordCount || 0} words recorded`}
                                   </p>
                                 </div>

@@ -1,16 +1,31 @@
 import React, {
-  createContext,
-  useContext,
   useEffect,
   useState,
 } from "react";
+import { TeacherWorkspaceContext } from "./TeacherWorkspaceContextBase";
 
 import {
   getPraxisData,
   savePraxisData,
 } from "../services/praxisMockStore";
-
-const TeacherWorkspaceContext = createContext(null);
+import {
+  createTeacherCourse,
+  getTeacherCourses,
+} from "../services/courseApi";
+import {
+  createAssignment as createPersistedAssignment,
+  createTeacherRubric,
+  getAssignmentsForClass,
+  getTeacherRubrics,
+  getTeacherSubmissions,
+  getTeacherSubmissionsForClass,
+  removeAssignment as removePersistedAssignment,
+  removeTeacherRubric,
+  updateSubmissionAsTeacher,
+  updateAssignment as updatePersistedAssignment,
+  updateTeacherRubric,
+} from "../services/teacherApi";
+import { queryClient, queryKeys } from "../queryClient";
 
 /* =====================================================
    RUBRIC HELPERS
@@ -32,7 +47,7 @@ function roundToHalf(value) {
   return Math.round(Number(value || 0) * 2) / 2;
 }
 
-export function calculateRubricTotal(criteria = []) {
+function calculateRubricTotal(criteria = []) {
   return criteria.reduce(
     (sum, criterion) => sum + Number(criterion.points || 0),
     0
@@ -127,7 +142,7 @@ function normalizeCriterion(criterion = {}, index = 0) {
   };
 }
 
-export function normalizeRubricSchema(rubricData = {}) {
+function normalizeRubricSchema(rubricData = {}) {
   const criteria = Array.isArray(rubricData.criteria)
     ? rubricData.criteria.map(normalizeCriterion)
     : [];
@@ -402,6 +417,53 @@ function mergeSubmissionRecord(baseRecord = {}, incomingRecord = {}) {
     ...baseRecord,
     ...incomingRecord,
   };
+
+  /*
+   * Background synchronization returns compact submission summaries. Preserve
+   * details already loaded into the review workspace; empty normalized arrays
+   * from a summary must not erase AI history or writing replay evidence.
+   */
+  if (incomingRecord.detailLoaded === false) {
+    /*
+     * A compact polling response must not downgrade a submission that has
+     * already been hydrated for the open review workspace. Downgrading this
+     * flag makes the modal briefly render the compact record and fetch the
+     * same details again on every poll, which visibly flickers the screen.
+     */
+    if (baseRecord.detailLoaded === true) {
+      merged.detailLoaded = true;
+    }
+
+    [
+      "writingEvents",
+      "writingReplay",
+      "writingHistory",
+      "feedbackHistory",
+      "aiFeedbackHistory",
+      "studentAiFeedbackHistory",
+      "draftFeedbackHistory",
+      "chatHistory",
+      "planningChat",
+      "planningMessages",
+      "planningChatMessages",
+      "planningCoachHistory",
+      "coachChatHistory",
+      "ideaResponses",
+      "keystrokeLog",
+      "integrityLogs",
+      "copyPasteLogs",
+      "focusLossLogs",
+    ].forEach((field) => {
+      if (
+        Array.isArray(baseRecord[field]) &&
+        baseRecord[field].length > 0 &&
+        (!Array.isArray(incomingRecord[field]) ||
+          incomingRecord[field].length === 0)
+      ) {
+        merged[field] = baseRecord[field];
+      }
+    });
+  }
 
   /*
     Review payloads and stale state objects may omit the essay fields.
@@ -1026,6 +1088,62 @@ function resolveAssignmentClass(classes = [], assignmentData = {}) {
   );
 }
 
+function getAssignmentCriteriaCount(assignment = {}) {
+  const schemaCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
+    ? assignment.rubricSchema.criteria
+    : [];
+
+  if (schemaCriteria.length > 0) {
+    return schemaCriteria.length;
+  }
+
+  const rubricCriteria = Array.isArray(assignment?.rubric)
+    ? assignment.rubric
+    : [];
+
+  return rubricCriteria.length;
+}
+
+function isAssignmentComplete(assignment = {}) {
+  const title = String(assignment.title || "").trim();
+  const description = String(
+    assignment.description || assignment.instructions || ""
+  ).trim();
+  const dueDate = String(assignment.dueDate || assignment.deadline || "").trim();
+  const level = String(
+    assignment.studentLevel || assignment.languageLevel || ""
+  ).trim();
+  const type = String(
+    assignment.assignmentType || assignment.assignment_type || ""
+  ).trim();
+
+  const minWords = Number(
+    assignment.minWords ?? assignment.wordCountMin ?? assignment.word_count_min ?? 0
+  );
+  const maxWords = Number(
+    assignment.maxWords ?? assignment.wordCountMax ?? assignment.word_count_max ?? 0
+  );
+
+  const hasClass = Boolean(
+    assignment.classId ||
+      String(assignment.classCode || "").trim() ||
+      String(assignment.className || "").trim()
+  );
+
+  return Boolean(
+    title &&
+      title.toLowerCase() !== "untitled draft assignment" &&
+      description &&
+      dueDate &&
+      level &&
+      type &&
+      hasClass &&
+      minWords > 0 &&
+      maxWords >= minWords &&
+      getAssignmentCriteriaCount(assignment) > 0
+  );
+}
+
 function persistTeacherCollections({
   classes,
   assignments,
@@ -1080,6 +1198,173 @@ export function TeacherWorkspaceProvider({ children }) {
     const savedRubrics = getPraxisData().rubrics || [];
     return savedRubrics.map(normalizeRubricSchema);
   });
+
+  useEffect(() => {
+    let active = true;
+
+    async function syncCoursesWithBackend() {
+      try {
+        let backendCourses = await queryClient.fetchQuery({
+          queryKey: queryKeys.teacherCourses,
+          queryFn: getTeacherCourses,
+        });
+        const backendCodes = new Set(
+          backendCourses.map((course) => String(course.code || "").toUpperCase())
+        );
+
+        // Preserve courses created before backend persistence was introduced.
+        for (const localCourse of classes) {
+          const localCode = String(localCourse?.code || "").toUpperCase();
+          if (!localCode || backendCodes.has(localCode)) continue;
+
+          const migratedCourse = await createTeacherCourse(localCourse);
+          backendCourses = [...backendCourses, migratedCourse];
+          backendCodes.add(String(migratedCourse.code || "").toUpperCase());
+        }
+
+        const displayedCourses = backendCourses.map((backendCourse) => {
+          const localCourse = classes.find(
+            (course) =>
+              String(course?.code || "").toUpperCase() ===
+              String(backendCourse?.code || "").toUpperCase()
+          );
+
+          // Preserve legacy local IDs because existing local assignments still
+          // reference them; backendId carries the durable Supabase UUID.
+          return localCourse
+            ? {
+                ...backendCourse,
+                ...localCourse,
+                code: backendCourse.code,
+                backendId: backendCourse.id,
+              }
+            : backendCourse;
+        });
+
+        const assignmentGroups = await Promise.all(
+          displayedCourses.map(async (course) => {
+            const backendClassId = course.backendId || course.id;
+            const rows = await queryClient.fetchQuery({
+              queryKey: queryKeys.classAssignments(backendClassId),
+              queryFn: () => getAssignmentsForClass(backendClassId),
+            });
+            return rows.map((assignment) => ({
+              ...assignment,
+              classId: course.id,
+              backendClassId,
+              classCode: course.code || "",
+              className: course.name || "",
+            }));
+          })
+        );
+        const submissionGroups = await Promise.all(
+          displayedCourses.map(async (course) => {
+            const backendClassId = course.backendId || course.id;
+            const rows = await queryClient.fetchQuery({
+              queryKey: queryKeys.teacherSubmissions(backendClassId),
+              queryFn: () => getTeacherSubmissionsForClass(backendClassId),
+            });
+            return rows.map((submission) => {
+              const assignment = assignmentGroups
+                .flat()
+                .find((entry) => String(entry.id) === String(submission.assignmentId));
+              return {
+                ...submission,
+                assignment,
+                assignmentDetails: assignment,
+                assignmentTitle: assignment?.title || "",
+                classId: course.id,
+                classCode: course.code || "",
+                className: course.name || "",
+                isCurrent: true,
+              };
+            });
+          })
+        );
+
+        if (active) {
+          setClasses(displayedCourses);
+          setAssignments(assignmentGroups.flat());
+          setSubmissions(submissionGroups.flat());
+        }
+        queryClient.fetchQuery({
+          queryKey: queryKeys.teacherRubrics,
+          queryFn: getTeacherRubrics,
+        })
+          .then((rows) => {
+            if (active) setRubrics(rows.map(normalizeRubricSchema));
+          })
+          .catch((error) => {
+            console.error("Could not synchronize reusable rubrics with Supabase:", error);
+          });
+      } catch (error) {
+        // Keep the local workspace usable when Supabase is temporarily unavailable.
+        console.error("Could not synchronize courses with Supabase:", error);
+      }
+    }
+
+    syncCoursesWithBackend();
+    return () => {
+      active = false;
+    };
+    // Run once for the authenticated teacher; subsequent edits update state directly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * The application authenticates through the server's secure session cookie,
+   * so the browser cannot safely subscribe to Supabase tables directly.
+   * Refresh the compact, teacher-scoped submission feed while the workspace is
+   * visible. One consolidated request avoids the previous per-course N+1 load.
+   */
+  useEffect(() => {
+    let active = true;
+    let refreshing = false;
+
+    async function refreshSubmissionFeed() {
+      if (
+        !active ||
+        refreshing ||
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+
+      refreshing = true;
+      try {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.allTeacherSubmissions,
+        });
+        const rows = await queryClient.fetchQuery({
+          queryKey: queryKeys.allTeacherSubmissions,
+          queryFn: getTeacherSubmissions,
+          staleTime: 0,
+        });
+
+        if (active) {
+          setSubmissions((current) =>
+            mergeSubmissionCollections(rows, current)
+          );
+        }
+      } catch {
+        // Keep the last confirmed workspace visible during transient outages.
+      } finally {
+        refreshing = false;
+      }
+    }
+
+    const intervalId = window.setInterval(
+      refreshSubmissionFeed,
+      2000
+    );
+    window.addEventListener("focus", refreshSubmissionFeed);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshSubmissionFeed);
+    };
+  }, []);
 
   /* =====================================================
      CURRENT ASSIGNMENT / FILTERS
@@ -1166,7 +1451,7 @@ export function TeacherWorkspaceProvider({ children }) {
      ASSIGNMENT ACTIONS
   ===================================================== */
 
-  function addAssignment(assignmentData) {
+  async function addAssignment(assignmentData) {
     const selectedClass = resolveAssignmentClass(classes, assignmentData);
 
     if (!selectedClass) {
@@ -1192,7 +1477,7 @@ export function TeacherWorkspaceProvider({ children }) {
         ? "Published"
         : "Draft";
 
-    const newAssignment = {
+    let newAssignment = {
       ...assignmentData,
 
       id: assignmentId,
@@ -1253,6 +1538,23 @@ export function TeacherWorkspaceProvider({ children }) {
       archived: false,
     };
 
+    const persisted = await createPersistedAssignment(
+      selectedClass.backendId || selectedClass.id,
+      newAssignment
+    );
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.classAssignments(selectedClass.backendId || selectedClass.id),
+    });
+    newAssignment = {
+      ...newAssignment,
+      ...persisted,
+      id: persisted.id,
+      classId: selectedClass.id,
+      backendClassId: selectedClass.backendId || selectedClass.id,
+      classCode: selectedClass.code || "",
+      className: selectedClass.name || "",
+    };
+
     setAssignments((prev) => {
       const nextAssignments = [...prev, newAssignment];
 
@@ -1280,7 +1582,7 @@ export function TeacherWorkspaceProvider({ children }) {
     return newAssignment;
   }
 
-  function updateAssignment(updatedAssignment) {
+  async function updateAssignment(updatedAssignment) {
     const existingAssignment = assignments.find(
       (item) => String(item.id) === String(updatedAssignment.id)
     );
@@ -1313,7 +1615,7 @@ export function TeacherWorkspaceProvider({ children }) {
         ? "Published"
         : "Draft";
 
-    const assignment = {
+    let assignment = {
       ...existingAssignment,
       ...updatedAssignment,
 
@@ -1352,6 +1654,22 @@ export function TeacherWorkspaceProvider({ children }) {
       updatedAt: now,
     };
 
+    const persisted = await updatePersistedAssignment(
+      assignment.id,
+      assignment
+    );
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.classAssignments(selectedClass.backendId || selectedClass.id),
+    });
+    assignment = {
+      ...assignment,
+      ...persisted,
+      classId: selectedClass.id,
+      backendClassId: selectedClass.backendId || selectedClass.id,
+      classCode: selectedClass.code || "",
+      className: selectedClass.name || "",
+    };
+
     setAssignments((prev) => {
       const nextAssignments = prev.map((item) =>
         String(item.id) === String(assignment.id)
@@ -1383,7 +1701,9 @@ export function TeacherWorkspaceProvider({ children }) {
     return assignment;
   }
 
-  function deleteAssignment(id) {
+  async function deleteAssignment(id) {
+    await removePersistedAssignment(id);
+    await queryClient.invalidateQueries({ queryKey: ["classes"] });
     const currentData = getPraxisData();
     const archivedAt = nowIso();
 
@@ -1497,51 +1817,40 @@ export function TeacherWorkspaceProvider({ children }) {
     }
   }
 
-  function toggleAssignmentStatus(id) {
+  async function toggleAssignmentStatus(id) {
     const now = nowIso();
+    const current = assignments.find(
+      (assignment) => String(assignment.id) === String(id)
+    );
+    if (!current) return null;
+    const isPublished =
+      String(current.status || "").toLowerCase() === "published";
+    if (!isPublished && !isAssignmentComplete(current)) return null;
 
-    setAssignments((prev) => {
-      const nextAssignments = prev.map((assignment) => {
-        if (String(assignment.id) !== String(id)) {
-          return assignment;
-        }
-
-        const isPublished =
-          String(assignment.status || "").toLowerCase() === "published";
-
-        return {
-          ...assignment,
-          status: isPublished ? "Draft" : "Published",
-          publishedAt: isPublished ? null : now,
-          updatedAt: now,
-        };
-      });
-
-      persistTeacherCollections({
-        classes,
-        assignments: nextAssignments,
-        submissions,
-        rubrics,
-      });
-
-      return nextAssignments;
-    });
-
-    setSelectedAssignment((prev) => {
-      if (!prev || String(prev.id) !== String(id)) {
-        return prev;
-      }
-
-      const isPublished =
-        String(prev.status || "").toLowerCase() === "published";
-
-      return {
-        ...prev,
-        status: isPublished ? "Draft" : "Published",
-        publishedAt: isPublished ? null : now,
-        updatedAt: now,
-      };
-    });
+    const requested = {
+      ...current,
+      status: isPublished ? "Draft" : "Published",
+      publishedAt: isPublished ? null : now,
+      updatedAt: now,
+    };
+    const persisted = await updatePersistedAssignment(id, requested);
+    const next = {
+      ...requested,
+      ...persisted,
+      classId: current.classId,
+      backendClassId: current.backendClassId,
+      classCode: current.classCode,
+      className: current.className,
+    };
+    setAssignments((prev) =>
+      prev.map((assignment) =>
+        String(assignment.id) === String(id) ? next : assignment
+      )
+    );
+    setSelectedAssignment((prev) =>
+      prev && String(prev.id) === String(id) ? next : prev
+    );
+    return next;
   }
 
   function attachRubricToAssignment(assignmentId, rubricData) {
@@ -1822,8 +2131,25 @@ export function TeacherWorkspaceProvider({ children }) {
     return newSubmission;
   }
 
-  function updateSubmissionReview(id, reviewData) {
+  async function updateSubmissionReview(id, reviewData) {
     const now = new Date().toISOString();
+    const existingPersisted = submissions.find(
+      (submission) => String(submission.id) === String(id)
+    );
+    if (existingPersisted) {
+      const persisted = await updateSubmissionAsTeacher(id, {
+        ...existingPersisted,
+        ...reviewData,
+        teacherReview:
+          reviewData.teacherReview ||
+          reviewData.teacher_review ||
+          existingPersisted.teacherReview ||
+          existingPersisted.teacher_review ||
+          reviewData,
+        status: reviewData.status || existingPersisted.status || "submitted",
+      });
+      reviewData = { ...reviewData, ...persisted };
+    }
 
     setSubmissions((currentSubmissions) => {
       const currentData = getPraxisData();
@@ -1904,7 +2230,7 @@ export function TeacherWorkspaceProvider({ children }) {
   }
 
 
-  function reopenSubmission(id, options = {}) {
+  async function reopenSubmission(id, options = {}) {
     const currentData =
       getRepairedPraxisData();
 
@@ -1974,6 +2300,17 @@ export function TeacherWorkspaceProvider({ children }) {
 
     const now =
       new Date().toISOString();
+
+    await updateSubmissionAsTeacher(id, {
+      ...sourceSubmission,
+      status: "reopened",
+      teacherReview: {
+        ...(sourceSubmission.teacherReview || sourceSubmission.teacher_review || {}),
+        status: "reopened",
+        reopenedAt: now,
+        revisionMessage: options.message || options.revisionMessage || "",
+      },
+    });
 
     const previousTeacherReview =
       buildPreviousTeacherReviewSnapshot(
@@ -2141,13 +2478,15 @@ export function TeacherWorkspaceProvider({ children }) {
      RUBRIC ACTIONS
   ===================================================== */
 
-  function addRubric(rubricData) {
-    const newRubric = normalizeRubricSchema({
+  async function addRubric(rubricData) {
+    let newRubric = normalizeRubricSchema({
       ...rubricData,
       id: rubricData.id || createId(),
       source: rubricData.source || "manual",
       status: rubricData.status || "Draft",
     });
+    newRubric = normalizeRubricSchema(await createTeacherRubric(newRubric));
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherRubrics });
 
     setRubrics((prev) => [
       ...prev,
@@ -2157,17 +2496,19 @@ export function TeacherWorkspaceProvider({ children }) {
     return newRubric;
   }
 
-  function updateRubric(id, rubricData) {
+  async function updateRubric(id, rubricData) {
     const existingRubric = rubrics.find(
       (rubric) => String(rubric.id) === String(id)
     );
 
-    const updatedRubric = normalizeRubricSchema({
+    let updatedRubric = normalizeRubricSchema({
       ...existingRubric,
       ...rubricData,
       id,
       updatedAt: todayDate(),
     });
+    updatedRubric = normalizeRubricSchema(await updateTeacherRubric(updatedRubric));
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherRubrics });
 
     setRubrics((prev) =>
       prev.map((rubric) =>
@@ -2208,7 +2549,9 @@ export function TeacherWorkspaceProvider({ children }) {
     return updatedRubric;
   }
 
-  function deleteRubric(id) {
+  async function deleteRubric(id) {
+    await removeTeacherRubric(id);
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherRubrics });
     setRubrics((prev) =>
       prev.filter(
         (rubric) => String(rubric.id) !== String(id)
@@ -2216,14 +2559,14 @@ export function TeacherWorkspaceProvider({ children }) {
     );
   }
 
-  function duplicateRubric(id) {
+  async function duplicateRubric(id) {
     const rubric = rubrics.find(
       (item) => String(item.id) === String(id)
     );
 
     if (!rubric) return null;
 
-    const duplicatedRubric = normalizeRubricSchema({
+    let duplicatedRubric = normalizeRubricSchema({
       ...rubric,
       id: createId(),
       title: `${rubric.title} Copy`,
@@ -2234,6 +2577,10 @@ export function TeacherWorkspaceProvider({ children }) {
       createdAt: todayDate(),
       updatedAt: todayDate(),
     });
+    duplicatedRubric = normalizeRubricSchema(
+      await createTeacherRubric(duplicatedRubric)
+    );
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherRubrics });
 
     setRubrics((prev) => [
       ...prev,
@@ -2337,8 +2684,4 @@ export function TeacherWorkspaceProvider({ children }) {
       {children}
     </TeacherWorkspaceContext.Provider>
   );
-}
-
-export function useTeacherWorkspace() {
-  return useContext(TeacherWorkspaceContext);
 }

@@ -1,6 +1,12 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import AuthService from "../../services/auth";
+import {
+  getPendingCourseInvite,
+  normalizeCourseInviteCode,
+  rememberPendingCourseInvite,
+} from "../../utils/courseInvite.js";
 import {
   AlertCircle,
   ArrowLeft,
@@ -19,14 +25,95 @@ import {
 
 export default function Signup() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const [inviteCode] = useState(
+    () =>
+      normalizeCourseInviteCode(searchParams.get("invite")) ||
+      getPendingCourseInvite()
+  );
   const { signUp, setUser } = useAuth();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [otpCode, setOtpCode] = useState("");
   const [role, setRole] = useState("student");
   const [loading, setLoading] = useState(false);
+  const [codeLoading, setCodeLoading] = useState(false);
   const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [resendAt, setResendAt] = useState(0);
+  const [countdownNow, setCountdownNow] = useState(0);
+  const [codeRequested, setCodeRequested] = useState(false);
+
+  useEffect(() => {
+    if (inviteCode) rememberPendingCourseInvite(inviteCode);
+  }, [inviteCode]);
+
+  useEffect(() => {
+    if (!resendAt) return undefined;
+    const timer = window.setInterval(() => {
+      setCountdownNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [resendAt]);
+
+  const waitSeconds = Math.max(0, Math.ceil((resendAt - countdownNow) / 1000));
+  const cleanEmail = email.trim().toLowerCase();
+  const isAuiEmail = cleanEmail.endsWith("@aui.ma") && cleanEmail.includes("@");
+  const canRequestCode = isAuiEmail;
+  const passwordChecks = {
+    length: password.length >= 10,
+    lower: /[a-z]/.test(password),
+    upper: /[A-Z]/.test(password),
+    number: /\d/.test(password),
+    special: /[^A-Za-z0-9]/.test(password),
+  };
+
+  const passwordRules = [
+    { key: "length", label: "At least 10 characters" },
+    { key: "lower", label: "One lowercase letter" },
+    { key: "upper", label: "One uppercase letter" },
+    { key: "number", label: "One number" },
+    { key: "special", label: "One special character" },
+  ];
+
+  function passwordHint(pass) {
+    return [
+      pass.length >= 10,
+      /[a-z]/.test(pass),
+      /[A-Z]/.test(pass),
+      /\d/.test(pass),
+      /[^A-Za-z0-9]/.test(pass),
+    ].every(Boolean);
+  }
+
+  async function handleRequestCode() {
+    setCodeLoading(true);
+    setError("");
+    setMessage("");
+
+    try {
+      if (!email.trim()) {
+        throw new Error("Enter your email first.");
+      }
+
+      if (!isAuiEmail) {
+        throw new Error("Access is restricted to @aui.ma accounts.");
+      }
+
+      await AuthService.requestSignupCode(cleanEmail, name.trim());
+      const requestedAt = Date.now();
+      setCountdownNow(requestedAt);
+      setResendAt(requestedAt + 60 * 1000);
+      setCodeRequested(true);
+      setMessage("A 6-digit verification code was sent to your email.");
+    } catch (err) {
+      setError(err.message || "Could not send verification code.");
+    } finally {
+      setCodeLoading(false);
+    }
+  }
 
   async function handleSignup(e) {
     e.preventDefault();
@@ -34,14 +121,26 @@ export default function Signup() {
     setLoading(true);
     setError("");
 
-    if (!name.trim() || !email.trim() || !password) {
+    if (!name.trim() || !email.trim() || !password || !otpCode.trim()) {
       setError("Please fill in all required registration fields.");
       setLoading(false);
       return;
     }
 
-    if (!email.trim().toLowerCase().endsWith("@aui.ma")) {
-      setError("Authorized access is restricted to valid @aui.ma university emails.");
+    if (!isAuiEmail) {
+      setError("Access is restricted to @aui.ma accounts.");
+      setLoading(false);
+      return;
+    }
+
+    if (!/^\d{6}$/.test(otpCode.trim())) {
+      setError("Enter a valid 6-digit verification code.");
+      setLoading(false);
+      return;
+    }
+
+    if (!Object.values(passwordChecks).every(Boolean)) {
+      setError("Password must be 10+ chars and include uppercase, lowercase, number, and special character.");
       setLoading(false);
       return;
     }
@@ -53,13 +152,14 @@ export default function Signup() {
         name.trim(),
         cleanEmail,
         password,
-        role
+        inviteCode ? "student" : role,
+        otpCode.trim()
       );
 
       setUser(profile);
 
-      if (role === "student") {
-        navigate("/student");
+      if (inviteCode || role === "student") {
+        navigate(inviteCode ? `/join?code=${encodeURIComponent(inviteCode)}` : "/student");
       } else if (role === "teacher") {
         navigate("/teacher");
       } else {
@@ -108,7 +208,9 @@ export default function Signup() {
       <div className="absolute top-6 left-6 sm:left-10 z-20">
         <button
           type="button"
-          onClick={() => navigate("/login")}
+          onClick={() =>
+            navigate(inviteCode ? `/login?invite=${encodeURIComponent(inviteCode)}` : "/login")
+          }
           className="group flex items-center gap-3 bg-white/85 hover:bg-white backdrop-blur border border-slate-200 shadow-sm pl-3 pr-5 py-2 rounded-2xl transition-all duration-200 cursor-pointer text-left"
         >
           <div className="w-8 h-8 rounded-xl bg-blue-50 group-hover:bg-blue-600 group-hover:text-white text-blue-700 border border-blue-100 flex items-center justify-center transition-all duration-200 shrink-0">
@@ -198,7 +300,7 @@ export default function Signup() {
                 </h2>
 
                 <p className="text-xs font-mono uppercase text-blue-700 font-bold tracking-wider mt-1">
-                  Join the AUI platform
+                   Join the AUI platform · email code required
                 </p>
               </div>
 
@@ -206,6 +308,13 @@ export default function Signup() {
                 <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-medium">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <span>{error}</span>
+                </div>
+              )}
+
+              {message && (
+                <div className="mb-5 p-3.5 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-800 font-medium">
+                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                  <span>{message}</span>
                 </div>
               )}
 
@@ -233,10 +342,11 @@ export default function Signup() {
 
                 <div>
                   <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                    Campus Email Address
+                    Campus Email Address <span className="ml-1 text-[10px] normal-case font-medium text-slate-500">(AUI accounts only)</span>
                   </label>
 
-                  <div className="mt-1.5 relative rounded-xl shadow-sm">
+                  <div className="mt-1.5 flex gap-2">
+                    <div className="relative rounded-xl shadow-sm flex-1">
                     <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                       <Mail className="w-4 h-4" />
                     </div>
@@ -249,8 +359,44 @@ export default function Signup() {
                       required
                       className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
                     />
+                    </div>
+
+                    {canRequestCode && (
+                      <button
+                        type="button"
+                        onClick={handleRequestCode}
+                        disabled={codeLoading || waitSeconds > 0}
+                        className="px-4 py-3 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-400 shadow-lg shadow-blue-600/20"
+                      >
+                        {codeLoading ? "Sending..." : waitSeconds > 0 ? `${waitSeconds}s` : "Get code"}
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {codeRequested && (
+                  <div>
+                    <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
+                      6-Digit Verification Code
+                    </label>
+
+                    <div className="mt-1.5 relative rounded-xl shadow-sm">
+                      <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                        <CheckCircle2 className="w-4 h-4" />
+                      </div>
+
+                      <input
+                        type="text"
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+                        placeholder="123456"
+                        maxLength={6}
+                        required
+                        className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-sm tracking-[0.35em] font-mono focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
@@ -271,6 +417,27 @@ export default function Signup() {
                       className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
                     />
                   </div>
+
+                  {password.length > 0 && (
+                    <div className="mt-2 space-y-1.5">
+                      {passwordRules.map((rule) => {
+                        const satisfied = passwordChecks[rule.key];
+                        return (
+                          <div
+                            key={rule.key}
+                            className={`flex items-center gap-2 text-[11px] font-medium ${satisfied ? "text-emerald-700" : "text-rose-600"}`}
+                          >
+                            <span
+                              className={`inline-flex h-4 w-4 items-center justify-center rounded-full text-[10px] font-bold ${satisfied ? "bg-emerald-100" : "bg-rose-100"}`}
+                            >
+                              {satisfied ? "✓" : "•"}
+                            </span>
+                            <span>{rule.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -293,7 +460,8 @@ export default function Signup() {
 
                     <button
                       type="button"
-                      onClick={() => setRole("teacher")}
+                      onClick={() => !inviteCode && setRole("teacher")}
+                      disabled={Boolean(inviteCode)}
                       className={`py-3 rounded-xl border text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
                         role === "teacher"
                           ? "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-600/20"
@@ -303,15 +471,6 @@ export default function Signup() {
                       Instructor
                     </button>
                   </div>
-                </div>
-
-                <div className="p-3 bg-blue-50 rounded-xl border border-blue-100 flex gap-2 text-xs text-slate-600 leading-relaxed font-mono">
-                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-
-                  <span>
-                    Access is limited to verified AUI accounts and role-based
-                    workspaces.
-                  </span>
                 </div>
 
                 <button
@@ -337,7 +496,9 @@ export default function Signup() {
                 Already have an account?{" "}
                 <button
                   type="button"
-                  onClick={() => navigate("/login")}
+                  onClick={() =>
+                    navigate(inviteCode ? `/login?invite=${encodeURIComponent(inviteCode)}` : "/login")
+                  }
                   className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
                 >
                   Sign in

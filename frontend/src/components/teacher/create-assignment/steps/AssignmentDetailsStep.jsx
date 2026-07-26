@@ -75,9 +75,15 @@ export default function AssignmentDetailsStep({
 
   assignmentType,
   setAssignmentType,
+  assignmentTypeCustom,
+  setAssignmentTypeCustom,
 
   studentLevel,
   setStudentLevel,
+
+  gradeScale,
+  setGradeScale,
+  rubricMode,
 
   feedbackChecks,
   setFeedbackChecks,
@@ -133,26 +139,6 @@ export default function AssignmentDetailsStep({
 
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-700">
-            <FileText className="h-4 w-4" />
-          </div>
-
-          <div>
-            <h3 className="font-serif text-lg font-bold text-slate-950">
-              Step 2: Assignment Details
-            </h3>
-
-            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-500">
-              {isAiMode
-                ? "Describe the assignment naturally. Praxis will create the title, instructions, course selection, level, type, word range, due date, and student-support settings."
-                : "Select the course, then write the assignment title, instructions, due date, and requirements."}
-            </p>
-          </div>
-        </div>
-      </div>
-
       {isAiMode ? (
         <div className="space-y-3">
           {generatedDraft && !isDescriptionExpanded && (
@@ -247,11 +233,6 @@ export default function AssignmentDetailsStep({
 Create a B1 process paragraph for CSC4301 about how students prepare for an important exam. It should be 250–400 words and due next Friday at 11:59 PM. Give students two AI feedback checks and enable the planning coach with automatic outline.`}
               className="w-full resize-y rounded-2xl border border-violet-200 bg-white px-5 py-4 text-sm leading-7 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10"
             />
-
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              You may mention the course, level, due date, word count, assignment
-              type, Coach support, or feedback limits in the same description.
-            </p>
           </label>
 
           {classes.length === 0 && (
@@ -261,16 +242,10 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
             />
           )}
 
-          <div className="flex flex-col gap-3 border-t border-violet-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-[11px] font-semibold text-slate-700">
-                Praxis will generate the full configuration.
-              </p>
-
-              <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                After generation, review and edit the result before continuing.
-              </p>
-            </div>
+          <div className="flex flex-col gap-2 border-t border-violet-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              You may mention the course, level, due date, word count, assignment type, Coach support, or feedback limits in the same description.
+            </p>
 
             <button
               type="button"
@@ -323,6 +298,8 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
           setMaxWords={setMaxWords}
           assignmentType={assignmentType}
           setAssignmentType={setAssignmentType}
+          assignmentTypeCustom={assignmentTypeCustom}
+          setAssignmentTypeCustom={setAssignmentTypeCustom}
           studentLevel={studentLevel}
           setStudentLevel={setStudentLevel}
           feedbackChecks={feedbackChecks}
@@ -430,7 +407,13 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
 
               <select
                 value={assignmentType}
-                onChange={(event) => setAssignmentType(event.target.value)}
+                onChange={(event) => {
+                  const nextType = event.target.value;
+                  setAssignmentType(nextType);
+                  if (nextType !== "Other") {
+                    setAssignmentTypeCustom("");
+                  }
+                }}
                 className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
               >
                 {ASSIGNMENT_TYPES.map((type) => (
@@ -458,6 +441,25 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
                 ))}
               </select>
             </label>
+
+            {rubricMode === "generated" && (
+              <label className="space-y-1.5">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Grade Scale (Max Score)
+                </span>
+
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={gradeScale}
+                  onChange={(event) =>
+                    setGradeScale(Number(event.target.value || 0))
+                  }
+                  className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+                />
+              </label>
+            )}
 
             <label className="space-y-1.5">
               <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
@@ -490,17 +492,24 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
                 className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
               />
             </label>
-          </div>
 
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-            <p className="text-[11px] font-bold text-blue-900">
-              Student support was also generated.
-            </p>
+            {assignmentType === "Other" && (
+              <label className="space-y-1.5 md:col-span-2 xl:col-span-4">
+                <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  Custom Assignment Type
+                </span>
 
-            <p className="mt-1 text-[10px] leading-relaxed text-blue-800">
-              Review Coach chat, active-time limit, outline,
-              and AI feedback request limit in Step 3.
-            </p>
+                <input
+                  type="text"
+                  value={assignmentTypeCustom}
+                  onChange={(event) =>
+                    setAssignmentTypeCustom(event.target.value)
+                  }
+                  placeholder="Write custom assignment type"
+                  className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+                />
+              </label>
+            )}
           </div>
 
           {Number(maxWords || 0) < Number(minWords || 0) && (
@@ -532,6 +541,8 @@ function ManualAssignmentSetup({
   setMaxWords,
   assignmentType,
   setAssignmentType,
+  assignmentTypeCustom,
+  setAssignmentTypeCustom,
   studentLevel,
   setStudentLevel,
   feedbackChecks,
@@ -659,7 +670,13 @@ function ManualAssignmentSetup({
 
           <select
             value={assignmentType}
-            onChange={(event) => setAssignmentType(event.target.value)}
+            onChange={(event) => {
+              const nextType = event.target.value;
+              setAssignmentType(nextType);
+              if (nextType !== "Other") {
+                setAssignmentTypeCustom("");
+              }
+            }}
             className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
           >
             {ASSIGNMENT_TYPES.map((type) => (
@@ -687,6 +704,22 @@ function ManualAssignmentSetup({
             ))}
           </select>
         </label>
+
+        {assignmentType === "Other" && (
+          <label className="space-y-1.5 md:col-span-2 xl:col-span-4">
+            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              Custom Assignment Type
+            </span>
+
+            <input
+              type="text"
+              value={assignmentTypeCustom}
+              onChange={(event) => setAssignmentTypeCustom(event.target.value)}
+              placeholder="Write custom assignment type"
+              className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
+            />
+          </label>
+        )}
       </div>
 
       {Number(maxWords || 0) < Number(minWords || 0) && (

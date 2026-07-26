@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   AlertCircle,
   CheckCircle2,
@@ -14,13 +16,42 @@ import {
   Trash2,
   UserRound,
   Users,
+  X,
 } from "lucide-react";
 
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 import {
   getPraxisData,
-  savePraxisData,
 } from "../../services/praxisMockStore";
+import {
+  deleteCourseMessage,
+  getCourseMessages,
+  saveCourseMessageDraft,
+  sendCourseMessage,
+} from "../../services/courseApi";
+import { queryClient, queryKeys } from "../../queryClient";
+
+function normalizeStoredMessage(row = {}) {
+  const emails = Array.isArray(row.recipient_emails) ? row.recipient_emails : [];
+  return {
+    id: row.id,
+    status: row.status === "draft" ? "Draft" : row.status === "partially_sent" ? "Partially Sent" : "Sent",
+    channel: row.recipient_mode === "individual" ? "Direct Email" : "Course Email",
+    courseId: row.class_id,
+    courseCode: row.classes?.invite_code || "",
+    courseName: row.classes?.name || "Course",
+    recipientMode: row.recipient_mode,
+    recipientCount: emails.length,
+    deliveredCount: row.delivered_count || 0,
+    failedCount: row.failed_count || 0,
+    recipientEmails: emails,
+    recipientStudentEmail: row.recipient_mode === "individual" ? emails[0] || "" : "",
+    subject: row.subject || "",
+    body: row.body || "",
+    createdAt: row.sent_at || row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
 
 const MESSAGE_TEMPLATES = [
   {
@@ -82,6 +113,12 @@ export default function TeacherCommunication() {
   );
 
   const [data, setData] = useState(() => getPraxisData());
+  const { data: storedMessageRows = [] } = useQuery({
+    queryKey: queryKeys.courseMessages,
+    queryFn: getCourseMessages,
+    staleTime: 30_000,
+  });
+  const [sessionMessages, setSessionMessages] = useState([]);
   const [activeView, setActiveView] = useState("compose");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const [recipientMode, setRecipientMode] = useState("all");
@@ -94,6 +131,19 @@ export default function TeacherCommunication() {
   const [historySearch, setHistorySearch] = useState("");
   const [systemMessage, setSystemMessage] = useState("");
   const [systemError, setSystemError] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [editingDraftId, setEditingDraftId] = useState("");
+  const [detailMessage, setDetailMessage] = useState(null);
+
+  useEffect(() => {
+    if (!systemMessage) return undefined;
+
+    const timer = window.setTimeout(() => {
+      setSystemMessage("");
+    }, 3500);
+
+    return () => window.clearTimeout(timer);
+  }, [systemMessage]);
 
   useEffect(() => {
     const latestData = getPraxisData();
@@ -110,8 +160,18 @@ export default function TeacherCommunication() {
     }
   }, [activeCourses, selectedCourseId]);
 
-  const enrollments = data.enrollments || [];
-  const communicationMessages = data.communicationMessages || [];
+  const enrollments = useMemo(
+    () => data.enrollments || [],
+    [data.enrollments]
+  );
+  const communicationMessages = useMemo(() => {
+    const stored = storedMessageRows.map(normalizeStoredMessage);
+    const storedIds = new Set(stored.map((message) => String(message.id)));
+    return [
+      ...sessionMessages.filter((message) => !storedIds.has(String(message.id))),
+      ...stored,
+    ];
+  }, [sessionMessages, storedMessageRows]);
 
   const selectedCourse = useMemo(() => {
     return (
@@ -150,6 +210,7 @@ export default function TeacherCommunication() {
 
       studentsByEmail.set(email, {
         id: enrollment.id || email,
+        studentId: enrollment.studentId || enrollment.student_id || "",
         studentName: enrollment.studentName || "Student",
         studentEmail: email,
       });
@@ -217,30 +278,53 @@ export default function TeacherCommunication() {
     });
   }, [communicationMessages, historySearch]);
 
-  function persistCommunicationMessage(message, successText) {
-    const latestData = getPraxisData();
-
-    const updatedMessages = [
+  function persistCommunicationMessage(message, successText, replaceId = "") {
+    setSessionMessages((current) => [
       message,
-      ...(latestData.communicationMessages || []),
-    ];
+      ...current.filter(
+        (entry) => !replaceId || String(entry.id) !== String(replaceId)
+      ),
+    ]);
 
-    const nextData = {
-      ...latestData,
-      communicationMessages: updatedMessages,
-    };
-
-    savePraxisData(nextData);
-    setData(nextData);
-
-    setSystemMessage(successText);
+    setSystemMessage(successText || "");
     setSystemError("");
+    queryClient.invalidateQueries({ queryKey: queryKeys.courseMessages });
   }
 
   function resetComposer() {
     setSubject("");
     setMessageBody("");
     setShowBccList(false);
+    setEditingDraftId("");
+  }
+
+  function openHistoryMessage(message) {
+    if (message.status !== "Draft") {
+      setDetailMessage(message);
+      return;
+    }
+
+    const draftCourse = activeCourses.find(
+      (course) =>
+        String(course.id) === String(message.courseId) ||
+        (course.code &&
+          String(course.code).toUpperCase() ===
+            String(message.courseCode || "").toUpperCase())
+    );
+
+    setSelectedCourseId(draftCourse ? String(draftCourse.id) : "");
+    setRecipientMode(message.recipientMode === "individual" ? "individual" : "all");
+    setSelectedStudentEmail(
+      message.recipientMode === "individual"
+        ? message.recipientStudentEmail || message.recipientEmails?.[0] || ""
+        : ""
+    );
+    setSubject(message.subject || "");
+    setMessageBody(message.body || "");
+    setEditingDraftId(String(message.id));
+    setSystemMessage("");
+    setSystemError("");
+    setActiveView("compose");
   }
 
   function validateComposer() {
@@ -275,58 +359,80 @@ export default function TeacherCommunication() {
     return true;
   }
 
-  function handlePrepareSend(e) {
+  async function handlePrepareSend(e) {
     e.preventDefault();
 
-    if (!validateComposer()) return;
+    if (!validateComposer() || isSending) return;
 
     const isIndividualRecipient = recipientMode === "individual";
+    const backendCourseId = selectedCourse.backendId || selectedCourse.id;
+    const requestId = globalThis.crypto?.randomUUID?.() ||
+      `message_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
-    const message = {
-      id: `comm_${Date.now()}`,
-      type: "email",
-      channel: isIndividualRecipient ? "Direct Email" : "BCC Email",
-      status: "Prepared",
-      frontendOnly: true,
+    setIsSending(true);
 
-      courseId: selectedCourse.id,
-      courseCode: selectedCourse.code,
-      courseName: selectedCourse.name,
+    try {
+      const delivery = await sendCourseMessage(backendCourseId, {
+        recipientMode,
+        studentId: isIndividualRecipient ? selectedStudent?.studentId : "",
+        subject: subject.trim(),
+        body: messageBody.trim(),
+        requestId,
+      });
 
-      recipientMode,
-      recipientCount: recipientEmails.length,
-      recipientEmails,
-      bccEmails: isIndividualRecipient ? [] : recipientEmails,
-      toEmails: isIndividualRecipient ? recipientEmails : [],
-      recipientStudentName: isIndividualRecipient
-        ? selectedStudent?.studentName || "Student"
-        : "",
-      recipientStudentEmail: isIndividualRecipient
-        ? selectedStudent?.studentEmail || ""
-        : "",
+      const message = {
+        id: delivery.message?.id || `comm_${requestId}`,
+        type: "email",
+        channel: isIndividualRecipient ? "Direct Email" : "Course Email",
+        status: delivery.failedCount > 0 ? "Partially Sent" : "Sent",
+        frontendOnly: false,
 
-      subject: subject.trim(),
-      body: messageBody.trim(),
+        courseId: selectedCourse.id,
+        backendCourseId,
+        courseCode: selectedCourse.code,
+        courseName: selectedCourse.name,
 
-      createdAt: new Date().toISOString(),
-    };
+        recipientMode,
+        recipientCount: delivery.recipientCount,
+        deliveredCount: delivery.deliveredCount,
+        failedCount: delivery.failedCount,
+        recipientEmails,
+        bccEmails: isIndividualRecipient ? [] : recipientEmails,
+        toEmails: isIndividualRecipient ? recipientEmails : [],
+        recipientStudentName: isIndividualRecipient
+          ? selectedStudent?.studentName || "Student"
+          : "",
+        recipientStudentEmail: isIndividualRecipient
+          ? selectedStudent?.studentEmail || ""
+          : "",
 
-    persistCommunicationMessage(
-      message,
-      isIndividualRecipient
-        ? `Email prepared for ${
-            selectedStudent?.studentName || selectedStudent?.studentEmail
-          }. Backend sending will be connected later.`
-        : `Email prepared for ${recipientEmails.length} student${
-            recipientEmails.length === 1 ? "" : "s"
-          } using BCC. Backend sending will be connected later.`
-    );
+        subject: subject.trim(),
+        body: messageBody.trim(),
 
-    resetComposer();
-    setActiveView("history");
+        createdAt: delivery.sentAt || new Date().toISOString(),
+      };
+
+      persistCommunicationMessage(
+        message,
+        delivery.failedCount > 0
+          ? `Email delivered to ${delivery.deliveredCount} of ${delivery.recipientCount} students.`
+          : isIndividualRecipient
+          ? `Email sent to ${selectedStudent?.studentName || "the selected student"}.`
+          : `Email sent successfully to ${delivery.deliveredCount} students.`,
+        editingDraftId
+      );
+
+      resetComposer();
+      setActiveView("history");
+    } catch (error) {
+      setSystemMessage("");
+      setSystemError(error?.message || "The email could not be sent.");
+    } finally {
+      setIsSending(false);
+    }
   }
 
-  function handleSaveDraft() {
+  async function handleSaveDraft() {
     setSystemMessage("");
     setSystemError("");
 
@@ -348,7 +454,7 @@ export default function TeacherCommunication() {
     const isIndividualRecipient = recipientMode === "individual";
 
     const message = {
-      id: `draft_${Date.now()}`,
+      id: editingDraftId || `draft_${Date.now()}`,
       type: "email",
       channel: isIndividualRecipient ? "Direct Email" : "BCC Email",
       status: "Draft",
@@ -373,44 +479,59 @@ export default function TeacherCommunication() {
       subject: subject.trim() || "Untitled draft",
       body: messageBody.trim(),
 
-      createdAt: new Date().toISOString(),
+      createdAt:
+        communicationMessages.find(
+          (entry) => String(entry.id) === String(editingDraftId)
+        )?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
 
-    persistCommunicationMessage(message, "Draft saved locally.");
-    resetComposer();
-    setActiveView("history");
+    try {
+      const stored = await saveCourseMessageDraft({
+        id: editingDraftId || undefined,
+        classId: selectedCourse.backendId || selectedCourse.id,
+        recipientMode,
+        studentId: isIndividualRecipient ? selectedStudent?.studentId : null,
+        recipientEmails,
+        subject: message.subject,
+        body: message.body,
+      });
+      persistCommunicationMessage(normalizeStoredMessage({
+        ...stored,
+        classes: { name: selectedCourse.name, invite_code: selectedCourse.code },
+      }), "", editingDraftId);
+      resetComposer();
+      setActiveView("history");
+    } catch (error) {
+      setSystemError(error?.message || "The message draft could not be saved.");
+    }
   }
 
-  function handleDeleteMessage(messageId) {
+  async function handleDeleteMessage(messageId) {
     const confirmed = window.confirm(
-      "Delete this communication record from the local frontend history?"
+      "Delete this message record from Supabase?"
     );
 
     if (!confirmed) return;
 
-    const latestData = getPraxisData();
-
-    const updatedMessages = (latestData.communicationMessages || []).filter(
-      (message) => String(message.id) !== String(messageId)
-    );
-
-    const nextData = {
-      ...latestData,
-      communicationMessages: updatedMessages,
-    };
-
-    savePraxisData(nextData);
-    setData(nextData);
-
-    setSystemMessage("Communication record deleted.");
-    setSystemError("");
+    try {
+      await deleteCourseMessage(messageId);
+      setSessionMessages((current) =>
+        current.filter((message) => String(message.id) !== String(messageId))
+      );
+      await queryClient.invalidateQueries({ queryKey: queryKeys.courseMessages });
+      setSystemMessage("");
+      setSystemError("");
+    } catch (error) {
+      setSystemError(error?.message || "The message could not be deleted.");
+    }
   }
 
   function applyTemplate(template) {
     setSubject(template.subject);
     setMessageBody(template.body);
     setActiveView("compose");
-    setSystemMessage(`Template applied: ${template.title}`);
+    setSystemMessage("");
     setSystemError("");
   }
 
@@ -452,17 +573,11 @@ export default function TeacherCommunication() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
           <SummaryBox
             label="Active Courses"
             value={activeCourses.length}
             icon={Users}
-          />
-
-          <SummaryBox
-            label="Selected Recipients"
-            value={recipientEmails.length}
-            icon={Mail}
           />
 
           <SummaryBox
@@ -499,11 +614,11 @@ export default function TeacherCommunication() {
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-5">
               <div>
                 <h3 className="font-serif text-lg font-bold text-slate-950">
-                  Compose Email
+                  {editingDraftId ? "Edit Draft" : "Compose Email"}
                 </h3>
 
                 <p className="text-xs text-slate-500 mt-1">
-                  Send to all enrolled students through BCC or choose one
+                  Send privately to all enrolled students or choose one
                   individual student.
                 </p>
               </div>
@@ -642,19 +757,22 @@ export default function TeacherCommunication() {
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-[#F8FAFC] transition-all text-xs font-bold"
                 >
                   <Save className="w-4 h-4" />
-                  Save Draft
+                  {editingDraftId ? "Update Draft" : "Save Draft"}
                 </button>
 
                 <button
                   type="submit"
+                  disabled={isSending}
                   className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-600/20"
                 >
                   <Send className="w-4 h-4" />
-                  {recipientMode === "individual" && selectedStudent
-                    ? `Prepare Email to ${
+                  {isSending
+                    ? "Sending Email..."
+                    : recipientMode === "individual" && selectedStudent
+                    ? `Send Email to ${
                         selectedStudent.studentName || "Student"
                       }`
-                    : `Prepare Email to ${recipientEmails.length} Student${
+                    : `Send Email to ${recipientEmails.length} Student${
                         recipientEmails.length === 1 ? "" : "s"
                       }`}
                 </button>
@@ -673,7 +791,7 @@ export default function TeacherCommunication() {
                   <h3 className="font-serif text-sm font-bold text-slate-950">
                     {recipientMode === "individual"
                       ? "Selected Student"
-                      : "BCC Recipients"}
+                      : "Course Recipients"}
                   </h3>
                 </div>
 
@@ -719,7 +837,7 @@ export default function TeacherCommunication() {
                     ? "Hide Recipient"
                     : recipientMode === "individual"
                     ? "View Recipient"
-                    : "Preview BCC List"}
+                    : "Preview Recipient List"}
                 </button>
               </div>
 
@@ -742,17 +860,6 @@ export default function TeacherCommunication() {
                 </div>
               )}
 
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                <p className="text-xs font-bold text-amber-900">
-                  Frontend preview only
-                </p>
-
-                <p className="text-[11px] text-amber-800 mt-1 leading-relaxed">
-                  This page prepares the email UI, BCC recipient list, drafts,
-                  and local message history. Real sending will be connected
-                  later through the Node.js/Express backend.
-                </p>
-              </div>
             </div>
           </div>
         </form>
@@ -767,7 +874,7 @@ export default function TeacherCommunication() {
               </h3>
 
               <p className="text-xs text-slate-500 mt-1">
-                Local frontend history of prepared emails and saved drafts.
+                History of sent emails and locally saved drafts.
               </p>
             </div>
 
@@ -800,7 +907,16 @@ export default function TeacherCommunication() {
               {filteredHistory.map((message) => (
                 <div
                   key={message.id}
-                  className="p-5 grid grid-cols-1 lg:grid-cols-[1.2fr_1fr_0.8fr_120px] gap-4 items-center hover:bg-[#F8FAFC] transition-all"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openHistoryMessage(message)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openHistoryMessage(message);
+                    }
+                  }}
+                  className="p-5 grid grid-cols-1 lg:grid-cols-[1.2fr_1fr_0.8fr_120px] gap-4 items-center hover:bg-[#F8FAFC] transition-all cursor-pointer focus:outline-none focus:ring-4 focus:ring-inset focus:ring-blue-500/10"
                 >
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -836,9 +952,6 @@ export default function TeacherCommunication() {
                     <p className="text-[11px] text-slate-400 mt-1">
                       {message.recipientMode === "individual"
                         ? `${
-                            message.recipientStudentName ||
-                            "Individual student"
-                          } · ${
                             message.recipientStudentEmail ||
                             message.recipientEmails?.[0] ||
                             message.toEmails?.[0] ||
@@ -862,7 +975,10 @@ export default function TeacherCommunication() {
 
                   <button
                     type="button"
-                    onClick={() => handleDeleteMessage(message.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteMessage(message.id);
+                    }}
                     className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50/40 px-3 py-2 text-xs font-bold text-red-600 hover:bg-red-50 transition-all"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -873,6 +989,79 @@ export default function TeacherCommunication() {
             </div>
           )}
         </div>
+      )}
+
+      {detailMessage && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close message details"
+            onClick={() => setDetailMessage(null)}
+            className="absolute inset-0 bg-slate-950/45 backdrop-blur-xs"
+          />
+
+          <section className="relative z-10 w-full max-w-2xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-[#F8FAFC] p-5">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded border border-blue-100 bg-blue-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-blue-700">
+                    {detailMessage.status}
+                  </span>
+                  <span className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-indigo-700">
+                    {detailMessage.channel}
+                  </span>
+                </div>
+                <h3 className="mt-3 break-words font-serif text-xl font-bold text-slate-950">
+                  {detailMessage.subject}
+                </h3>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDetailMessage(null)}
+                className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-5 overflow-y-auto p-5">
+              <div className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4 sm:grid-cols-2">
+                <MessageDetail label="Course" value={`${detailMessage.courseCode || ""} - ${detailMessage.courseName || ""}`} />
+                <MessageDetail
+                  label="Recipient"
+                  value={
+                    detailMessage.recipientMode === "individual"
+                      ? detailMessage.recipientStudentEmail ||
+                        detailMessage.recipientEmails?.[0] ||
+                        detailMessage.toEmails?.[0] ||
+                        "Email unavailable"
+                      : `${detailMessage.recipientCount || 0} course recipients`
+                  }
+                />
+                <MessageDetail label="Sent" value={formatDateTime(detailMessage.createdAt)} />
+                <MessageDetail
+                  label="Delivery"
+                  value={
+                    detailMessage.deliveredCount !== undefined
+                      ? `${detailMessage.deliveredCount} delivered${detailMessage.failedCount ? `, ${detailMessage.failedCount} failed` : ""}`
+                      : detailMessage.status
+                  }
+                />
+              </div>
+
+              <div>
+                <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Message
+                </p>
+                <div className="mt-2 whitespace-pre-wrap break-words rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-7 text-slate-700">
+                  {detailMessage.body}
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>,
+        document.body
       )}
 
       {activeView === "templates" && (
@@ -949,6 +1138,19 @@ function SummaryBox({ label, value, icon: Icon }) {
           {value}
         </p>
       </div>
+    </div>
+  );
+}
+
+function MessageDetail({ label, value }) {
+  return (
+    <div className="min-w-0">
+      <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
+        {label}
+      </p>
+      <p className="mt-1 break-words text-xs font-semibold text-slate-700">
+        {value || "Not available"}
+      </p>
     </div>
   );
 }

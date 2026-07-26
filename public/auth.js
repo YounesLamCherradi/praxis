@@ -6,7 +6,10 @@ const Auth = (() => {
 
   function getSession() { return session; }
   function getProfile() { return profile; }
-  function getToken() { return session?.access_token || null; }
+  function getToken() {
+    const token = String(session?.access_token || '').trim();
+    return token && token.split('.').length === 3 ? token : '';
+  }
   function clearStoredSession() {
     session = null;
     profile = null;
@@ -35,13 +38,15 @@ const Auth = (() => {
   async function apiFetch(path, options = {}) {
     let res = await fetch(path, {
       ...options,
+      credentials: 'include',
       headers: { ...authHeaders(), ...(options.headers || {}) }
     });
     if (res.status === 401) {
       const restored = await restoreSession();
-      if (restored && getToken()) {
+      if (restored) {
         res = await fetch(path, {
           ...options,
+          credentials: 'include',
           headers: { ...authHeaders(), ...(options.headers || {}) }
         });
       }
@@ -58,19 +63,13 @@ const Auth = (() => {
   async function signIn(email, password, stayLoggedIn = true) {
     const data = await fetch('/api/auth/signin', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password, stayLoggedIn })
     }).then(r => r.json());
     if (data.error) throw new Error(data.error);
-    session = data.session;
+    session = { mode: 'cookie' };
     profile = assertUsableProfile(data.profile);
-    if (stayLoggedIn) {
-      localStorage.setItem('auizero_session', JSON.stringify(session));
-      sessionStorage.removeItem('auizero_session');
-    } else {
-      sessionStorage.setItem('auizero_session', JSON.stringify(session));
-      localStorage.removeItem('auizero_session');
-    }
    return profile;
   }
   async function signUp(email, password, name, role) {
@@ -87,23 +86,22 @@ const Auth = (() => {
   async function signOut() {
     await fetch('/api/auth/signout', {
       method: 'POST',
+      credentials: 'include',
       headers: authHeaders()
     });
     clearStoredSession();
   }
 
   async function refreshToken() {
-    if (!session?.refresh_token) return false;
     try {
       const data = await fetch('/api/auth/refresh', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: session.refresh_token }),
+        body: JSON.stringify({}),
       }).then(r => r.json());
-      if (!data.session) return false;
-      session = data.session;
-      const storage = localStorage.getItem('auizero_session') ? localStorage : sessionStorage;
-      storage.setItem('auizero_session', JSON.stringify(session));
+      if (data.error || !data.ok) return false;
+      session = { mode: 'cookie' };
       return true;
     } catch {
       return false;
@@ -111,23 +109,18 @@ const Auth = (() => {
   }
 
   async function restoreSession() {
-    const stored = localStorage.getItem('auizero_session') || sessionStorage.getItem('auizero_session');
-    if (!stored) return null;
     try {
-      session = JSON.parse(stored);
-      let data = await fetch('/api/auth/me', { headers: authHeaders() }).then(r => r.json());
-      if (data.error && session?.refresh_token) {
-        // Access token expired — try refreshing with the refresh token
-        const refreshData = await fetch('/api/auth/refresh', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh_token: session.refresh_token })
-        }).then(r => r.json());
-        if (refreshData.session) {
-          session = refreshData.session;
-          const storage = localStorage.getItem('auizero_session') ? localStorage : sessionStorage;
-          storage.setItem('auizero_session', JSON.stringify(session));
-          data = await fetch('/api/auth/me', { headers: authHeaders() }).then(r => r.json());
+      let data = await fetch('/api/auth/me', {
+        credentials: 'include',
+        headers: authHeaders()
+      }).then(r => r.json());
+      if (data.error) {
+        const refreshed = await refreshToken();
+        if (refreshed) {
+          data = await fetch('/api/auth/me', {
+            credentials: 'include',
+            headers: authHeaders()
+          }).then(r => r.json());
         }
       }
       if (data.error) {
@@ -139,6 +132,7 @@ const Auth = (() => {
         return null;
       }
       profile = data.profile;
+      session = { mode: 'cookie' };
       return profile;
     } catch {
       clearStoredSession();
@@ -159,10 +153,10 @@ async function getInviteInfo(classId) {
     // Clear the URL param immediately regardless
     if (classId) globalThis.history.replaceState({}, '', globalThis.location.pathname);
     if (!classId) return;
-    if (!session) return;
     try {
       const res = await fetch(`/api/classes/${classId}/join`, {
         method: 'POST',
+        credentials: 'include',
         headers: authHeaders()
       });
       if (!res.ok) console.warn('Could not join class:', res.status);
@@ -175,6 +169,7 @@ async function getInviteInfo(classId) {
     const redirectTo = `${globalThis.location.origin}/?reset=1`;
     const data = await fetch('/api/auth/forgot-password', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, redirectTo })
     }).then(r => r.json());
@@ -200,6 +195,7 @@ async function getInviteInfo(classId) {
   async function updatePassword(password) {
     const data = await fetch('/api/auth/update-password', {
       method: 'POST',
+      credentials: 'include',
       headers: authHeaders(),
       body: JSON.stringify({ password })
     }).then(r => r.json());

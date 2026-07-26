@@ -1,13 +1,14 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
-import Landing from "../pages/Landing";
-
-import Login from "../pages/auth/Login";
-import Signup from "../pages/auth/Signup";
-
-import StudentDashboard from "../pages/student/StudentDashboard";
-import TeacherDashboard from "../pages/teacher/TeacherDashboard";
-import AdminDashboard from "../pages/admin/AdminDashboard";
+const Landing = lazy(() => import("../pages/Landing"));
+const AdminLogin = lazy(() => import("../pages/auth/AdminLogin"));
+const Login = lazy(() => import("../pages/auth/Login"));
+const Signup = lazy(() => import("../pages/auth/Signup"));
+const CourseInvite = lazy(() => import("../pages/CourseInvite"));
+const StudentDashboard = lazy(() => import("../pages/student/StudentDashboard"));
+const TeacherDashboard = lazy(() => import("../pages/teacher/TeacherDashboard"));
+const AdminDashboard = lazy(() => import("../pages/admin/AdminDashboard"));
 
 import ProtectedRoute from "./ProtectedRoute";
 
@@ -18,6 +19,13 @@ import { TeacherWorkspaceProvider } from "../contexts/TeacherWorkspaceContext";
 export default function AppRoutes() {
   return (
     <BrowserRouter>
+      <Suspense
+        fallback={
+          <div className="flex min-h-screen items-center justify-center bg-[#F8FAFC] text-sm font-semibold text-slate-500">
+            Loading Praxis…
+          </div>
+        }
+      >
       <Routes>
 
         {/* Public Pages */}
@@ -25,15 +33,20 @@ export default function AppRoutes() {
 
         <Route path="/login" element={<Login />} />
 
+        <Route path="/admin-login" element={<AdminLogin />} />
+
         <Route path="/signup" element={<Signup />} />
+        <Route path="/join" element={<CourseInvite />} />
 
         {/* STUDENT */}
         <Route
           path="/student"
           element={
-            <StudentWorkspaceProvider>
-              <StudentDashboard />
-            </StudentWorkspaceProvider>
+            <ProtectedRoute roles={["student"]}>
+              <StudentWorkspaceProvider>
+                <StudentDashboard />
+              </StudentWorkspaceProvider>
+            </ProtectedRoute>
           }
         />
 
@@ -41,11 +54,11 @@ export default function AppRoutes() {
         <Route
           path="/teacher"
           element={
-            
+            <ProtectedRoute roles={["teacher"]}>
               <TeacherWorkspaceProvider>
                 <TeacherDashboard />
               </TeacherWorkspaceProvider>
-            
+            </ProtectedRoute>
           }
         />
 
@@ -53,13 +66,14 @@ export default function AppRoutes() {
         <Route
           path="/admin"
           element={
-            
+            <ProtectedRoute roles={["admin"]}>
               <AdminDashboard />
-            
+            </ProtectedRoute>
           }
         />
 
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

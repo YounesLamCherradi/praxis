@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
 import {
   Send,
   ArrowRight,
@@ -293,7 +293,7 @@ export default function Step1IdeasChat() {
   const [isThinking, setIsThinking] = useState(false);
   const [coachError, setCoachError] = useState("");
 
-  const [nowTick, setNowTick] = useState(Date.now());
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const [
     showCoachSkipConfirm,

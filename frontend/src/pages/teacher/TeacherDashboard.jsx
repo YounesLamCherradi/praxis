@@ -2,13 +2,21 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import TeacherAssignments from "./TeacherAssignments";
 import TeacherCommunication from "./TeacherCommunication";
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext.jsx";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   getPraxisData,
   savePraxisData,
 } from "../../services/praxisMockStore";
+import {
+  createTeacherCourse,
+  deleteTeacherCourse,
+  getTeacherCourses,
+} from "../../services/courseApi";
+import { createBugReport } from "../../services/reportApi";
+import { buildCourseInviteMessage } from "../../utils/courseInvite";
+import { queryClient, queryKeys } from "../../queryClient";
 
 import {
   Home,
@@ -169,6 +177,9 @@ function getTeacherIdentity(authUser, authProfile) {
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const workspaceRequestIdRef = useRef(0);
+  const handledDeepLinkRef = useRef("");
   const {
     signOut,
     user: authUser,
@@ -268,6 +279,8 @@ export default function TeacherDashboard() {
 
   const [managerError, setManagerError] = useState("");
   const [managerSuccess, setManagerSuccess] = useState("");
+  const [isRemovingCourse, setIsRemovingCourse] = useState(false);
+  const [isRemoveCourseConfirmOpen, setIsRemoveCourseConfirmOpen] = useState(false);
   const managerSuccessTimerRef = useRef(null);
 
   const [enrollments, setEnrollments] = useState(() => {
@@ -303,9 +316,52 @@ export default function TeacherDashboard() {
     }, 2600);
   }
 
-  function refreshEnrollments() {
+  async function refreshEnrollments() {
     const data = getPraxisData();
-    setEnrollments(data.enrollments || []);
+    const localEnrollments = data.enrollments || [];
+
+    try {
+      const backendCourses = await getTeacherCourses();
+      const backendEnrollments = backendCourses.flatMap((course) =>
+        (course.members || []).map((member) => ({
+          id: `backend_${course.id}_${member.studentId}`,
+          studentId: member.studentId,
+          studentName: member.studentName,
+          studentEmail: member.studentEmail,
+          classId: course.id,
+          classCode: course.code,
+          className: course.name,
+          status: member.status,
+        }))
+      );
+      const backendKeys = new Set(
+        backendEnrollments.map(
+          (entry) =>
+            `${String(entry.classCode).toUpperCase()}::${String(
+              entry.studentId || entry.studentEmail || ""
+            ).toLowerCase()}`
+        )
+      );
+      const compatibleLocalEnrollments = localEnrollments.filter((entry) => {
+        const key = `${String(entry.classCode || "").toUpperCase()}::${String(
+          entry.studentId || entry.studentEmail || ""
+        ).toLowerCase()}`;
+        return !backendKeys.has(key);
+      });
+      const mergedEnrollments = [
+        ...compatibleLocalEnrollments,
+        ...backendEnrollments,
+      ];
+
+      setEnrollments(mergedEnrollments);
+      savePraxisData({
+        ...getPraxisData(),
+        enrollments: mergedEnrollments,
+      });
+    } catch (error) {
+      console.error("Could not refresh course enrollments from Supabase:", error);
+      setEnrollments(localEnrollments);
+    }
   }
 
   useEffect(() => {
@@ -353,11 +409,11 @@ export default function TeacherDashboard() {
     setPasswordUiMessage("");
   }
 
-  function handlePasswordUiSubmit(event) {
+  async function handlePasswordUiSubmit(event) {
     event.preventDefault();
 
-    if (newPassword.length < 8) {
-      setPasswordUiMessage("Use at least 8 characters.");
+    if (newPassword.length < 10) {
+      setPasswordUiMessage("Use at least 10 characters.");
       return;
     }
 
@@ -366,9 +422,33 @@ export default function TeacherDashboard() {
       return;
     }
 
-    setPasswordUiMessage(
-      "Password update is ready for backend connection."
-    );
+    setPasswordUiMessage("Updating password...");
+
+    try {
+      const response = await fetch("/api/auth/update-password", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password: newPassword }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        setPasswordUiMessage(
+          data.error || "Could not update password right now."
+        );
+        return;
+      }
+
+      setPasswordUiMessage("Password updated successfully.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      setPasswordUiMessage("Could not update password right now.");
+    }
   }
 
   function resetBugReportForm() {
@@ -455,10 +535,6 @@ export default function TeacherDashboard() {
     setIsSubmittingBugReport(true);
 
     try {
-      const data = getPraxisData();
-      const bugReports = Array.isArray(data.bugReports)
-        ? data.bugReports
-        : [];
       const now = new Date().toISOString();
 
       const report = {
@@ -485,10 +561,7 @@ export default function TeacherDashboard() {
         updatedAt: now,
       };
 
-      savePraxisData({
-        ...data,
-        bugReports: [report, ...bugReports],
-      });
+      await createBugReport(report);
 
       setBugReportSuccess("Your issue was reported successfully.");
       setBugDescription("");
@@ -576,7 +649,7 @@ export default function TeacherDashboard() {
     };
   }
 
-  const handleCreateCourse = (e) => {
+  const handleCreateCourse = async (e) => {
     e.preventDefault();
     setCreateError("");
     setCreateSuccess("");
@@ -591,8 +664,7 @@ export default function TeacherDashboard() {
     try {
       const code = generateUniqueCourseCode(cleanName);
 
-      const newClass = {
-        id: "cls_" + Date.now(),
+      const courseDraft = {
         name: cleanName,
         code,
         description:
@@ -602,6 +674,9 @@ export default function TeacherDashboard() {
         archived: false,
         archivedAt: null,
       };
+
+      const newClass = await createTeacherCourse(courseDraft);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teacherCourses });
 
       if (typeof setClasses === "function") {
         setClasses([...classes, newClass]);
@@ -724,12 +799,13 @@ export default function TeacherDashboard() {
   }, [pendingReviews, activeAssignments]);
 
   function createWorkspaceRequest(overrides = {}) {
+    workspaceRequestIdRef.current += 1;
     return {
       mode: "browse",
       courseId: null,
       assignmentId: null,
       statusFilter: "All",
-      requestId: Date.now(),
+      requestId: workspaceRequestIdRef.current,
       ...overrides,
     };
   }
@@ -787,6 +863,27 @@ export default function TeacherDashboard() {
 
     setActiveTab("assignments");
   }
+
+  useEffect(() => {
+    const assignmentId = String(searchParams.get("assignment") || "").trim();
+    const courseId = String(searchParams.get("course") || "").trim();
+    const reviewMode = String(searchParams.get("review") || "").trim();
+    if (!assignmentId || reviewMode !== "submissions") return;
+
+    const deepLinkKey = `${courseId}:${assignmentId}:${reviewMode}`;
+    if (handledDeepLinkRef.current === deepLinkKey) return;
+
+    const assignment = assignments.find(
+      (item) => String(item.id) === assignmentId
+    );
+    if (!assignment) return;
+
+    handledDeepLinkRef.current = deepLinkKey;
+    openAssignmentReview({
+      ...assignment,
+      classId: assignment.classId || courseId || null,
+    });
+  }, [assignments, searchParams]);
 
   function openPendingReviews() {
     const firstPendingSubmission = pendingReviews[0] || null;
@@ -847,6 +944,7 @@ export default function TeacherDashboard() {
     setStudentEmailToAdd("");
     setManagerError("");
     setManagerSuccess("");
+    setIsRemoveCourseConfirmOpen(false);
   }
 
   function closeCourseManager() {
@@ -859,30 +957,7 @@ export default function TeacherDashboard() {
     setManagerMode("details");
     setManagerError("");
     setManagerSuccess("");
-  }
-
-  function buildCourseInvite(course) {
-    const lines = [
-      `You are invited to join ${course.name} on Praxis.`,
-      "",
-      `Course: ${course.name}`,
-      `Term: ${course.semester || "Course"}`,
-      `Access code: ${course.code}`,
-      "",
-      "To join:",
-      "1. Open Praxis and sign in to your student account.",
-      '2. Select "Join Course".',
-      `3. Enter the access code ${course.code}.`,
-    ];
-
-    if (course.isPublished === false) {
-      lines.push(
-        "",
-        "Note: The course must be published before students can join."
-      );
-    }
-
-    return lines.join("\n");
+    setIsRemoveCourseConfirmOpen(false);
   }
 
   async function writeClipboardText(value) {
@@ -917,10 +992,14 @@ export default function TeacherDashboard() {
       setManagerError("Restore the course before copying a student invite.");
       return;
     }
+    if (course.isPublished === false) {
+      setManagerError("Publish the course before copying a student invite.");
+      return;
+    }
 
     try {
-      await writeClipboardText(buildCourseInvite(course));
-      showManagerSuccess("Course invite copied. It is ready to paste into Canvas.");
+      await writeClipboardText(buildCourseInviteMessage(course));
+      showManagerSuccess("Invite link copied. It is ready to paste into email or Canvas.");
     } catch (error) {
       console.error("Could not copy the course invite:", error);
       setManagerError("Could not copy the invite. Please try again.");
@@ -1009,14 +1088,17 @@ export default function TeacherDashboard() {
     );
   }
 
-  function removeManagedCourse() {
-    if (!managedClass) return;
+  async function removeManagedCourse() {
+    if (!managedClass || isRemovingCourse) return;
 
-    const confirmed = window.confirm(
-      `Remove ${managedClass.code} from the active workspace? Course, assignment, rubric, and de-identified submission evidence will be archived.`
-    );
+    setManagerError("");
+    setManagerSuccess("");
+    setIsRemovingCourse(true);
 
-    if (!confirmed) return;
+    try {
+      const backendClassId = managedClass.backendId || managedClass.id;
+      await deleteTeacherCourse(backendClassId);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teacherCourses });
 
     const data = getPraxisData();
     const archivedAt = new Date().toISOString();
@@ -1148,7 +1230,17 @@ export default function TeacherDashboard() {
     }
 
     setEnrollments(updatedEnrollments);
+    setIsRemoveCourseConfirmOpen(false);
     closeCourseManager();
+    } catch (error) {
+      console.error("Failed to remove course from Supabase:", error);
+      setManagerError(
+        error?.message ||
+          "The course could not be removed. Nothing was changed; please try again."
+      );
+    } finally {
+      setIsRemovingCourse(false);
+    }
   }
 
   function handleUpdateManagedCourse(e) {
@@ -1833,12 +1925,16 @@ export default function TeacherDashboard() {
           studentEmailToAdd={studentEmailToAdd}
           setStudentEmailToAdd={setStudentEmailToAdd}
           managerError={managerError}
+          setManagerError={setManagerError}
           managerSuccess={managerSuccess}
           closeCourseManager={closeCourseManager}
           copyCourseInvite={copyCourseInvite}
           toggleManagedCoursePublication={toggleManagedCoursePublication}
           toggleManagedCourseArchive={toggleManagedCourseArchive}
           removeManagedCourse={removeManagedCourse}
+          isRemovingCourse={isRemovingCourse}
+          isRemoveCourseConfirmOpen={isRemoveCourseConfirmOpen}
+          setIsRemoveCourseConfirmOpen={setIsRemoveCourseConfirmOpen}
           handleUpdateManagedCourse={handleUpdateManagedCourse}
           handleAddStudentToManagedCourse={handleAddStudentToManagedCourse}
           removeStudentFromManagedCourse={removeStudentFromManagedCourse}
@@ -2353,12 +2449,16 @@ function CourseManagerModal({
   studentEmailToAdd,
   setStudentEmailToAdd,
   managerError,
+  setManagerError,
   managerSuccess,
   closeCourseManager,
   copyCourseInvite,
   toggleManagedCoursePublication,
   toggleManagedCourseArchive,
   removeManagedCourse,
+  isRemovingCourse,
+  isRemoveCourseConfirmOpen,
+  setIsRemoveCourseConfirmOpen,
   handleUpdateManagedCourse,
   handleAddStudentToManagedCourse,
   removeStudentFromManagedCourse,
@@ -2457,11 +2557,15 @@ function CourseManagerModal({
 
             <button
               type="button"
-              onClick={removeManagedCourse}
-              className="inline-flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-red-100 transition-all"
+              onClick={() => {
+                setManagerError("");
+                setIsRemoveCourseConfirmOpen(true);
+              }}
+              disabled={isRemovingCourse}
+              className="inline-flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-red-100 transition-all disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Trash2 className="w-4 h-4" />
-              Remove Course
+              {isRemovingCourse ? "Removing..." : "Remove Course"}
             </button>
 
             <button
@@ -2696,6 +2800,69 @@ function CourseManagerModal({
           </div>
         </div>
       </div>
+
+      {isRemoveCourseConfirmOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-course-title"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-red-100 bg-white shadow-2xl">
+            <div className="p-6 sm:p-7">
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-red-100 bg-red-50 text-red-600">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+
+                <div>
+                  <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-red-600">
+                    Remove course
+                  </p>
+                  <h3
+                    id="remove-course-title"
+                    className="mt-1 font-serif text-xl font-black text-slate-950"
+                  >
+                    Remove {managedClass.code}?
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                    This removes the course from the active workspace. Its
+                    assignments, memberships, and rubrics will be removed, while
+                    de-identified submission evidence is preserved for records.
+                  </p>
+                </div>
+              </div>
+
+              {managerError && (
+                <div className="mt-5 flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-xs leading-relaxed text-red-700">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{managerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-slate-100 bg-slate-50 px-6 py-4">
+              <button
+                type="button"
+                disabled={isRemovingCourse}
+                onClick={() => setIsRemoveCourseConfirmOpen(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isRemovingCourse}
+                onClick={removeManagedCourse}
+                className="inline-flex items-center gap-2 rounded-xl border border-red-700 bg-red-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 className="h-4 w-4" />
+                {isRemovingCourse ? "Removing…" : "Remove Course"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2732,7 +2899,7 @@ function TeacherPasswordModal({
           </h3>
 
           <p className="mt-1 text-xs leading-relaxed text-slate-500">
-            The interface is ready. The password update will be connected to the backend later.
+            Change your account password directly from this dashboard. No OTP is required while you are already signed in.
           </p>
         </div>
 
@@ -2753,7 +2920,7 @@ function TeacherPasswordModal({
                 setNewPassword(event.target.value);
                 setPasswordUiMessage("");
               }}
-              placeholder="At least 8 characters"
+              placeholder="At least 10 characters"
               className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
             />
           </div>

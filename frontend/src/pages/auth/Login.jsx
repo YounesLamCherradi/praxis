@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import {
   AlertCircle,
@@ -13,16 +13,56 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import ForgotPasswordDialog from "./ForgotPasswordDialog";
+import {
+  getPendingCourseInvite,
+  normalizeCourseInviteCode,
+  rememberPendingCourseInvite,
+} from "../../utils/courseInvite.js";
 
 export default function Login() {
   const navigate = useNavigate();
-  const { signIn } = useAuth();
+  const [searchParams] = useSearchParams();
+  const [inviteCode] = useState(
+    () =>
+      normalizeCourseInviteCode(searchParams.get("invite")) ||
+      getPendingCourseInvite()
+  );
+  const { signIn, user } = useAuth();
+  const requestedDestination = (() => {
+    const value = String(searchParams.get("next") || "");
+    return value.startsWith("/") && !value.startsWith("//") ? value : "";
+  })();
+
+  function destinationForRole(role) {
+    if (role === "student") {
+      if (inviteCode) return `/join?code=${encodeURIComponent(inviteCode)}`;
+      if (requestedDestination.startsWith("/student")) return requestedDestination;
+      return "/student";
+    }
+    if (role === "teacher") {
+      return requestedDestination.startsWith("/teacher")
+        ? requestedDestination
+        : "/teacher";
+    }
+    if (role === "admin") {
+      return requestedDestination.startsWith("/admin")
+        ? requestedDestination
+        : "/admin";
+    }
+    return "/";
+  }
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [stayLoggedIn, setStayLoggedIn] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+
+  useEffect(() => {
+    if (inviteCode) rememberPendingCourseInvite(inviteCode);
+  }, [inviteCode]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -37,7 +77,7 @@ export default function Login() {
     }
 
     if (!email.trim().toLowerCase().endsWith("@aui.ma")) {
-      setError("Portal access is restricted to verified @aui.ma accounts.");
+      setError("Access is restricted to @aui.ma accounts.");
       setLoading(false);
       return;
     }
@@ -47,15 +87,7 @@ export default function Login() {
 
       const profile = await signIn(cleanEmail, password, stayLoggedIn);
 
-      if (profile.role === "student") {
-        navigate("/student");
-      } else if (profile.role === "teacher") {
-        navigate("/teacher");
-      } else if (profile.role === "admin") {
-        navigate("/admin");
-      } else {
-        navigate("/");
-      }
+      navigate(destinationForRole(profile.role), { replace: true });
     } catch (err) {
       setError(
         err.message ||
@@ -64,6 +96,10 @@ export default function Login() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (user) {
+    return <Navigate to={destinationForRole(user.role)} replace />;
   }
 
   return (
@@ -262,6 +298,16 @@ export default function Login() {
                   </span>
                 </div>
 
+                <div className="-mt-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => setShowForgotPassword(true)}
+                    className="text-xs font-bold text-blue-700 hover:text-blue-800"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -285,7 +331,9 @@ export default function Login() {
                 Don&apos;t have an account yet?{" "}
                 <button
                   type="button"
-                  onClick={() => navigate("/signup")}
+                  onClick={() =>
+                    navigate(inviteCode ? `/signup?invite=${encodeURIComponent(inviteCode)}` : "/signup")
+                  }
                   className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
                 >
                   Register here
@@ -299,6 +347,11 @@ export default function Login() {
           </div>
         </div>
       </div>
+
+      <ForgotPasswordDialog
+        open={showForgotPassword}
+        onClose={() => setShowForgotPassword(false)}
+      />
     </div>
   );
 }

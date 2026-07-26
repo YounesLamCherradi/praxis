@@ -1,5 +1,5 @@
 import React from "react";
-import { useStudentWorkspace } from "../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 import {
   Award,
   BookOpen,

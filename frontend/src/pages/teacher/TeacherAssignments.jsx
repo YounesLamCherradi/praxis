@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 
 import CreateAssignmentModal from "../../components/teacher/CreateAssignmentModal";
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 import TeacherAssignmentDetails from "./TeacherAssignmentDetails";
 import TeacherSubmissions from "./submissions/TeacherSubmissions";
 
@@ -37,6 +37,62 @@ function normalizeAssignmentStatus(assignment) {
     return "Published";
   }
   return "Draft";
+}
+
+function getAssignmentCriteriaCount(assignment = {}) {
+  const schemaCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
+    ? assignment.rubricSchema.criteria
+    : [];
+
+  if (schemaCriteria.length > 0) {
+    return schemaCriteria.length;
+  }
+
+  const rubricCriteria = Array.isArray(assignment?.rubric)
+    ? assignment.rubric
+    : [];
+
+  return rubricCriteria.length;
+}
+
+function isAssignmentComplete(assignment = {}) {
+  const title = String(assignment.title || "").trim();
+  const description = String(
+    assignment.description || assignment.instructions || ""
+  ).trim();
+  const dueDate = String(assignment.dueDate || assignment.deadline || "").trim();
+  const level = String(
+    assignment.studentLevel || assignment.languageLevel || ""
+  ).trim();
+  const type = String(
+    assignment.assignmentType || assignment.assignment_type || ""
+  ).trim();
+
+  const minWords = Number(
+    assignment.minWords ?? assignment.wordCountMin ?? assignment.word_count_min ?? 0
+  );
+  const maxWords = Number(
+    assignment.maxWords ?? assignment.wordCountMax ?? assignment.word_count_max ?? 0
+  );
+
+  const hasClass = Boolean(
+    assignment.classId ||
+      String(assignment.classCode || "").trim() ||
+      String(assignment.className || "").trim()
+  );
+
+  return Boolean(
+    title &&
+      title.toLowerCase() !== "untitled draft assignment" &&
+      description &&
+      dueDate &&
+      level &&
+      type &&
+      hasClass &&
+      minWords > 0 &&
+      maxWords >= minWords &&
+      getAssignmentCriteriaCount(assignment) > 0
+  );
 }
 
 function normalizeSubmissionStatus(submission) {
@@ -447,8 +503,8 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
     return (
       <CreateAssignmentModal
         classes={classes}
-        onCreate={(assignmentData) => {
-          const createdAssignment = addAssignment(assignmentData);
+        onCreate={async (assignmentData) => {
+          const createdAssignment = await addAssignment(assignmentData);
 
           if (createdAssignment) {
             const relatedClass = classes.find((cls) =>
@@ -476,8 +532,8 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
         classes={classes}
         editingAssignment={selectedAssignment}
         onCreate={addAssignment}
-        onUpdate={(updatedAssignment) => {
-          const savedAssignment = updateAssignment(updatedAssignment);
+        onUpdate={async (updatedAssignment) => {
+          const savedAssignment = await updateAssignment(updatedAssignment);
           const assignmentToSelect = savedAssignment || updatedAssignment;
           const relatedClass = classes.find((cls) =>
             assignmentMatchesClass(assignmentToSelect, cls)
@@ -501,6 +557,14 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
   const activeAssignmentStatus = activeAssignment
     ? normalizeAssignmentStatus(activeAssignment)
     : "Draft";
+  const activeAssignmentDraft = activeAssignmentStatus !== "Published";
+  const activeAssignmentComplete = activeAssignment
+    ? isAssignmentComplete(activeAssignment)
+    : false;
+  const shouldLockDraftActions =
+    Boolean(activeAssignment) &&
+    activeAssignmentDraft &&
+    !activeAssignmentComplete;
   const detailsAssignment = selectedAssignment || activeAssignment;
 
   return (
@@ -676,7 +740,13 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
                     setSelectedAssignment(activeAssignment);
                     setView("details");
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                  disabled={shouldLockDraftActions}
+                  title={shouldLockDraftActions ? "Complete assignment setup first, then Details will unlock." : "Open assignment details"}
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
+                    shouldLockDraftActions
+                      ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                  }`}
                 >
                   <Eye className="h-3.5 w-3.5" />
                   Details
@@ -697,10 +767,14 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
                 <button
                   type="button"
                   onClick={() => toggleAssignmentStatus(activeAssignment.id)}
+                  disabled={shouldLockDraftActions}
+                  title={shouldLockDraftActions ? "Complete assignment setup first, then Publish will unlock." : activeAssignmentStatus === "Published" ? "Unpublish assignment" : "Publish assignment"}
                   className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                    activeAssignmentStatus === "Published"
-                      ? "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-white hover:text-blue-700"
-                      : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    shouldLockDraftActions
+                      ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                      : activeAssignmentStatus === "Published"
+                        ? "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-white hover:text-blue-700"
+                        : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
                   }`}
                 >
                   <CheckCircle2 className="h-3.5 w-3.5" />

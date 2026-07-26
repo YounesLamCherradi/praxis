@@ -22,7 +22,7 @@ import {
   Timer,
 } from "lucide-react";
 
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
 function boolFromAssignment(...values) {
   for (const value of values) {

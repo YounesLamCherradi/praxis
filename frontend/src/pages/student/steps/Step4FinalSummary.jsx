@@ -5,7 +5,7 @@ import React, {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -1176,6 +1176,7 @@ export default function Step4FinalSummary({
   } = useStudentWorkspace();
 
   const [submitMessage, setSubmitMessage] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [attested, setAttested] = useState(false);
   const [showTeacherFeedback, setShowTeacherFeedback] =
     useState(false);
@@ -1755,13 +1756,14 @@ export default function Step4FinalSummary({
     });
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     /* Synchronous lock to prevent double-click race conditions. */
     if (submitLockRef.current === true) {
       return;
     }
 
     submitLockRef.current = true;
+    setIsSubmitting(true);
 
     setSubmitMessage("");
 
@@ -1770,6 +1772,7 @@ export default function Step4FinalSummary({
         "No active assignment selected."
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1778,6 +1781,7 @@ export default function Step4FinalSummary({
         "Please write your assignment before submitting it."
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1786,6 +1790,7 @@ export default function Step4FinalSummary({
         `Your submission has ${wordCount} words. Minimum required is ${minWords}.`
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1794,6 +1799,7 @@ export default function Step4FinalSummary({
         `Your submission has ${wordCount} words. Maximum allowed is ${maxWords}.`
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1806,6 +1812,7 @@ export default function Step4FinalSummary({
       );
       setShowSelfGrade(true);
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
@@ -1814,19 +1821,33 @@ export default function Step4FinalSummary({
         "Please confirm the Academic Honor statement before submitting."
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
       return;
     }
 
     const honorConfirmedAt = new Date().toISOString();
 
-    const result = submitAssignment(
-      activeAssignment.id,
-      finalText,
-      {
-        honorConfirmed: true,
-        honorConfirmedAt,
-      }
-    );
+    let result = false;
+    try {
+      result = await submitAssignment(
+        activeAssignment.id,
+        finalText,
+        {
+          honorConfirmed: true,
+          honorConfirmedAt,
+        }
+      );
+    } catch (error) {
+      console.error("Submission persistence failed:", error);
+      setSubmitMessage(
+        error?.conflict
+          ? "Your submission changed in another tab. Refresh and review it before submitting."
+          : "Submission could not reach the database. Your local draft is still saved; please try again."
+      );
+      submitLockRef.current = false;
+      setIsSubmitting(false);
+      return;
+    }
 
     if (result) {
       setSubmitMessage(
@@ -1835,11 +1856,14 @@ export default function Step4FinalSummary({
       /* Save that student is on Step 4 (success screen). */
       rememberStudentStep(activeAssignment.id, 4);
       /* Stay on success screen; do not auto-close. */
+      submitLockRef.current = false;
+      setIsSubmitting(false);
     } else {
       setSubmitMessage(
         "Submission could not be saved."
       );
       submitLockRef.current = false;
+      setIsSubmitting(false);
     }
   }
 
@@ -1988,7 +2012,7 @@ export default function Step4FinalSummary({
             attested={attested}
             setAttested={setAttested}
             canSubmit={canSubmit}
-            isSubmitting={submitLockRef.current}
+            isSubmitting={isSubmitting}
             canResubmit={canResubmit}
             submitMessage={submitMessage}
             handleSubmit={handleSubmit}

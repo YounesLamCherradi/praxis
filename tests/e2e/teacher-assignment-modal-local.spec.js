@@ -48,6 +48,26 @@ function teacherFixture() {
 
 test.describe("Teacher assignment modal lifecycle", () => {
   test.beforeEach(async ({ page }) => {
+    await page.route("**/api/classes/teacher_class/assignments", async (route) => {
+      if (route.request().method() !== "POST") {
+        return route.fallback();
+      }
+      const payload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assignment: {
+            id: "persisted_assignment",
+            class_id: "teacher_class",
+            ...payload,
+            version: 1,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        }),
+      });
+    });
     await page.addInitScript((fixture) => {
       localStorage.setItem("praxis_mock_data", JSON.stringify(fixture));
       localStorage.setItem("auizero_profile", JSON.stringify({
@@ -91,9 +111,10 @@ test.describe("Teacher assignment modal lifecycle", () => {
     await page.getByRole("button", { name: /^Assignments/ }).click();
     await page.getByRole("button", { name: "Create Assignment", exact: true }).click();
 
-    await page.getByRole("button", { name: "Manual", exact: true }).click();
+    await page.getByRole("button", { name: /^Manual/ }).click();
+    await page.getByRole("button", { name: "Continue", exact: true }).click();
     await page.getByRole("button", { name: /^Reuse previous/ }).click();
-    await page.locator('[data-assignment-builder-step="1"] select').selectOption("teacher_rubric");
+    await page.locator('select:has(option[value="teacher_rubric"])').selectOption("teacher_rubric");
     await page.getByRole("button", { name: "Continue", exact: true }).click();
 
     await page.getByLabel("Assignment Title").fill("Newly created modal audit");

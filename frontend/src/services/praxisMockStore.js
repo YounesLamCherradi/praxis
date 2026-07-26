@@ -1,5 +1,6 @@
 const STORAGE_KEY = "praxis_mock_data";
 const DATA_VERSION = 2;
+let memoryData = null;
 
 const DEFAULT_DATA = {
   version: DATA_VERSION,
@@ -113,15 +114,7 @@ function notifyPraxisDataChanged() {
 }
 
 function writePraxisData(data) {
-  if (typeof window === "undefined") {
-    return data;
-  }
-
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify(data)
-  );
-
+  memoryData = data;
   return data;
 }
 
@@ -130,16 +123,14 @@ export function getPraxisData() {
     return createFreshData();
   }
 
-  const saved = localStorage.getItem(STORAGE_KEY);
-
-  if (!saved) {
+  if (!memoryData) {
     const freshData = createFreshData();
     writePraxisData(freshData);
     return freshData;
   }
 
   try {
-    const parsedData = JSON.parse(saved);
+    const parsedData = memoryData;
 
     /*
      * The previous mock store had no version and contained seeded
@@ -216,10 +207,6 @@ export function resetPraxisData() {
 }
 
 export function clearPraxisData() {
-  if (typeof window !== "undefined") {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-
   const freshData = createFreshData();
 
   writePraxisData(freshData);

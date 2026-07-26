@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useStudentWorkspace } from "../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 
 import Step1IdeasChat from "./steps/Step1IdeasChat";
 import Step2DraftingCanvas from "./steps/Step2DraftingCanvas";
@@ -194,7 +194,7 @@ export default function ActiveAssignmentWorkflow() {
 
   useEffect(() => {
     setFinalStageView(rubricComplete ? "submit" : "rubric");
-  }, [activeAssignment?.id]);
+  }, [activeAssignment?.id, rubricComplete]);
 
   useEffect(() => {
     if (studentStep === 2 || studentStep === 3) {
@@ -235,7 +235,7 @@ export default function ActiveAssignmentWorkflow() {
       });
     }
   }, [
-    activeAssignment?.id,
+    activeAssignment,
     aiIdeasCoach,
     aiDraftFeedback,
     assignmentLocked,

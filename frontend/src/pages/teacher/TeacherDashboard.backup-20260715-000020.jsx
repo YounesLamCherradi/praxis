@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import TeacherAssignments from "./TeacherAssignments";
 import TeacherCommunication from "./TeacherCommunication";
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext.jsx";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 import TeacherSubmissions from "./submissions/TeacherSubmissions";
 
 import { useNavigate } from "react-router-dom";

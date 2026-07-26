@@ -11,6 +11,64 @@ import {
   Eye,
 } from "lucide-react";
 
+function getCriteriaCount(assignment = {}) {
+  const schemaCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
+    ? assignment.rubricSchema.criteria
+    : [];
+
+  if (schemaCriteria.length > 0) {
+    return schemaCriteria.length;
+  }
+
+  const rubricCriteria = Array.isArray(assignment?.rubric)
+    ? assignment.rubric
+    : [];
+
+  return rubricCriteria.length;
+}
+
+function isAssignmentComplete(assignment = {}) {
+  const title = String(assignment.title || "").trim();
+  const description = String(
+    assignment.description || assignment.instructions || ""
+  ).trim();
+  const dueDate = String(assignment.dueDate || assignment.deadline || "").trim();
+  const level = String(
+    assignment.studentLevel || assignment.languageLevel || ""
+  ).trim();
+  const type = String(
+    assignment.assignmentType || assignment.assignment_type || ""
+  ).trim();
+
+  const minWords = Number(
+    assignment.minWords ?? assignment.wordCountMin ?? assignment.word_count_min ?? 0
+  );
+  const maxWords = Number(
+    assignment.maxWords ?? assignment.wordCountMax ?? assignment.word_count_max ?? 0
+  );
+
+  const hasClass = Boolean(
+    assignment.classId ||
+      String(assignment.classCode || "").trim() ||
+      String(assignment.className || "").trim()
+  );
+
+  const criteriaCount = getCriteriaCount(assignment);
+
+  return Boolean(
+    title &&
+      title.toLowerCase() !== "untitled draft assignment" &&
+      description &&
+      dueDate &&
+      level &&
+      type &&
+      hasClass &&
+      minWords > 0 &&
+      maxWords >= minWords &&
+      criteriaCount > 0
+  );
+}
+
 export default function AssignmentCard({
   assignment,
   onView,
@@ -19,7 +77,11 @@ export default function AssignmentCard({
   onToggleStatus,
   onOpenSubmissions,
 }) {
-  const isPublished = assignment.status?.toLowerCase() === "published";
+  const normalizedStatus = String(assignment.status || "Draft").toLowerCase();
+  const isPublished = normalizedStatus === "published";
+  const isDraft = normalizedStatus === "draft" || !isPublished;
+  const isComplete = isAssignmentComplete(assignment);
+  const isLockedDraft = isDraft && !isComplete;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 p-6 transition-all duration-300 hover:-translate-y-1 glow-box-classes flex flex-col justify-between space-y-5">
@@ -43,7 +105,7 @@ export default function AssignmentCard({
               : "bg-orange-500/10 text-[#C2592A] border-orange-500/20 status-pulse"
           }`}
         >
-          {isPublished ? "PUBLISHED" : "UNPUBLISHED"}
+          {isPublished ? "PUBLISHED" : "DRAFT - CONTINUE WORKING"}
         </span>
       </div>
 
@@ -103,7 +165,13 @@ export default function AssignmentCard({
         {/* Inspection Action */}
         <button
           onClick={onView}
-          className="px-3 py-1.5 rounded-xl bg-[#0B1320] hover:bg-slate-800 text-white font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
+          disabled={isLockedDraft}
+          title={isLockedDraft ? "Complete assignment setup first, then Details will unlock." : "View details"}
+          className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1.5 shadow-sm ${
+            isLockedDraft
+              ? "cursor-not-allowed bg-slate-200 text-slate-500"
+              : "cursor-pointer bg-[#0B1320] text-white hover:bg-slate-800 hover:scale-[1.01]"
+          }`}
         >
           <Eye className="w-3.5 h-3.5" />
           <span>View Details</span>
@@ -115,16 +183,20 @@ export default function AssignmentCard({
           className="px-3 py-1.5 rounded-xl border border-slate-200 bg-[#FBF9F6] text-slate-700 font-bold hover:bg-white hover:border-slate-300 transition-all flex items-center gap-1.5 shadow-sm cursor-pointer"
         >
           <Pencil className="w-3.5 h-3.5 text-slate-400" />
-          <span>Edit</span>
+          <span>{isDraft ? "Continue" : "Edit"}</span>
         </button>
 
         {/* Stream Toggle Status Action */}
         <button
           onClick={onToggleStatus}
-          className={`px-3 py-1.5 rounded-xl border font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer ${
-            isPublished
-              ? "border-orange-200/60 text-[#C2592A] bg-orange-50/10 hover:bg-orange-50 hover:border-orange-300"
-              : "border-emerald-200/60 text-[#00A376] bg-emerald-50/10 hover:bg-emerald-50 hover:border-emerald-300"
+          disabled={isLockedDraft}
+          title={isLockedDraft ? "Complete assignment setup first, then Publish will unlock." : isPublished ? "Unpublish assignment" : "Publish assignment"}
+          className={`px-3 py-1.5 rounded-xl border font-bold transition-all flex items-center gap-1.5 shadow-sm ${
+            isLockedDraft
+              ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+              : isPublished
+                ? "cursor-pointer border-orange-200/60 text-[#C2592A] bg-orange-50/10 hover:bg-orange-50 hover:border-orange-300"
+                : "cursor-pointer border-emerald-200/60 text-[#00A376] bg-emerald-50/10 hover:bg-emerald-50 hover:border-emerald-300"
           }`}
         >
           {isPublished ? (
@@ -139,6 +211,12 @@ export default function AssignmentCard({
             </>
           )}
         </button>
+
+        {isLockedDraft && (
+          <span className="ml-1 text-[10px] font-bold text-slate-400">
+            Finish all required fields to unlock Details and Publish.
+          </span>
+        )}
 
         {/* Submissions Channel Feed */}
         <button

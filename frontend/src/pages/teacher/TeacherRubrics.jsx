@@ -23,7 +23,7 @@ import {
   ChevronUp,
 } from "lucide-react";
 
-import { useTeacherWorkspace } from "../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
 const DEFAULT_CRITERIA = [
   {

@@ -1,4 +1,5 @@
 import {
+  Wand2,
   ClipboardList,
   FileText,
   Settings,
@@ -6,10 +7,11 @@ import {
 } from "lucide-react";
 
 export const STEP_ITEMS = [
-  { id: 1, label: "Rubric", icon: ClipboardList },
-  { id: 2, label: "Details", icon: FileText },
-  { id: 3, label: "Settings", icon: Settings },
-  { id: 4, label: "Review", icon: CheckCircle2 },
+  { id: 1, label: "Creation mode", icon: Wand2 },
+  { id: 2, label: "Choose rubric", icon: ClipboardList },
+  { id: 3, label: "Details", icon: FileText },
+  { id: 4, label: "Settings", icon: Settings },
+  { id: 5, label: "Review", icon: CheckCircle2 },
 ];
 
 export const ASSIGNMENT_TYPES = [

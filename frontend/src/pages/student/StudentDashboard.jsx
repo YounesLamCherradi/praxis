@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BadgeCheck,
   Bell,
@@ -13,6 +13,7 @@ import {
   ImagePlus,
   KeyRound,
   Layers,
+  Loader2,
   LogOut,
   Megaphone,
   Menu,
@@ -26,12 +27,15 @@ import {
   X,
 } from "lucide-react";
 
-import { useStudentWorkspace } from "../../contexts/StudentWorkspaceContext.jsx";
+import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   getPraxisData,
   savePraxisData,
 } from "../../services/praxisMockStore";
+import { joinCourseByCode } from "../../services/courseApi";
+import { createBugReport } from "../../services/reportApi";
+import { queryClient, queryKeys } from "../../queryClient";
 
 import AssignmentTray from "./AssignmentTray.jsx";
 import ActiveAssignmentWorkflow from "./ActiveAssignmentWorkflow.jsx";
@@ -188,51 +192,16 @@ function getStudentNotificationReadKey(
 function readStudentNotificationIds(
   studentEmail = ""
 ) {
-  if (typeof window === "undefined") {
-    return new Set();
-  }
-
-  try {
-    const raw = window.localStorage.getItem(
-      getStudentNotificationReadKey(
-        studentEmail
-      )
-    );
-
-    const parsed = raw
-      ? JSON.parse(raw)
-      : [];
-
-    return new Set(
-      Array.isArray(parsed)
-        ? parsed.map(String)
-        : []
-    );
-  } catch {
-    return new Set();
-  }
+  void studentEmail;
+  return new Set();
 }
 
 function persistStudentNotificationIds(
   studentEmail = "",
   notificationIds = new Set()
 ) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(
-      getStudentNotificationReadKey(
-        studentEmail
-      ),
-      JSON.stringify(
-        Array.from(notificationIds)
-      )
-    );
-  } catch {
-    // Notification read-state is helpful, but it must never block navigation.
-  }
+  void studentEmail;
+  void notificationIds;
 }
 
 function getNotificationTimestamp(
@@ -301,6 +270,8 @@ function readBugScreenshot(file) {
 
 export default function StudentDashboard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const handledDeepLinkRef = useRef("");
 
   const {
     signOut,
@@ -321,6 +292,7 @@ export default function StudentDashboard() {
     assignments = [],
     submissions = [],
     refreshStudentWorkspace,
+    workspaceSyncState = { status: "ready", error: "" },
   } = useStudentWorkspace();
 
   const [isEnrollOpen, setIsEnrollOpen] = useState(false);
@@ -328,6 +300,43 @@ export default function StudentDashboard() {
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState("");
   const [isJoiningCourse, setIsJoiningCourse] = useState(false);
+
+  useEffect(() => {
+    const assignmentId = String(searchParams.get("assignment") || "").trim();
+    const requestedCourseId = String(searchParams.get("course") || "").trim();
+    if (!assignmentId) return undefined;
+
+    const deepLinkKey = `${requestedCourseId}:${assignmentId}`;
+    if (handledDeepLinkRef.current === deepLinkKey) return undefined;
+
+    const assignment = assignments.find(
+      (item) => String(item.id) === assignmentId
+    );
+    if (!assignment) return undefined;
+
+    let active = true;
+    const targetCourseId =
+      assignment.classId || requestedCourseId || "__all__";
+    if (targetCourseId && targetCourseId !== "__all__") {
+      setCurrentClassId(String(targetCourseId));
+    }
+
+    handledDeepLinkRef.current = deepLinkKey;
+    openStudentAssignment(assignmentId).then((opened) => {
+      if (active && !opened) {
+        handledDeepLinkRef.current = "";
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [
+    assignments,
+    openStudentAssignment,
+    searchParams,
+    setCurrentClassId,
+  ]);
 
   const [readNotificationIds, setReadNotificationIds] =
     useState(() => new Set());
@@ -917,15 +926,6 @@ export default function StudentDashboard() {
     setIsSubmittingBugReport(true);
 
     try {
-      const data = getPraxisData();
-
-      const bugReports =
-        Array.isArray(
-          data.bugReports
-        )
-          ? data.bugReports
-          : [];
-
       const now =
         new Date().toISOString();
 
@@ -995,13 +995,7 @@ export default function StudentDashboard() {
         updatedAt: now,
       };
 
-      savePraxisData({
-        ...data,
-        bugReports: [
-          report,
-          ...bugReports,
-        ],
-      });
+      await createBugReport(report);
 
       setBugReportSuccess(
         "Your issue was reported successfully."
@@ -1076,12 +1070,12 @@ export default function StudentDashboard() {
     setPasswordUiMessage("");
   }
 
-  function handlePasswordUiSubmit(event) {
+  async function handlePasswordUiSubmit(event) {
     event.preventDefault();
 
-    if (newPassword.length < 8) {
+    if (newPassword.length < 10) {
       setPasswordUiMessage(
-        "Use at least 8 characters."
+        "Use at least 10 characters."
       );
       return;
     }
@@ -1093,13 +1087,33 @@ export default function StudentDashboard() {
       return;
     }
 
-    /*
-     * UI-only for now. The backend password-update action will be connected
-     * later without changing this student-facing form.
-     */
-    setPasswordUiMessage(
-      "Password update is ready for backend connection."
-    );
+    setPasswordUiMessage("Updating password...");
+
+    try {
+      const response = await fetch("/api/auth/update-password", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password: newPassword }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        setPasswordUiMessage(
+          data.error || "Could not update password right now."
+        );
+        return;
+      }
+
+      setPasswordUiMessage("Password updated successfully.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      setPasswordUiMessage("Could not update password right now.");
+    }
   }
 
   async function handleLogout() {
@@ -1207,15 +1221,29 @@ export default function StudentDashboard() {
         ? data.enrollments
         : [];
 
-      const matchedCourse = allCourses.find((course) => {
+      const localMatchedCourse = allCourses.find((course) => {
         return getCourseCode(course) === enteredCode;
       });
 
-      if (!matchedCourse) {
-        setEnrollError(
-          "Invalid course code. Please check the code provided by your instructor."
-        );
-        return;
+      let matchedCourse = localMatchedCourse;
+
+      try {
+        const joined = await joinCourseByCode(enteredCode);
+        await queryClient.invalidateQueries({ queryKey: queryKeys.studentCourses });
+        matchedCourse = localMatchedCourse
+          ? {
+              ...joined.class,
+              ...localMatchedCourse,
+              code: joined.class.code,
+              backendId: joined.class.id,
+            }
+          : joined.class;
+      } catch (apiError) {
+        // Courses created before the Supabase migration remain joinable on the
+        // same browser until the instructor next opens their dashboard.
+        if (!localMatchedCourse || apiError?.status !== 404) {
+          throw apiError;
+        }
       }
 
       if (matchedCourse.isPublished === false) {
@@ -1263,13 +1291,16 @@ export default function StudentDashboard() {
         updatedAt: now,
       };
 
-      const updatedEnrollments = [
-        ...enrollments,
-        newEnrollment,
-      ];
+      const updatedEnrollments = [...enrollments, newEnrollment];
+      const courseAlreadyCached = allCourses.some(
+        (course) => String(course?.id) === String(matchedCourse?.id)
+      );
 
       savePraxisData({
         ...data,
+        classes: courseAlreadyCached
+          ? allCourses
+          : [...allCourses, matchedCourse],
         enrollments: updatedEnrollments,
       });
 
@@ -1302,7 +1333,7 @@ export default function StudentDashboard() {
     } catch (error) {
       console.error("Course enrollment failed:", error);
 
-      setEnrollError(
+      setEnrollError(error?.message ||
         "The course could not be joined. Please refresh the page and try again."
       );
     } finally {
@@ -1312,6 +1343,21 @@ export default function StudentDashboard() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
+      {workspaceSyncState.status === "loading" && classes.length === 0 && (
+        <div className="fixed inset-0 z-[2147483640] flex items-center justify-center bg-[#F8FAFC]/90 backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-600 shadow-xl">
+            <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+            Loading your courses and assignments…
+          </div>
+        </div>
+      )}
+
+      {workspaceSyncState.status === "error" && workspaceSyncState.error && (
+        <div className="fixed left-1/2 top-4 z-[2147483641] w-[min(92vw,640px)] -translate-x-1/2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-xs font-semibold text-amber-900 shadow-lg">
+          {workspaceSyncState.error}
+        </div>
+      )}
+
       <style>{`
         .blueprint-grid {
           background-image:
@@ -1582,7 +1628,7 @@ export default function StudentDashboard() {
                     </p>
                   </div>
                 ) : (
-                  <div className="max-h-64 space-y-1.5 overflow-y-auto p-2">
+                  <div className="space-y-1.5 p-2">
                     {studentNotifications.map(
                       (notification) => {
                         const isReopened =
@@ -1915,7 +1961,7 @@ export default function StudentDashboard() {
               </h3>
 
               <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                The interface is ready. The password update will be connected to the backend later.
+                Change your account password directly from this dashboard. No OTP is required while you are already signed in.
               </p>
             </div>
 
@@ -1941,7 +1987,7 @@ export default function StudentDashboard() {
                     );
                     setPasswordUiMessage("");
                   }}
-                  placeholder="At least 8 characters"
+                  placeholder="At least 10 characters"
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
                 />
               </div>

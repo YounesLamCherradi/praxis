@@ -1,4 +1,4 @@
-import { Navigate } from "react-router-dom";
+import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
 export default function ProtectedRoute({
@@ -6,15 +6,25 @@ export default function ProtectedRoute({
   roles = [],
 }) {
   const { user } = useAuth();
+  const location = useLocation();
 
   // Not logged in
   if (!user) {
-    return <Navigate to="/" replace />;
+    const next = `${location.pathname}${location.search}${location.hash}`;
+    return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
 
   // Wrong role
   if (roles.length && !roles.includes(user.role)) {
-    return <Navigate to="/" replace />;
+    const destination =
+      user.role === "teacher"
+        ? "/teacher"
+        : user.role === "student"
+          ? "/student"
+          : user.role === "admin"
+            ? "/admin"
+            : "/";
+    return <Navigate to={destination} replace />;
   }
 
   return children;

@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-  Bot,
   BookOpen,
   CheckCircle2,
   ClipboardList,
@@ -108,64 +107,14 @@ function formatRequestLimit(value) {
 
 function SummaryRow({ label, value }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-slate-100 py-2 last:border-b-0">
-      <span className="font-mono text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5">
+      <span className="font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-slate-400">
         {label}
       </span>
 
-      <span className="max-w-[70%] text-right text-xs font-bold leading-relaxed text-slate-800">
+      <span className="max-w-[65%] text-right text-[11px] font-bold leading-snug text-slate-800">
         {value}
       </span>
-    </div>
-  );
-}
-
-function SupportCard({
-  icon: Icon,
-  title,
-  value,
-  description,
-  active,
-}) {
-  return (
-    <div
-      className={`rounded-xl border p-3 ${
-        active
-          ? "border-blue-100 bg-blue-50/60"
-          : "border-slate-200 bg-slate-50"
-      }`}
-    >
-      <div className="flex items-start gap-3">
-        <span
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border bg-white ${
-            active
-              ? "border-blue-100 text-blue-700"
-              : "border-slate-200 text-slate-400"
-          }`}
-        >
-          <Icon className="h-4 w-4" />
-        </span>
-
-        <div className="min-w-0">
-          <p className="text-xs font-bold text-slate-900">
-            {title}
-          </p>
-
-          <p
-            className={`mt-1 font-mono text-[10px] font-bold ${
-              active
-                ? "text-blue-700"
-                : "text-slate-500"
-            }`}
-          >
-            {value}
-          </p>
-
-          <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-            {description}
-          </p>
-        </div>
-      </div>
     </div>
   );
 }
@@ -261,6 +210,12 @@ export default function ReviewStep({
   const feedbackEnabled =
     Number(feedbackChecks || 0) > 0;
 
+  const rubricSourceLabel = getRubricSourceLabel(
+    rubricMode,
+    selectedSavedRubric,
+    uploadedRubricName
+  );
+
   const outlineEnabled =
     Boolean(
       allowAI &&
@@ -269,98 +224,98 @@ export default function ReviewStep({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 items-start gap-3 xl:grid-cols-[1.15fr_0.85fr]">
-        <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
-            <FileText className="h-4 w-4 text-blue-700" />
+      <section className="rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+          <FileText className="h-4 w-4 text-blue-700" />
 
-            <h4 className="font-serif text-sm font-bold text-slate-950">
-              Assignment summary
-            </h4>
+          <h4 className="font-serif text-sm font-bold text-slate-950">
+            Assignment and rubric summary
+          </h4>
+        </div>
+
+        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+          <SummaryRow
+            label="Mode"
+            value={
+              creationMode === "ai"
+                ? "AI-assisted"
+                : "Manual"
+            }
+          />
+
+          <SummaryRow
+            label="Title"
+            value={title || "Untitled assignment"}
+          />
+
+          <SummaryRow
+            label="Course"
+            value={courseLabel}
+          />
+
+          <SummaryRow
+            label="Due date"
+            value={formatDueDate(dueDate)}
+          />
+
+          <SummaryRow
+            label="Type"
+            value={assignmentType || "Not specified"}
+          />
+
+          <SummaryRow
+            label="Level"
+            value={studentLevel || "Not specified"}
+          />
+
+          <SummaryRow
+            label="Word count"
+            value={`${Number(minWords || 0)}–${Number(maxWords || 0)} words`}
+          />
+
+          <SummaryRow
+            label="Rubric"
+            value={`${resolvedRubricTitle} (${rubricSourceLabel})`}
+          />
+
+          <SummaryRow
+            label="Scale"
+            value={`${resolvedCriteria.length} ${
+              resolvedCriteria.length === 1
+                ? "criterion"
+                : "criteria"
+            } / ${resolvedRubricTotal} pts`}
+          />
+        </div>
+
+        <div className="mt-3 border-t border-slate-100 pt-2">
+          <p className="mb-2 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-slate-400">
+            Student support
+          </p>
+
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold ${allowAI ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              <MessageSquareText className="h-3 w-3" />
+              Coach: {allowAI ? "Enabled" : "Disabled"}
+            </span>
+
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold ${allowAI ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              <Timer className="h-3 w-3" />
+              Time: {formatCoachLimit(allowAI, coachTimeLimitMinutes)}
+            </span>
+
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold ${outlineEnabled ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              <BookOpen className="h-3 w-3" />
+              Outline: {outlineEnabled ? "Enabled" : "Disabled"}
+            </span>
+
+            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold ${feedbackEnabled ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-500"}`}>
+              <CheckCircle2 className="h-3 w-3" />
+              AI feedback: {formatRequestLimit(feedbackChecks)}
+            </span>
           </div>
-
-          <div className="mt-2">
-            <SummaryRow
-              label="Mode"
-              value={
-                creationMode === "ai"
-                  ? "AI-assisted"
-                  : "Manual"
-              }
-            />
-
-            <SummaryRow
-              label="Title"
-              value={title || "Untitled assignment"}
-            />
-
-            <SummaryRow
-              label="Course"
-              value={courseLabel}
-            />
-
-            <SummaryRow
-              label="Due date"
-              value={formatDueDate(dueDate)}
-            />
-
-            <SummaryRow
-              label="Type"
-              value={assignmentType || "Not specified"}
-            />
-
-            <SummaryRow
-              label="Level"
-              value={studentLevel || "Not specified"}
-            />
-
-            <SummaryRow
-              label="Word count"
-              value={`${Number(minWords || 0)}–${Number(maxWords || 0)} words`}
-            />
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
-            <ClipboardList className="h-4 w-4 text-blue-700" />
-
-            <h4 className="font-serif text-sm font-bold text-slate-950">
-              Rubric summary
-            </h4>
-          </div>
-
-          <div className="mt-2">
-            <SummaryRow
-              label="Rubric"
-              value={resolvedRubricTitle}
-            />
-
-            <SummaryRow
-              label="Source"
-              value={getRubricSourceLabel(
-                rubricMode,
-                selectedSavedRubric,
-                uploadedRubricName
-              )}
-            />
-
-            <SummaryRow
-              label="Criteria"
-              value={`${resolvedCriteria.length} ${
-                resolvedCriteria.length === 1
-                  ? "criterion"
-                  : "criteria"
-              }`}
-            />
-
-            <SummaryRow
-              label="Total points"
-              value={`${resolvedRubricTotal} pts`}
-            />
-          </div>
-        </section>
-      </div>
+        </div>
+      </section>
 
       <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
         <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -420,67 +375,6 @@ export default function ReviewStep({
           expandedCriterionId={expandedCriterionId || resolvedCriteria[0]?.id}
           setExpandedCriterionId={setExpandedCriterionId}
         />
-      </section>
-
-      <section className="rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="flex items-start gap-3 border-b border-slate-100 pb-2">
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-            <Bot className="h-4 w-4" />
-          </span>
-
-          <div>
-            <h4 className="font-serif text-sm font-bold text-slate-950">
-              Student support
-            </h4>
-
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">
-              Only original assignment-level Praxis support controls are shown.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
-          <SupportCard
-            icon={MessageSquareText}
-            title="Coach"
-            value={allowAI ? "Enabled" : "Disabled"}
-            description="Conversational planning support before drafting."
-            active={Boolean(allowAI)}
-          />
-
-          <SupportCard
-            icon={Timer}
-            title="Coach limit"
-            value={formatCoachLimit(
-              allowAI,
-              coachTimeLimitMinutes
-            )}
-            description="0 means unlimited active Coach time."
-            active={Boolean(allowAI)}
-          />
-
-          <SupportCard
-            icon={BookOpen}
-            title="Coach outline"
-            value={
-              outlineEnabled
-                ? "Enabled"
-                : "Disabled"
-            }
-            description="Build a notes-only outline from Coach chat."
-            active={outlineEnabled}
-          />
-
-          <SupportCard
-            icon={CheckCircle2}
-            title="AI feedback"
-            value={formatRequestLimit(
-              feedbackChecks
-            )}
-            description="Draft-feedback checks available in Step 3."
-            active={feedbackEnabled}
-          />
-        </div>
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4">

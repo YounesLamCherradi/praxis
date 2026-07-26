@@ -104,6 +104,75 @@ function buildStudentWorkflowFixture() {
 test.describe("Local student assignment workflow", () => {
   test.beforeEach(async ({ page }) => {
     const fixture = buildStudentWorkflowFixture();
+    const durableSubmission = fixture.submissions[0];
+    await page.route("**/api/auth/me", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        profile: {
+          id: "student_flow_student",
+          name: "Student Tester",
+          email: "student@aui.ma",
+          role: "student",
+        },
+      }),
+    }));
+    const asDatabaseSubmission = (overrides = {}) => ({
+      id: "student_flow_submission",
+      assignment_id: "student_flow_assignment",
+      student_id: "student_flow_student",
+      status: "draft",
+      draft_text: durableSubmission.draftText,
+      final_text: durableSubmission.finalText,
+      chat_history: durableSubmission.chatHistory,
+      feedback_history: durableSubmission.feedbackHistory,
+      idea_responses: [],
+      writing_events: [],
+      keystroke_log: [],
+      outline: {},
+      reflections: {},
+      self_assessment: {},
+      teacher_review: {},
+      version: 1,
+      updated_at: new Date().toISOString(),
+      ...overrides,
+    });
+    await page.route("**/api/assignments/student_flow_assignment/my-submission", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ submission: asDatabaseSubmission() }),
+      });
+    });
+    await page.route("**/api/submissions/student_flow_submission", async (route) => {
+      const payload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          submission: asDatabaseSubmission({
+            ...payload,
+            version: 2,
+            updated_at: new Date().toISOString(),
+          }),
+        }),
+      });
+    });
+    await page.route("**/api/assignments/student_flow_assignment/submit", async (route) => {
+      const payload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          submission: asDatabaseSubmission({
+            ...payload,
+            status: "submitted",
+            submitted_at: new Date().toISOString(),
+            version: 3,
+          }),
+        }),
+      });
+    });
     await page.addInitScript((data) => {
       if (!localStorage.getItem("praxis_mock_data")) {
         localStorage.setItem("praxis_mock_data", JSON.stringify(data));
@@ -248,6 +317,49 @@ test.describe("Local student assignment workflow", () => {
     await expect(page.getByRole("textbox", { name: "Editable planning outline" })).toHaveValue(editedNotes);
   });
 
+  test("failed submit keeps the draft editable and never shows false success", async ({ page }) => {
+    let submitAttempts = 0;
+    await page.route("**/api/assignments/student_flow_assignment/submit", async (route) => {
+      submitAttempts += 1;
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "Temporary database outage" }),
+      });
+    });
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.submissions[0].selfRubricScores = {
+        criterion_1: { bandId: "good", score: 3 },
+        criterion_2: { bandId: "good", score: 3 },
+      };
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+      localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
+        student_flow_assignment: 4,
+      }));
+    });
+
+    await page.goto("/student");
+    await page.getByRole("button", { name: /Continue Assignment/ }).click();
+    await expect(page.getByText("Step 4: Submit Assignment", { exact: true })).toBeVisible();
+    const submitButton = page.getByRole("button", { name: "Submit", exact: true }).last();
+    await page.getByRole("button", { name: /Confirm this is your own work/ }).click();
+    await expect(submitButton).toBeEnabled();
+    await submitButton.click();
+
+    await expect(page.getByText(/could not reach the database/i)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Assignment Submitted" })).not.toBeVisible();
+    await expect(submitButton).toBeEnabled();
+    expect(submitAttempts).toBe(1);
+
+    const stored = await page.evaluate(() => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      return data.submissions.find((item) => item.id === "student_flow_submission");
+    });
+    expect(stored.status).toBe("draft");
+    expect(stored.finalText).toContain("death penalty should be abolished");
+  });
+
   test("paste warning uses the in-app review modal", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
@@ -257,6 +369,10 @@ test.describe("Local student assignment workflow", () => {
 
     await page.goto("/student");
     await page.getByRole("button", { name: /Continue Assignment/ }).click();
+    await page.getByRole("button", {
+      name: "Draft & Feedback",
+      exact: true,
+    }).click();
 
     const editor = page.getByRole("textbox", { name: /Draft editor/ });
     await editor.fill("Original text");
@@ -291,6 +407,120 @@ test.describe("Local student assignment workflow", () => {
     });
     await page.getByRole("button", { name: "Remove Pasted Text" }).click();
     await expect(editor).toHaveValue("Original text pasted quote");
+  });
+
+  test("tab focus refresh preserves continuous drafting before later typing and paste", async ({ page }) => {
+    const apiFixture = buildStudentWorkflowFixture();
+    await page.route("**/api/student/classes", (route) => route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        classes: [{
+          id: "student_flow_class",
+          name: "English",
+          invite_code: "ENG",
+          is_published: true,
+        }],
+        pendingClasses: [],
+      }),
+    }));
+    await page.route("**/api/classes/student_flow_class/assignments", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assignments: [apiFixture.assignments[0]],
+        }),
+      })
+    );
+    await page.route("**/api/student/submissions**", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          submissions: [apiFixture.submissions[0]],
+        }),
+      })
+    );
+    let latestSavedPayload = null;
+    await page.route("**/api/submissions/student_flow_submission", async (route) => {
+      const payload = route.request().postDataJSON();
+      latestSavedPayload = payload;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          submission: {
+            id: "student_flow_submission",
+            assignment_id: "student_flow_assignment",
+            student_id: "student_flow_student",
+            status: "draft",
+            ...payload,
+            version: 2,
+            updated_at: new Date().toISOString(),
+          },
+        }),
+      });
+    });
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.submissions[0].draftText = "";
+      data.submissions[0].finalText = "";
+      data.submissions[0].content = "";
+      data.submissions[0].writingEvents = [];
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+      localStorage.setItem("praxis_student_step_overrides", JSON.stringify({
+        student_flow_assignment: 2,
+      }));
+    });
+
+    await page.goto("/student");
+    await page.getByRole("button", { name: /Continue Assignment/ }).click();
+    await page.getByRole("button", {
+      name: "Draft & Feedback",
+      exact: true,
+    }).click();
+
+    const editor = page.getByRole("textbox", { name: /Draft editor/ });
+    const firstSession = "This text was written before switching tabs.";
+    await editor.fill(firstSession);
+
+    // Browser tab changes blur the editor, then reload lightweight workspace
+    // state when focus returns.
+    await editor.blur();
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect(editor).toHaveValue(firstSession);
+
+    await editor.focus();
+    await editor.press("End");
+    await editor.pressSequentially(" This text was written after returning.");
+    const beforePaste = `${firstSession} This text was written after returning.`;
+    await expect(editor).toHaveValue(beforePaste);
+
+    await editor.evaluate((element) => {
+      element.setSelectionRange(element.value.length, element.value.length);
+      const clipboardData = new DataTransfer();
+      clipboardData.setData("text/plain", " PASTED ENDING");
+      element.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }));
+    });
+    await page.getByRole("button", { name: "Keep Pasted Text" }).click();
+    await expect(editor).toHaveValue(`${beforePaste} PASTED ENDING`);
+
+    await expect.poll(
+      () => latestSavedPayload?.draft_text,
+      { timeout: 5000 }
+    ).toBe(`${beforePaste} PASTED ENDING`);
+    expect(
+      latestSavedPayload.writing_events.some(
+        (event) =>
+          event.type === "replace" &&
+          String(event.removedText || "").includes(firstSession)
+      )
+    ).toBe(false);
   });
 
   test("coach, draft, feedback, rubric and submit remain one ordered flow", async ({ page }) => {

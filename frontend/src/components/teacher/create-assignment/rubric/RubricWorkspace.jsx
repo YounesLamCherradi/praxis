@@ -65,24 +65,30 @@ export default function RubricWorkspace({
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="flex flex-col gap-3 border-b border-slate-100 bg-[#F8FAFC] p-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-2 border-b border-slate-100 bg-[#F8FAFC] p-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <div className="flex items-center gap-2">
-            <ClipboardList className="h-4 w-4 text-blue-600" />
+          {!isSavedRubric ? (
+            <>
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-blue-600" />
 
-            <h4 className="font-serif text-sm font-black text-slate-950">
-              {title || parsedRubricSchema?.title || "Rubric"}
-            </h4>
-          </div>
+                <h4 className="font-serif text-sm font-black text-slate-950">
+                  {title || parsedRubricSchema?.title || "Rubric"}
+                </h4>
+              </div>
 
-          <p className="mt-1 text-[11px] text-slate-500">
-            {normalizedCriteria.length} criteria · {totalPoints} pts.
-            {isSavedRubric
-              ? " Reused rubrics are preview-only."
-              : isManualRubric
-              ? " Edit one criterion at a time to reduce scrolling."
-              : " Preview first; edit only if adjustment is needed."}
-          </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {normalizedCriteria.length} criteria · {totalPoints} pts.
+                {isManualRubric
+                  ? " Edit one criterion at a time to reduce scrolling."
+                  : " Preview first; edit only if adjustment is needed."}
+              </p>
+            </>
+          ) : (
+            <p className="text-[10px] text-slate-500">
+              {normalizedCriteria.length} criteria · {totalPoints} pts. Reused rubrics are preview-only.
+            </p>
+          )}
         </div>
 
         {canSwitchView && (

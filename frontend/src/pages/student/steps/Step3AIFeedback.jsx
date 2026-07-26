@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
+import { requestJson } from "../../../services/auth";
 import {
   AlertTriangle,
   ArrowRight,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -24,6 +23,50 @@ const REVIEW_PROGRESS_MESSAGES = [
   "Preparing feedback without rewriting your essay...",
   "Almost done. Longer drafts can take a little more time...",
 ];
+
+const AI_RETRY_DELAYS_MS = [700, 1400];
+
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, milliseconds);
+  });
+}
+
+async function requestDraftFeedback(payload) {
+  let lastError = null;
+
+  for (
+    let attempt = 0;
+    attempt <= AI_RETRY_DELAYS_MS.length;
+    attempt += 1
+  ) {
+    try {
+      return await requestJson(
+        AI_ENDPOINT,
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        },
+        {
+          errorPrefix: "Draft review failed",
+        }
+      );
+    } catch (error) {
+      lastError = error;
+
+      if (
+        error?.retryable !== true ||
+        attempt >= AI_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+
+      await wait(AI_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+
+  throw lastError;
+}
 
 function getText(value) {
   return String(value || "").trim();
@@ -777,7 +820,7 @@ function InlineFeedbackMark({
       {tooltip &&
         createPortal(
           <div
-            className={`fixed z-[2147483647] max-h-[min(420px,80vh)] overflow-y-auto rounded-2xl border bg-white p-4 shadow-2xl ${tone.border}`}
+            className={`fixed z-[2147483647] rounded-2xl border bg-white p-4 shadow-2xl ${tone.border}`}
             style={{
               left: `${tooltip.left}px`,
               top: `${tooltip.top}px`,
@@ -996,10 +1039,8 @@ export default function Step3AIFeedback() {
   const [viewMode, setViewMode] = useState("edit");
   const [selectionMessage, setSelectionMessage] = useState("");
   const [showGeneralNotes, setShowGeneralNotes] = useState(false);
-  const [activeHighlightIndex, setActiveHighlightIndex] = useState(0);
   const [selectedIssueId, setSelectedIssueId] = useState("");
   const editorRef = useRef(null);
-  const feedbackScrollRef = useRef(null);
 
   const assignmentId =
     activeAssignment?.id ||
@@ -1128,7 +1169,6 @@ export default function Step3AIFeedback() {
     // request-feedback action instead of mounting a second draft screen.
     setViewMode("feedback");
     setShowGeneralNotes(false);
-    setActiveHighlightIndex(0);
     setSelectedIssueId("");
   }, [
     activeSubmission?.id,
@@ -1288,39 +1328,20 @@ export default function Step3AIFeedback() {
     }, 7000);
 
     try {
-      const response = await fetch(AI_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(
-          buildDraftFeedbackRequest({
-            assignment: activeAssignment || {},
-            submission: activeSubmission || {},
-            draftText,
-            assignmentTitle,
-            assignmentPrompt,
-            assignmentType,
-            languageLevel,
-            minWords,
-            maxWords,
-            rubricText,
-          })
-        ),
-      });
-
-      const contentType = response.headers.get("content-type") || "";
-
-      const data = contentType.includes("application/json")
-        ? await response.json()
-        : { error: await response.text() };
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            `Draft review failed with status ${response.status}.`
-        );
-      }
+      const data = await requestDraftFeedback(
+        buildDraftFeedbackRequest({
+          assignment: activeAssignment || {},
+          submission: activeSubmission || {},
+          draftText,
+          assignmentTitle,
+          assignmentPrompt,
+          assignmentType,
+          languageLevel,
+          minWords,
+          maxWords,
+          rubricText,
+        })
+      );
 
       const normalizedFeedback = normalizeFeedback(data);
 
@@ -1334,7 +1355,6 @@ export default function Step3AIFeedback() {
       setFeedback(feedbackToSave);
       setViewMode("feedback");
       setShowGeneralNotes(false);
-      setActiveHighlightIndex(0);
       setSelectedIssueId("");
       saveFeedbackToProgress(feedbackToSave);
     } catch (error) {
@@ -1358,7 +1378,6 @@ export default function Step3AIFeedback() {
       setFeedback(fallbackFeedback);
       setViewMode("feedback");
       setShowGeneralNotes(false);
-      setActiveHighlightIndex(0);
       setSelectedIssueId("");
       saveFeedbackToProgress(fallbackFeedback);
 
@@ -1418,22 +1437,8 @@ export default function Step3AIFeedback() {
     feedback?.createdAt
   );
 
-  function jumpToHighlight(index) {
-    if (!highlightedCount) return;
-
-    const nextIndex =
-      (index + highlightedCount) % highlightedCount;
-
-    setActiveHighlightIndex(nextIndex);
-  }
-
-  function handleSelectIssue(issue, number, highlightIndex) {
+  function handleSelectIssue(issue) {
     setSelectedIssueId(String(issue?.id || ""));
-    setActiveHighlightIndex(
-      Number.isFinite(Number(highlightIndex))
-        ? Number(highlightIndex)
-        : Math.max(0, Number(number || 1) - 1)
-    );
   }
 
 
@@ -1582,7 +1587,7 @@ export default function Step3AIFeedback() {
           <div className="bg-[#F8FAFC]">
             <article className="relative w-full bg-[#F8FAFC]">
               <div className="relative z-10 shrink-0 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className="text-sm font-bold text-slate-900">
@@ -1600,73 +1605,11 @@ export default function Step3AIFeedback() {
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {highlightedCount > 0 && (
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            jumpToHighlight(
-                              activeHighlightIndex - 1
-                            )
-                          }
-                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-                          aria-label="Previous highlighted note"
-                        >
-                          <ChevronLeft className="h-4 w-4" />
-                        </button>
-
-                        <span className="min-w-[74px] text-center text-[9px] font-mono font-bold text-slate-500">
-                          Note {activeHighlightIndex + 1} of {highlightedCount}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            jumpToHighlight(
-                              activeHighlightIndex + 1
-                            )
-                          }
-                          className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-500 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-                          aria-label="Next highlighted note"
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </div>
                 </div>
-
-                {highlightedCount > 0 && (
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                    {highlightRanges.map((range, index) => (
-                      <button
-                        key={`highlight-jump-${index}`}
-                        type="button"
-                        onClick={() =>
-                          jumpToHighlight(index)
-                        }
-                        className={`flex h-7 min-w-7 items-center justify-center rounded-full border px-2 text-[9px] font-mono font-black transition-all ${
-                          index === activeHighlightIndex
-                            ? "border-blue-600 bg-blue-600 text-white"
-                            : "border-slate-200 bg-white text-slate-500 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
-                        }`}
-                        aria-label={`Go to highlighted note ${index + 1}`}
-                      >
-                        {index + 1}
-                      </button>
-                    ))}
-
-                    <span className="ml-1 text-[9px] text-slate-400">
-                      Select a number to jump directly to that highlight.
-                    </span>
-                  </div>
-                )}
               </div>
 
               <div
-                ref={feedbackScrollRef}
-                className="w-full scroll-smooth px-5 py-5 sm:px-7 sm:py-6"
+                className="max-h-[470px] w-full overflow-y-auto overscroll-contain scroll-smooth px-5 py-5 [scrollbar-gutter:stable] sm:px-7 sm:py-6"
               >
                 <div className="w-full">
                   <HighlightedDraftPreview

@@ -13,13 +13,12 @@ import {
 import RubricWorkspace from "../rubric/RubricWorkspace";
 
 export default function RubricSetupStep({
-  creationMode,
-  setCreationMode,
   startManualRubric,
   savedRubricOptions,
   reusableRubrics,
   rubricMode,
   setRubricMode,
+  startGeneratedRubric,
   selectedRubricId,
   handleSavedRubricSelection,
   rubricTitle,
@@ -63,13 +62,6 @@ export default function RubricSetupStep({
       Boolean(selectedRubricId) &&
       criteria.length > 0);
 
-  const modeButtonClass = (active) =>
-    `inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2 text-[11px] font-bold transition-all ${
-      active
-        ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
-        : "bg-white text-slate-600 border border-slate-200 hover:border-blue-200 hover:bg-blue-50"
-    }`;
-
   const sourceButtonClass = (active) =>
     `w-full text-left rounded-xl border px-3 py-3 transition-all ${
       active
@@ -79,167 +71,127 @@ export default function RubricSetupStep({
 
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-slate-200 bg-white p-4">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <h3 className="font-serif text-lg font-bold text-slate-950">
-              Step 1: Rubric Setup
-            </h3>
+      <div className="space-y-4">
+        <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4">
+          <div className="flex items-start justify-between gap-3 mb-4">
+            <div>
+              <h4 className="font-serif text-sm font-bold text-slate-950">
+                Rubric source
+              </h4>
 
-            <p className="text-xs text-slate-500 mt-1 max-w-2xl leading-relaxed">
-              Choose the assignment creation mode and rubric source. The main panel
-              updates only after you select or create a rubric.
-            </p>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Choose one source. You can change it any time in this step.
+              </p>
+            </div>
+
+            {rubricMode && criteria.length > 0 && (
+              <span className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">
+                {rubricTotal} pts
+              </span>
+            )}
           </div>
 
-          <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-1">
-            <button
-              type="button"
-              onClick={() => setCreationMode("ai")}
-              className={modeButtonClass(creationMode === "ai")}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+            <label
+              className={`${sourceButtonClass(
+                rubricMode === "uploaded"
+              )} block cursor-pointer ${
+                isParsingRubric ? "pointer-events-none opacity-80" : ""
+              }`}
+              onClick={() => setRubricMode("uploaded")}
             >
-              <Wand2 className="w-3.5 h-3.5" />
-              AI-assisted
-            </button>
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx,.txt"
+                className="hidden"
+                onChange={(event) =>
+                  handleFileUpload(event.target.files?.[0])
+                }
+              />
 
-            <button
-              type="button"
-              onClick={() => setCreationMode("manual")}
-              className={modeButtonClass(creationMode === "manual")}
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              Manual
-            </button>
-          </div>
-        </div>
-      </div>
+              <div className="flex items-center gap-2">
+                {isParsingRubric ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                ) : (
+                  <Upload className="h-4 w-4 text-blue-600" />
+                )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-[270px_minmax(0,1fr)] gap-4">
-        <aside className="space-y-4 xl:sticky xl:top-0 self-start">
-          <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4">
-            <div className="flex items-start justify-between gap-3 mb-4">
-              <div>
-                <h4 className="font-serif text-sm font-bold text-slate-950">
-                  Rubric source
-                </h4>
-
-                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Select how this assignment should use a rubric.
+                <p className="text-xs font-bold text-slate-900">
+                  {isParsingRubric ? "Parsing rubric..." : "Upload rubric"}
                 </p>
               </div>
 
-              {rubricMode && criteria.length > 0 && (
-                <span className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">
-                  {rubricTotal} pts
-                </span>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                Upload PDF, Word, or text.
+              </p>
+
+              {uploadedRubricName && (
+                <p className="mt-2 inline-block max-w-full truncate rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] text-blue-700">
+                  {uploadedRubricName}
+                </p>
               )}
-            </div>
+            </label>
 
-            <div className="space-y-2">
-              <label
-                className={`${sourceButtonClass(
-                  rubricMode === "uploaded"
-                )} block cursor-pointer ${
-                  isParsingRubric ? "pointer-events-none opacity-80" : ""
-                }`}
-                onClick={() => setRubricMode("uploaded")}
-              >
-                <input
-                  type="file"
-                  accept=".pdf,.doc,.docx,.txt"
-                  className="hidden"
-                  onChange={(event) =>
-                    handleFileUpload(event.target.files?.[0])
-                  }
-                />
+            <button
+              type="button"
+              onClick={() => setRubricMode("saved")}
+              className={sourceButtonClass(rubricMode === "saved")}
+            >
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-blue-600" />
 
-                <div className="flex items-center gap-2">
-                  {isParsingRubric ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  ) : (
-                    <Upload className="h-4 w-4 text-blue-600" />
-                  )}
-
-                  <p className="text-xs font-bold text-slate-900">
-                    {isParsingRubric ? "Parsing rubric..." : "Upload rubric"}
-                  </p>
-                </div>
-
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  Upload PDF, Word, or text. Text-based files work best.
+                <p className="text-xs font-bold text-slate-900">
+                  Reuse previous
                 </p>
+              </div>
 
-                {uploadedRubricName && (
-                  <p className="mt-2 inline-block max-w-full truncate rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] text-blue-700">
-                    {uploadedRubricName}
-                  </p>
-                )}
-              </label>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                Use a saved rubric.
+              </p>
+            </button>
 
-              <button
-                type="button"
-                onClick={() => setRubricMode("saved")}
-                className={sourceButtonClass(rubricMode === "saved")}
-              >
-                <div className="flex items-center gap-2">
-                  <ClipboardList className="h-4 w-4 text-blue-600" />
+            <button
+              type="button"
+              onClick={startGeneratedRubric}
+              className={sourceButtonClass(rubricMode === "generated")}
+            >
+              <div className="flex items-center gap-2">
+                <Wand2 className="h-4 w-4 text-violet-600" />
 
-                  <p className="text-xs font-bold text-slate-900">
-                    Reuse previous
-                  </p>
-                </div>
-
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  Use a saved rubric or one from a previous assignment.
+                <p className="text-xs font-bold text-slate-900">
+                  Auto-generate rubric
                 </p>
-              </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => setRubricMode("generated")}
-                className={sourceButtonClass(rubricMode === "generated")}
-              >
-                <div className="flex items-center gap-2">
-                  <Wand2 className="h-4 w-4 text-violet-600" />
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                AI creates it from details.
+              </p>
+            </button>
 
-                  <p className="text-xs font-bold text-slate-900">
-                    Auto-generate rubric
-                  </p>
-                </div>
+            <button
+              type="button"
+              onClick={startManualRubric}
+              className={sourceButtonClass(rubricMode === "manual")}
+            >
+              <div className="flex items-center gap-2">
+                <Pencil className="h-4 w-4 text-blue-600" />
 
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  AI will create the rubric later from the assignment details.
+                <p className="text-xs font-bold text-slate-900">
+                  Create manually
                 </p>
-              </button>
+              </div>
 
-              <button
-                type="button"
-                onClick={startManualRubric}
-                className={sourceButtonClass(rubricMode === "manual")}
-              >
-                <div className="flex items-center gap-2">
-                  <Pencil className="h-4 w-4 text-blue-600" />
-
-                  <p className="text-xs font-bold text-slate-900">
-                    Create manually
-                  </p>
-                </div>
-
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  Build criteria, points, and score bands yourself.
-                </p>
-              </button>
-            </div>
+              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                Build criteria and bands.
+              </p>
+            </button>
           </div>
-
-
-
-        </aside>
+        </div>
 
         <section className="space-y-4 min-w-0">
           {rubricMode === "saved" && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px] xl:items-end">
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Choose a saved rubric
@@ -265,12 +217,29 @@ export default function RubricSetupStep({
                   </select>
                 </div>
 
-                {reusableRubrics.length > 0 && (
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[11px] text-blue-700">
-                    {reusableRubrics.length} previous rubric
-                    {reusableRubrics.length === 1 ? "" : "s"} available
-                  </div>
-                )}
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Rubric title
+                  </label>
+
+                  <input
+                    value={rubricTitle}
+                    onChange={(e) => setRubricTitle(e.target.value)}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                    placeholder="Example: Definition Paragraph Rubric"
+                    required
+                  />
+                </div>
+
+                <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3 text-[11px] text-blue-800 leading-relaxed">
+                  Saved with the assignment and used to guide the AI feedback and grading tools.
+                  {reusableRubrics.length > 0 ? (
+                    <span className="block mt-1 text-blue-700 font-semibold">
+                      {reusableRubrics.length} previous rubric
+                      {reusableRubrics.length === 1 ? "" : "s"} available.
+                    </span>
+                  ) : null}
+                </div>
               </div>
 
               {savedRubricOptions.length === 0 && (
@@ -338,31 +307,33 @@ export default function RubricSetupStep({
 
           {canShowRubricDetails && (
             <>
-              <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="grid grid-cols-1 lg:grid-cols-[1fr_250px] gap-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                      Rubric Title
-                    </label>
+              {rubricMode !== "saved" ? (
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-[1fr_250px] gap-4">
+                    <div className="space-y-1.5">
+                      <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                        Rubric Title
+                      </label>
 
-                    <input
-                      value={rubricTitle}
-                      onChange={(e) => setRubricTitle(e.target.value)}
-                      className="w-full bg-[#F8FAFC] text-slate-900 border border-slate-200 text-xs rounded-xl p-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-                      placeholder="Example: Definition Paragraph Rubric"
-                      required
-                    />
-                  </div>
+                      <input
+                        value={rubricTitle}
+                        onChange={(e) => setRubricTitle(e.target.value)}
+                        className="w-full bg-[#F8FAFC] text-slate-900 border border-slate-200 text-xs rounded-xl p-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                        placeholder="Example: Definition Paragraph Rubric"
+                        required
+                      />
+                    </div>
 
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex items-start gap-2">
-                    <Link2 className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
+                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex items-start gap-2">
+                      <Link2 className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
 
-                    <p className="text-[11px] text-blue-800 leading-relaxed">
-                      Saved with the assignment and used to guide the AI feedback and grading tools.
-                    </p>
+                      <p className="text-[11px] text-blue-800 leading-relaxed">
+                        Saved with the assignment and used to guide the AI feedback and grading tools.
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
 
               <RubricWorkspace
                 rubricMode={rubricMode}

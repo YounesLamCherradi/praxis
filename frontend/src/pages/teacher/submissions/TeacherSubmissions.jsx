@@ -28,8 +28,9 @@ import {
   XCircle,
   ChevronDown,
 } from "lucide-react";
+import { getSubmissionDetails } from "../../../services/teacherApi";
 
-import { useTeacherWorkspace } from "../../../contexts/TeacherWorkspaceContext";
+import { useTeacherWorkspace } from "../../../hooks/useTeacherWorkspace";
 import { getPraxisData } from "../../../services/praxisMockStore";
 import SubmissionDetails from "./SubmissionDetails";
 
@@ -2494,6 +2495,7 @@ export default function TeacherSubmissions({
   const {
     assignments = [],
     submissions = [],
+    setSubmissions,
     addSubmission,
     updateSubmissionReview,
     reopenSubmission,
@@ -2508,7 +2510,7 @@ export default function TeacherSubmissions({
   const [reviewSubmissionSnapshot, setReviewSubmissionSnapshot] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const dataSnapshot = useMemo(() => getPraxisData(), [refreshKey, assignments, submissions]);
+  const dataSnapshot = useMemo(() => getPraxisData(), []);
 
   // 1. Resolve selected assignment from the active selection passed down as a prop
   const selectedAssignment = useMemo(() => {
@@ -2656,7 +2658,7 @@ export default function TeacherSubmissions({
         status: displayStatus,
       };
     });
-  }, [selectedAssignment, submissions, refreshKey]);
+  }, [selectedAssignment, submissions]);
 
   // 3. Keep filters on the resulting list
   const filteredRoster = useMemo(() => {
@@ -2717,10 +2719,60 @@ export default function TeacherSubmissions({
     currentAttempt ||
     selectedItem?.submission ||
     null;
+  const selectedSubmissionId = selectedSubmission?.id || null;
 
   useEffect(() => {
+    let active = true;
+    if (!selectedSubmission) {
+      setReviewSubmissionSnapshot(null);
+      return () => {
+        active = false;
+      };
+    }
     setReviewSubmissionSnapshot(selectedSubmission);
-  }, [selectedSubmission?.id]);
+    if (selectedSubmission.detailLoaded !== false) {
+      return () => {
+        active = false;
+      };
+    }
+    getSubmissionDetails(selectedSubmission.id)
+      .then((details) => {
+        if (!active) return;
+        const hydrated = {
+          ...selectedSubmission,
+          ...details,
+          assignment: selectedSubmission.assignment,
+          assignmentDetails: selectedSubmission.assignmentDetails,
+          assignmentTitle: selectedSubmission.assignmentTitle,
+          classId: selectedSubmission.classId,
+          classCode: selectedSubmission.classCode,
+          className: selectedSubmission.className,
+          isCurrent: selectedSubmission.isCurrent,
+        };
+        setReviewSubmissionSnapshot(hydrated);
+        if (typeof setSubmissions === "function") {
+          setSubmissions((current) =>
+            current.map((item) =>
+              String(item.id) === String(hydrated.id) ? hydrated : item
+            )
+          );
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          console.error("Could not load full submission details:", error);
+        }
+      });
+    return () => {
+      active = false;
+    };
+    /*
+     * Background polling replaces collection objects with fresh references.
+     * Hydration is tied to the selected record identity so those harmless
+     * summary refreshes cannot reset the open review snapshot or its UI state.
+     */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSubmissionId, setSubmissions]);
 
   const activeReviewSubmission =
     reviewSubmissionSnapshot &&
@@ -2781,7 +2833,7 @@ export default function TeacherSubmissions({
     return newSubmission;
   }
 
-  function handleStatusChange(nextStatus) {
+  async function handleStatusChange(nextStatus) {
     if (!selectedItem) return;
 
     const currentStatus = normalizeStatus(
@@ -2874,7 +2926,7 @@ export default function TeacherSubmissions({
       }
 
       const reopenedAttempt =
-        reopenSubmission(
+        await reopenSubmission(
           selectedSubmission.id,
           {
             reopenedBy: "Instructor",
@@ -2929,7 +2981,7 @@ export default function TeacherSubmissions({
     );
   }
 
-  function handleSaveReview(id, reviewData) {
+  async function handleSaveReview(id, reviewData) {
     const sourceSubmission =
       activeReviewSubmission || selectedSubmission;
 
@@ -2968,7 +3020,7 @@ export default function TeacherSubmissions({
       updatedAt: now,
     };
 
-    updateSubmissionReview(id, updatedSubmission);
+    await updateSubmissionReview(id, updatedSubmission);
 
     setReviewSubmissionSnapshot(updatedSubmission);
     setSelectedAttemptId(id);

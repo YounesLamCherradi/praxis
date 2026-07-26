@@ -51,6 +51,7 @@ import {
   getPraxisData,
   savePraxisData,
 } from "../../services/praxisMockStore";
+import { createBugReport } from "../../services/reportApi";
 
 /* =========================================================
    CONSTANTS
@@ -1523,9 +1524,10 @@ export default function AdminDashboard() {
       data.processAnalyses
     );
 
-  const adminStudentFlags =
-    data.adminStudentFlags ||
-    {};
+  const adminStudentFlags = useMemo(
+    () => data.adminStudentFlags || {},
+    [data.adminStudentFlags]
+  );
 
   const withdrawalLog =
     safeArray(
@@ -2223,16 +2225,16 @@ export default function AdminDashboard() {
     setPasswordUiMessage("");
   }
 
-  function handlePasswordUiSubmit(
+  async function handlePasswordUiSubmit(
     event
   ) {
     event.preventDefault();
 
     if (
-      newPassword.length < 8
+      newPassword.length < 10
     ) {
       setPasswordUiMessage(
-        "Use at least 8 characters."
+        "Use at least 10 characters."
       );
       return;
     }
@@ -2247,9 +2249,33 @@ export default function AdminDashboard() {
       return;
     }
 
-    setPasswordUiMessage(
-      "Password update is ready for backend connection."
-    );
+    setPasswordUiMessage("Updating password...");
+
+    try {
+      const response = await fetch("/api/auth/update-password", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ password: newPassword }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        setPasswordUiMessage(
+          data.error || "Could not update password right now."
+        );
+        return;
+      }
+
+      setPasswordUiMessage("Password updated successfully.");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch {
+      setPasswordUiMessage("Could not update password right now.");
+    }
   }
 
   function resetBugReportForm() {
@@ -2391,14 +2417,6 @@ export default function AdminDashboard() {
     setIsSubmittingBugReport(true);
 
     try {
-      const currentData =
-        getPraxisData();
-
-      const bugReports =
-        safeArray(
-          currentData.bugReports
-        );
-
       const now =
         new Date().toISOString();
 
@@ -2467,13 +2485,7 @@ export default function AdminDashboard() {
         updatedAt: now,
       };
 
-      savePraxisData({
-        ...currentData,
-        bugReports: [
-          report,
-          ...bugReports,
-        ],
-      });
+      await createBugReport(report);
 
       setBugReportSuccess(
         "Your issue was reported successfully."
@@ -2934,11 +2946,6 @@ export default function AdminDashboard() {
       createdAt:
         new Date().toISOString(),
     };
-
-    window.localStorage.setItem(
-      ADMIN_TEACHER_VIEW_KEY,
-      JSON.stringify(payload)
-    );
 
     navigate("/teacher", {
       state: {
@@ -3545,7 +3552,7 @@ export default function AdminDashboard() {
               </h3>
 
               <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                The interface is ready. The password update will be connected to the backend later.
+                Change your account password directly from this dashboard. No OTP is required while you are already signed in.
               </p>
             </div>
 
@@ -3574,7 +3581,7 @@ export default function AdminDashboard() {
 
                     setPasswordUiMessage("");
                   }}
-                  placeholder="At least 8 characters"
+                  placeholder="At least 10 characters"
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
                 />
               </div>
@@ -5222,7 +5229,7 @@ function SystemPanel({
           <SystemActionCard
             icon={RefreshCw}
             title="Refresh Store"
-            description="Reload the latest mock workspace data from localStorage."
+            description="Reload the latest workspace data from the backend."
             action="Refresh"
             onClick={onRefresh}
           />

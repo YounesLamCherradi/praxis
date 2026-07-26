@@ -1,18 +1,25 @@
 import React, {
-  createContext,
-  useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { StudentWorkspaceContext } from "./StudentWorkspaceContextBase";
 
 import {
   getPraxisData,
   savePraxisData,
 } from "../services/praxisMockStore";
-
-const StudentWorkspaceContext =
-  createContext(null);
+import { getStudentCourses } from "../services/courseApi";
+import {
+  getOrCreateMySubmission,
+  getStudentAssignments,
+  getStudentSubmissions,
+  saveMySubmission,
+  submitMyAssignment,
+} from "../services/teacherApi";
+import AuthService from "../services/auth";
+import { queryClient, queryKeys } from "../queryClient";
 
 /* =====================================================
    GENERAL HELPERS
@@ -42,30 +49,12 @@ function countWords(text = "") {
     .filter(Boolean).length;
 }
 
-const STUDENT_STEP_STORAGE_KEY = "praxis_student_step_overrides";
-const STUDENT_ACTIVE_ASSIGNMENT_KEY = "praxis_student_active_assignment";
-
 function loadActiveStudentAssignmentId() {
-  try {
-    return localStorage.getItem(STUDENT_ACTIVE_ASSIGNMENT_KEY) || null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 function saveActiveStudentAssignmentId(assignmentId) {
-  try {
-    if (assignmentId) {
-      localStorage.setItem(
-        STUDENT_ACTIVE_ASSIGNMENT_KEY,
-        String(assignmentId)
-      );
-    } else {
-      localStorage.removeItem(STUDENT_ACTIVE_ASSIGNMENT_KEY);
-    }
-  } catch {
-    // Restoration is helpful, but storage must never block assignment access.
-  }
+  void assignmentId;
 }
 
 function getDraftText(submission = {}) {
@@ -141,26 +130,11 @@ function getAiFeedbackEntries(submission = {}) {
 }
 
 function loadStudentStepOverrides() {
-  try {
-    const parsed = JSON.parse(
-      localStorage.getItem(STUDENT_STEP_STORAGE_KEY) || "{}"
-    );
-
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 function saveStudentStepOverrides(overrides = {}) {
-  try {
-    localStorage.setItem(
-      STUDENT_STEP_STORAGE_KEY,
-      JSON.stringify(overrides)
-    );
-  } catch {
-    // Step memory must never interrupt the writing workflow.
-  }
+  void overrides;
 }
 
 function notifyPraxisDataChanged() {
@@ -172,37 +146,12 @@ function notifyPraxisDataChanged() {
 }
 
 function getCurrentStudentProfile() {
-  try {
-    const savedProfile =
-      localStorage.getItem(
-        "auizero_profile"
-      );
-
-    if (!savedProfile) {
-      return {
-        name: "Student",
-        email: "student@aui.ma",
-      };
-    }
-
-    const profile =
-      JSON.parse(savedProfile);
-
-    return {
-      name:
-        profile.name ||
-        profile.fullName ||
-        "Student",
-      email:
-        profile.email ||
-        "student@aui.ma",
-    };
-  } catch {
-    return {
-      name: "Student",
-      email: "student@aui.ma",
-    };
-  }
+  const profile = AuthService.getProfile() || {};
+  return {
+    id: profile.id || null,
+    name: profile.name || profile.fullName || "Student",
+    email: profile.email || "student@aui.ma",
+  };
 }
 
 function normalizeAssignmentForStudent(
@@ -1583,6 +1532,13 @@ export function StudentWorkspaceProvider({
     submissions,
     setSubmissions,
   ] = useState([]);
+  const persistentSaveQueues = useRef(new Map());
+  const syncWorkspaceRef = useRef(null);
+  const [workspaceSyncState, setWorkspaceSyncState] = useState({
+    status: "loading",
+    error: "",
+    lastSyncedAt: null,
+  });
 
   const [
     selectedAssignmentId,
@@ -1649,13 +1605,12 @@ export function StudentWorkspaceProvider({
     let studentEnrollments =
       allEnrollments.filter(
         (enrollment) =>
-          String(
-            enrollment.studentEmail ||
-              ""
-          ).toLowerCase() ===
-          String(
-            profile.email || ""
-          ).toLowerCase()
+          (
+            profile.id &&
+            String(enrollment.studentId || "") === String(profile.id)
+          ) ||
+          String(enrollment.studentEmail || "").toLowerCase() ===
+            String(profile.email || "").toLowerCase()
       );
 
     if (
@@ -1725,13 +1680,12 @@ export function StudentWorkspaceProvider({
       )
         .filter(
           (submission) =>
-            String(
-              submission.studentEmail ||
-                ""
-            ).toLowerCase() ===
-            String(
-              profile.email || ""
-            ).toLowerCase()
+            (
+              profile.id &&
+              String(submission.studentId || "") === String(profile.id)
+            ) ||
+            String(submission.studentEmail || "").toLowerCase() ===
+              String(profile.email || "").toLowerCase()
         )
         .map(
           normalizeSubmissionForStudent
@@ -1778,8 +1732,176 @@ export function StudentWorkspaceProvider({
   useEffect(() => {
     loadStudentWorkspace();
 
+    let active = true;
+    let syncPromise = null;
+
+    async function syncEnrolledCoursesFromBackend() {
+      if (syncPromise) return syncPromise;
+
+      setWorkspaceSyncState((current) => ({
+        ...current,
+        status: current.lastSyncedAt ? "refreshing" : "loading",
+        error: "",
+      }));
+      syncPromise = (async () => {
+       try {
+        const { classes: backendClasses } = await queryClient.fetchQuery({
+          queryKey: queryKeys.studentCourses,
+          queryFn: getStudentCourses,
+          staleTime: 0,
+        });
+        if (!active) return;
+
+        const profile = getCurrentStudentProfile();
+        const data = getPraxisData();
+        const knownEnrollmentClassIds = new Set(
+          safeArray(data.enrollments)
+            .filter((entry) =>
+              (
+                profile.id &&
+                String(entry.studentId || "") === String(profile.id)
+              ) ||
+              String(entry.studentEmail || "").toLowerCase() ===
+                String(profile.email || "").toLowerCase()
+            )
+            .map((entry) => String(entry.classId))
+        );
+        const now = new Date().toISOString();
+        const nextClasses = [...safeArray(data.classes)];
+        const nextEnrollments = [...safeArray(data.enrollments)];
+
+        backendClasses.forEach((course) => {
+          const cachedCourse = nextClasses.find(
+            (entry) =>
+              String(entry.id) === String(course.id) ||
+              String(entry.backendId || "") === String(course.id) ||
+              (entry.code &&
+                String(entry.code).toUpperCase() === String(course.code).toUpperCase())
+          );
+          const workspaceCourseId = cachedCourse?.id || course.id;
+
+          if (!cachedCourse) nextClasses.push(course);
+          if (!knownEnrollmentClassIds.has(String(workspaceCourseId))) {
+            nextEnrollments.push({
+              id: `backend_enrollment_${course.id}_${profile.id || profile.email}`,
+              studentId: profile.id || null,
+              studentEmail: profile.email || "",
+              studentName: profile.name || "Student",
+              classId: workspaceCourseId,
+              courseId: workspaceCourseId,
+              classCode: course.code,
+              courseCode: course.code,
+              className: course.name,
+              status: "active",
+              joinedAt: now,
+              createdAt: now,
+              updatedAt: now,
+            });
+          }
+        });
+
+        const assignmentGroups = await Promise.all(
+          backendClasses.map(async (course) => {
+            const rows = await queryClient.fetchQuery({
+              queryKey: queryKeys.classAssignments(course.id),
+              queryFn: () => getStudentAssignments(course.id),
+              staleTime: 0,
+            });
+            return rows.map((assignment) => ({
+              ...assignment,
+              classId: course.id,
+              classCode: course.code || "",
+              className: course.name || "",
+            }));
+          })
+        );
+        const backendAssignments = assignmentGroups.flat();
+        const assignmentIds = backendAssignments.map((assignment) => assignment.id);
+        const backendSubmissions = await queryClient.fetchQuery({
+          queryKey: [...queryKeys.studentSubmissions, assignmentIds.join(",")],
+          queryFn: () => getStudentSubmissions(assignmentIds),
+          staleTime: 0,
+        });
+        const persistedSubmissions = backendSubmissions.map((submission) => {
+          const assignment = backendAssignments.find(
+            (entry) => String(entry.id) === String(submission.assignmentId)
+          );
+          return {
+            ...submission,
+            assignment,
+            assignmentDetails: assignment,
+            assignmentTitle: assignment?.title || "",
+            studentId: profile.id || submission.studentId,
+            studentEmail: profile.email || "",
+            studentName: profile.name || "Student",
+            classId: assignment?.classId || null,
+            classCode: assignment?.classCode || "",
+            className: assignment?.className || "",
+            isCurrent: true,
+          };
+        });
+
+        /*
+         * Commit one complete backend snapshot. Previously courses were saved
+         * first and assignments/submissions later, while focus/storage events
+         * repeatedly reloaded the half-finished snapshot. That made courses
+         * and submitted state appear only after several refreshes.
+         */
+        const latestData = getPraxisData();
+        const backendClassIds = new Set(
+          backendClasses.map((course) => String(course.id))
+        );
+        const backendAssignmentIds = new Set(
+          backendAssignments.map((assignment) => String(assignment.id))
+        );
+        const preservedAssignments = safeArray(latestData.assignments).filter(
+          (assignment) => !backendClassIds.has(String(assignment.classId || ""))
+        );
+        const preservedSubmissions = safeArray(latestData.submissions).filter(
+          (submission) =>
+            !backendAssignmentIds.has(String(submission.assignmentId || "")) &&
+            String(submission.studentId || "") !== String(profile.id || "")
+        );
+
+        savePraxisData({
+          ...latestData,
+          classes: nextClasses,
+          enrollments: nextEnrollments,
+          assignments: [...preservedAssignments, ...backendAssignments],
+          submissions: [...preservedSubmissions, ...persistedSubmissions],
+        });
+        if (active) {
+          loadStudentWorkspace();
+          setWorkspaceSyncState({
+            status: "ready",
+            error: "",
+            lastSyncedAt: new Date().toISOString(),
+          });
+        }
+      } catch (error) {
+        console.error("Could not load enrolled courses from Supabase:", error);
+        if (active) {
+          setWorkspaceSyncState((current) => ({
+            ...current,
+            status: current.lastSyncedAt ? "ready" : "error",
+            error:
+              "Praxis could not refresh the workspace. Your last confirmed work is still available.",
+          }));
+        }
+      } finally {
+        syncPromise = null;
+      }
+      })();
+
+      return syncPromise;
+    }
+
+    syncWorkspaceRef.current = syncEnrolledCoursesFromBackend;
+    syncEnrolledCoursesFromBackend();
+
     function handleFocus() {
       loadStudentWorkspace();
+      syncEnrolledCoursesFromBackend();
     }
 
     function handleStorageChange(
@@ -1804,6 +1926,7 @@ export function StudentWorkspaceProvider({
         "visible"
       ) {
         loadStudentWorkspace();
+        syncEnrolledCoursesFromBackend();
       }
     }
 
@@ -1828,6 +1951,8 @@ export function StudentWorkspaceProvider({
     );
 
     return () => {
+      active = false;
+      syncWorkspaceRef.current = null;
       window.removeEventListener(
         "focus",
         handleFocus
@@ -1847,6 +1972,91 @@ export function StudentWorkspaceProvider({
         "visibilitychange",
         handleVisibilityChange
       );
+    };
+  }, []);
+
+  /*
+   * Review status is server-owned. Refresh only those review fields while the
+   * tab is visible so polling can never replace an in-progress local draft.
+   */
+  useEffect(() => {
+    let active = true;
+    let refreshing = false;
+
+    async function refreshReviewStatus() {
+      if (
+        !active ||
+        refreshing ||
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+
+      refreshing = true;
+      try {
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.studentSubmissions,
+        });
+        const backendRows = await queryClient.fetchQuery({
+          queryKey: queryKeys.studentSubmissions,
+          queryFn: () => getStudentSubmissions([]),
+          staleTime: 0,
+        });
+
+        if (!active) return;
+
+        setSubmissions((currentRows) => {
+          const backendById = new Map(
+            safeArray(backendRows).map((row) => [String(row.id), row])
+          );
+
+          return safeArray(currentRows).map((current) => {
+            const incoming = backendById.get(String(current.id));
+            if (!incoming) return current;
+
+            return {
+              ...current,
+              status: incoming.status || current.status,
+              teacherReview:
+                incoming.teacherReview || current.teacherReview,
+              score:
+                incoming.score ?? current.score ?? null,
+              feedback:
+                incoming.feedback ?? current.feedback ?? "",
+              annotations:
+                incoming.annotations || current.annotations || [],
+              rubricScores:
+                incoming.rubricScores || current.rubricScores || {},
+              reviewedAt:
+                incoming.reviewedAt || current.reviewedAt || null,
+              teacherReviewedAt:
+                incoming.teacherReviewedAt ||
+                current.teacherReviewedAt ||
+                null,
+              gradedAt:
+                incoming.gradedAt || current.gradedAt || null,
+              updatedAt:
+                incoming.updatedAt || current.updatedAt,
+            };
+          });
+        });
+      } catch {
+        // Preserve current draft and last confirmed review during outages.
+      } finally {
+        refreshing = false;
+      }
+    }
+
+    // Grades are not latency-critical enough to justify a request every two
+    // seconds. Focus/reconnect refreshes remain immediate; this interval is a
+    // low-cost fallback until the review channel moves to realtime events.
+    const intervalId = window.setInterval(refreshReviewStatus, 15000);
+    window.addEventListener("focus", refreshReviewStatus);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshReviewStatus);
     };
   }, []);
 
@@ -1942,7 +2152,6 @@ export function StudentWorkspaceProvider({
         submissions,
         selectedAssignmentId,
         activeAssignment,
-        typedText,
       ]
     );
 
@@ -1971,6 +2180,7 @@ export function StudentWorkspaceProvider({
   }, [
     selectedAssignmentId,
     activeSubmission?.id,
+    studentStep,
   ]);
 
   /*
@@ -1990,7 +2200,36 @@ export function StudentWorkspaceProvider({
     selectedAssignmentId,
     activeSubmission?.id,
     activeSubmission?.reopenedAt,
+    activeSubmission?.status,
   ]);
+
+  function queuePersistentDraftSave(assignmentId, record) {
+    const key = String(assignmentId);
+    const previous = persistentSaveQueues.current.get(key) || Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const databaseSubmission = await getOrCreateMySubmission(assignmentId);
+        return saveMySubmission({
+          ...record,
+          id: databaseSubmission.id,
+          version: databaseSubmission.version,
+          updatedAt: databaseSubmission.updatedAt,
+        });
+      })
+      .catch((error) => {
+        console.error("Supabase draft autosave failed; local recovery copy retained:", error);
+        throw error;
+      });
+    persistentSaveQueues.current.set(key, next);
+    const cleanup = () => {
+      if (persistentSaveQueues.current.get(key) === next) {
+        persistentSaveQueues.current.delete(key);
+      }
+    };
+    next.then(cleanup, cleanup);
+    return next;
+  }
 
   function saveDraftProgress(
     assignmentId,
@@ -2416,11 +2655,12 @@ export function StudentWorkspaceProvider({
 
     notifyPraxisDataChanged();
     loadStudentWorkspace();
+    queuePersistentDraftSave(assignmentId, nextRecord).catch(() => undefined);
 
     return true;
   }
 
-  function submitAssignment(
+  async function submitAssignment(
     assignmentId,
     content,
     submissionMeta = {}
@@ -2687,7 +2927,7 @@ export function StudentWorkspaceProvider({
             1
         ) + 1;
 
-      const newSubmission = {
+      let newSubmission = {
         ...existingDraft,
 
         id: `sub_${Date.now()}_${Math.random()
@@ -2764,6 +3004,28 @@ export function StudentWorkspaceProvider({
 
       delete newSubmission.reopenSnapshot;
 
+      const pendingSave = persistentSaveQueues.current.get(String(assignmentId));
+      if (pendingSave) {
+        await Promise.race([
+          pendingSave.catch(() => undefined),
+          new Promise((resolve) => window.setTimeout(resolve, 5000)),
+        ]);
+      }
+      const persistedSubmission = await submitMyAssignment(assignmentId, newSubmission);
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.studentSubmissions,
+      });
+      newSubmission = {
+        ...newSubmission,
+        ...persistedSubmission,
+        assignment,
+        assignmentDetails: assignment,
+        assignmentTitle: assignment.title,
+        studentName,
+        studentEmail,
+        isCurrent: true,
+      };
+
       const nextSubmissions =
         allSubmissions
           .filter(
@@ -2833,7 +3095,7 @@ export function StudentWorkspaceProvider({
       ) ||
       maxAttemptNumber + 1;
 
-    const newSubmission = {
+    let newSubmission = {
       ...(existingDraft || {}),
 
       id:
@@ -3008,6 +3270,28 @@ export function StudentWorkspaceProvider({
     };
 
     delete newSubmission.reopenSnapshot;
+
+    const pendingSave = persistentSaveQueues.current.get(String(assignmentId));
+    if (pendingSave) {
+      await Promise.race([
+        pendingSave.catch(() => undefined),
+        new Promise((resolve) => window.setTimeout(resolve, 5000)),
+      ]);
+    }
+    const persistedSubmission = await submitMyAssignment(assignmentId, newSubmission);
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.studentSubmissions,
+    });
+    newSubmission = {
+      ...newSubmission,
+      ...persistedSubmission,
+      assignment,
+      assignmentDetails: assignment,
+      assignmentTitle: assignment.title,
+      studentName,
+      studentEmail,
+      isCurrent: true,
+    };
 
     const nextSubmissions =
       allSubmissions.map(
@@ -3512,7 +3796,7 @@ export function StudentWorkspaceProvider({
     return true;
   }
 
-  function openStudentAssignment(assignmentId) {
+  async function openStudentAssignment(assignmentId) {
     const assignment = assignments.find(
       (item) =>
         String(item.id) === String(assignmentId)
@@ -3520,11 +3804,46 @@ export function StudentWorkspaceProvider({
 
     if (!assignment) return false;
 
-    const submission =
+    let submission =
       getCurrentSubmissionForAssignment(
         submissions,
         assignmentId
       );
+
+    try {
+      const persisted = await getOrCreateMySubmission(assignmentId);
+      submission = {
+        ...persisted,
+        // The local record is an emergency recovery buffer. If it contains
+        // unsent edits, keep those fields and attach the durable row identity
+        // so the next queued autosave writes them to Supabase.
+        ...submission,
+        id: persisted.id,
+        version: persisted.version,
+        updatedAt: persisted.updatedAt,
+        assignment,
+        assignmentDetails: assignment,
+        assignmentTitle: assignment.title,
+        classId: assignment.classId,
+        classCode: assignment.classCode,
+        className: assignment.className,
+        isCurrent: true,
+      };
+      setSubmissions((current) => {
+        const withoutCurrent = current.filter(
+          (entry) => String(entry.assignmentId) !== String(assignmentId)
+        );
+        return [...withoutCurrent, submission];
+      });
+    } catch (error) {
+      console.error("Could not open the durable submission:", error);
+      showStudentWorkflowNotice({
+        tone: "red",
+        title: "Assignment could not be opened",
+        message: "Your connection to the database failed. Please try again before writing.",
+      });
+      return false;
+    }
 
     const status = normalizeStudentStatus(
       submission?.status
@@ -3579,12 +3898,14 @@ export function StudentWorkspaceProvider({
 
   function refreshStudentWorkspace() {
     loadStudentWorkspace();
+    return syncWorkspaceRef.current?.();
   }
 
   return (
     <StudentWorkspaceContext.Provider
       value={{
         studentProfile,
+        workspaceSyncState,
 
         classes,
         setClasses,
@@ -3637,8 +3958,3 @@ export function StudentWorkspaceProvider({
     </StudentWorkspaceContext.Provider>
   );
 }
-
-export const useStudentWorkspace = () =>
-  useContext(
-    StudentWorkspaceContext
-  );

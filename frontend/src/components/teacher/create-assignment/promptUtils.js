@@ -221,6 +221,7 @@ export function normalizeGeneratedAssignment(data) {
       requirements: [],
       assignmentType: "Response",
       languageLevel: "B1",
+      gradeScale: 20,
       minWords: 250,
       maxWords: 400,
       feedbackRequestLimit: 2,
@@ -295,6 +296,15 @@ export function normalizeGeneratedAssignment(data) {
       parsed.languageLevel ||
       parsed.studentLevel ||
       parsed.level
+    ),
+
+    gradeScale: toInteger(
+      parsed.gradeScale ??
+        parsed.rubricTotalPoints ??
+        parsed.maxGrade,
+      20,
+      1,
+      500
     ),
 
     minWords,
@@ -377,6 +387,7 @@ Important rules:
 - If no due date is mentioned, set it seven days after the provided current date at 23:59 local time.
 - If no assignment type is clear, use "Response".
 - If no level is stated, use "B1".
+- If no grade scale is stated, use 20.
 - If no word range is stated, use 250 to 400 words.
 - If no feedback limit is stated, use 2. feedbackRequestLimit=0 disables AI draft feedback.
 - Set ideaRequestLimit to 0 because separate planning-note requests are out of scope.
@@ -395,6 +406,7 @@ Return this exact JSON shape:
   "requirements": ["requirement 1", "requirement 2"],
   "assignmentType": "Response | Definition | Argument | Narrative | Compare and Contrast | Process Paragraph | Reflection | Summary | Analysis | Other",
   "languageLevel": "A1 | A2 | B1 | B2 | C1 | C2 | Mixed level",
+  "gradeScale": 20,
   "minWords": 250,
   "maxWords": 400,
   "feedbackRequestLimit": 2,
@@ -415,6 +427,7 @@ export function buildAssignmentGenerationUserPrompt({
   teacherRequest,
   availableCourses = [],
   currentDate,
+  gradeScale = 20,
   rubricTitle,
   criteria = [],
   uploadedRubricText = "",
@@ -439,6 +452,7 @@ export function buildAssignmentGenerationUserPrompt({
     "",
     "Instructor's plain-English assignment description:",
     `"""${getText(teacherRequest)}"""`,
+    `Rubric maximum score selected in the form: ${toInteger(gradeScale, 20, 1, 500)} points. Use this unless the instructor explicitly requests a different score in the description.`,
     "",
     rubricContext
       ? `Rubric context:\n${rubricContext}`

@@ -4,6 +4,7 @@ const express = require('express');
 const compression = require('compression');
 const crypto = require('node:crypto');
 const fetch = require('node-fetch');
+const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const { parseRubricBuffer, parseRubricText } = require('./rubricParser');
@@ -29,6 +30,16 @@ const {
   getConfiguredBaseUrl,
   getSafeRedirectPath,
 } = require('./canonical-url-utils');
+const {
+  BUG_REPORT_BUCKET,
+  decodeBugReportAttachment,
+} = require('./bug-report-attachment');
+const {
+  buildNotificationFailurePatch,
+} = require('./notification-outbox-utils');
+const {
+  getAuthenticatedUser,
+} = require('./auth-user-retry');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const app = express();
@@ -52,6 +63,7 @@ app.use((req, res, next) => {
   if (requestOrigin && allowedOrigins.has(requestOrigin)) {
     res.set("Access-Control-Allow-Origin", requestOrigin);
     res.set("Vary", "Origin");
+    res.set("Access-Control-Allow-Credentials", "true");
     res.set(
       "Access-Control-Allow-Headers",
       "Content-Type, Authorization"
@@ -108,6 +120,21 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+app.get('/api/setup/status', async (req, res) => {
+  try {
+    const status = await getBackendSetupStatus();
+    res.status(200).json({
+      ok: status.missing.length === 0,
+      status,
+      nextStep: status.missing.length === 0
+        ? 'Supabase core tables are available.'
+        : 'Run migrations/bootstrap-auth-schema.sql in the Supabase SQL editor for a fresh project.',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.use((req, res, next) => {
 
   // API requests must remain on the Render backend.
@@ -147,6 +174,25 @@ app.get('/', (req, res, next) => {
 });
 app.use(express.static(path.join(__dirname, 'public'), { index: 'landing.html' }));
 app.use(express.json({ limit: '10mb' }))
+
+// Non-remember sessions expire after inactivity (default: 1 hour).
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api/')) return next();
+  if (!isNonRememberSession(req)) return next();
+  if (!hasSessionCookies(req)) return next();
+
+  const lastActivity = getLastActivityMs(req);
+  const now = Date.now();
+
+  if (lastActivity && now - lastActivity > NON_REMEMBER_INACTIVITY_MS) {
+    req.sessionInactive = true;
+    clearAuthCookies(req, res);
+    return next();
+  }
+
+  setLastActivityCookie(req, res);
+  return next();
+});
 
 const SUPABASE_SERVER_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
@@ -193,12 +239,48 @@ const NOTIFY_FROM_EMAIL =
   process.env.RESEND_FROM_EMAIL ||
   process.env.FROM_EMAIL ||
   '';
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 0);
+const SMTP_SECURE = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
 const DEADLINE_REMINDER_POLL_MS = Math.max(5 * 60 * 1000, Number(process.env.ASSIGNMENT_REMINDER_POLL_MS || 15 * 60 * 1000));
 const DEADLINE_REMINDER_WINDOW_MS = Math.max(5 * 60 * 1000, Number(process.env.ASSIGNMENT_REMINDER_WINDOW_MS || 20 * 60 * 1000));
+const OTP_CODE_LENGTH = 6;
+const OTP_TTL_MINUTES = 10;
+const OTP_RESEND_SECONDS = 60;
+const OTP_MAX_ATTEMPTS = 3;
+const OTP_RETENTION_HOURS = Math.max(1, Number(process.env.OTP_RETENTION_HOURS || 48));
+const OTP_CLEANUP_INTERVAL_MS = Math.max(5 * 60 * 1000, Number(process.env.OTP_CLEANUP_INTERVAL_MS || 60 * 60 * 1000));
+const OTP_PURPOSE_SIGNUP = 'signup';
+const OTP_PURPOSE_PASSWORD_RESET = 'password_reset';
+// Classroom defaults: avoid long shared-IP lockouts while still slowing brute-force bursts.
+const SIGNIN_RATE_WINDOW_MS = Math.max(60 * 1000, Number(process.env.SIGNIN_RATE_WINDOW_MS || 15 * 60 * 1000));
+const SIGNIN_RATE_MAX_ATTEMPTS = Math.max(1, Number(process.env.SIGNIN_RATE_MAX_ATTEMPTS || 8));
+const SIGNIN_RATE_BLOCK_MS = Math.max(60 * 1000, Number(process.env.SIGNIN_RATE_BLOCK_MS || 2 * 60 * 1000));
+const SIGNIN_IP_RATE_WINDOW_MS = Math.max(60 * 1000, Number(process.env.SIGNIN_IP_RATE_WINDOW_MS || 15 * 60 * 1000));
+const SIGNIN_IP_RATE_MAX_ATTEMPTS = Math.max(1, Number(process.env.SIGNIN_IP_RATE_MAX_ATTEMPTS || 120));
+const SIGNIN_IP_RATE_BLOCK_MS = Math.max(60 * 1000, Number(process.env.SIGNIN_IP_RATE_BLOCK_MS || 60 * 1000));
+const SIGNIN_FAILURE_DELAY_BASE_MS = Math.max(500, Number(process.env.SIGNIN_FAILURE_DELAY_BASE_MS || 2000));
+const SIGNIN_FAILURE_DELAY_MAX_MS = Math.max(SIGNIN_FAILURE_DELAY_BASE_MS, Number(process.env.SIGNIN_FAILURE_DELAY_MAX_MS || 30000));
+const SIGNIN_FAILURE_DELAY_START_AFTER = Math.max(1, Number(process.env.SIGNIN_FAILURE_DELAY_START_AFTER || 2));
+const NON_REMEMBER_INACTIVITY_MS = Math.max(5 * 60 * 1000, Number(process.env.NON_REMEMBER_INACTIVITY_MS || 60 * 60 * 1000));
+const OTP_SECRET =
+  process.env.OTP_SECRET ||
+  process.env.AUTH_OTP_SECRET ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_SERVICE_KEY ||
+  '';
 let deadlineReminderJob = null;
+let notificationOutboxJob = null;
 let deadlineReminderInFlight = false;
+let otpCleanupLastRanAt = 0;
+const signinRateLimiter = new Map();
+const signinIpRateLimiter = new Map();
 const ACCOUNT_SETUP_INCOMPLETE_MESSAGE = "Your login worked, but your account setup is incomplete. Please ask your teacher (if you're a student) or contact support so we can finish setting up your account.";
 const SIGNUP_PROFILE_ERROR_MESSAGE = "We couldn't finish setting up your account. Please try creating your account again. If this keeps happening, ask your teacher (if you're a student) or contact support.";
+
+let smtpTransport = null;
 
 if (!process.env.SUPABASE_URL || !SUPABASE_SERVER_KEY) {
   console.warn('Supabase server client is missing SUPABASE_URL or a service-role key.');
@@ -209,9 +291,172 @@ if (!process.env.SUPABASE_URL || !SUPABASE_BROWSER_KEY) {
 }
 
 function getBearerToken(req) {
+  if (req.sessionInactive === true) return null;
   const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) return null;
-  return auth.slice(7);
+  if (auth && auth.startsWith('Bearer ')) {
+    const candidate = String(auth.slice(7) || '').trim();
+    if (candidate && candidate !== 'null' && candidate !== 'undefined') {
+      return candidate;
+    }
+  }
+  const cookieToken = getCookieValue(req, 'praxis_at');
+  return cookieToken || null;
+}
+
+function parseCookies(req) {
+  const raw = String(req.headers.cookie || '');
+  if (!raw) return {};
+
+  return raw
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((acc, part) => {
+      const eq = part.indexOf('=');
+      if (eq < 0) return acc;
+      const key = part.slice(0, eq).trim();
+      const value = part.slice(eq + 1).trim();
+      if (!key) return acc;
+      acc[key] = decodeURIComponent(value);
+      return acc;
+    }, {});
+}
+
+function getCookieValue(req, key) {
+  const cookies = parseCookies(req);
+  return String(cookies[key] || '').trim() || null;
+}
+
+function isSecureRequest(req) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  if (forwardedProto === 'https') return true;
+  return Boolean(req.secure);
+}
+
+function buildCookieHeader(name, value, {
+  httpOnly = true,
+  secure = false,
+  sameSite = 'Lax',
+  path = '/',
+  maxAge = null,
+} = {}) {
+  const parts = [`${name}=${encodeURIComponent(String(value || ''))}`];
+  parts.push(`Path=${path}`);
+  parts.push(`SameSite=${sameSite}`);
+  if (httpOnly) parts.push('HttpOnly');
+  if (secure) parts.push('Secure');
+  if (Number.isFinite(Number(maxAge)) && Number(maxAge) >= 0) {
+    parts.push(`Max-Age=${Math.floor(Number(maxAge))}`);
+  }
+  return parts.join('; ');
+}
+
+function setAuthCookies(req, res, session, stayLoggedIn = true) {
+  const secure = isSecureRequest(req);
+  const accessToken = String(session?.access_token || '').trim();
+  const refreshToken = String(session?.refresh_token || '').trim();
+  if (!accessToken || !refreshToken) return;
+
+  const accessMaxAge = Math.max(60, Number(session?.expires_in || 3600));
+  const refreshMaxAge = stayLoggedIn ? 30 * 24 * 60 * 60 : null;
+
+  const accessCookie = buildCookieHeader('praxis_at', accessToken, {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: accessMaxAge,
+  });
+
+  const refreshCookie = buildCookieHeader('praxis_rt', refreshToken, {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: refreshMaxAge,
+  });
+
+  const rememberCookie = buildCookieHeader('praxis_rm', stayLoggedIn ? '1' : '0', {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: stayLoggedIn ? 30 * 24 * 60 * 60 : null,
+  });
+
+  res.append('Set-Cookie', accessCookie);
+  res.append('Set-Cookie', refreshCookie);
+  res.append('Set-Cookie', rememberCookie);
+
+  if (!stayLoggedIn) {
+    setLastActivityCookie(req, res);
+  } else {
+    res.append('Set-Cookie', buildCookieHeader('praxis_la', '', {
+      httpOnly: true,
+      secure,
+      sameSite: 'Lax',
+      path: '/',
+      maxAge: 0,
+    }));
+  }
+}
+
+function clearAuthCookies(req, res) {
+  const secure = isSecureRequest(req);
+  res.append('Set-Cookie', buildCookieHeader('praxis_at', '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: 0,
+  }));
+  res.append('Set-Cookie', buildCookieHeader('praxis_rt', '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: 0,
+  }));
+  res.append('Set-Cookie', buildCookieHeader('praxis_rm', '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: 0,
+  }));
+  res.append('Set-Cookie', buildCookieHeader('praxis_la', '', {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: 0,
+  }));
+}
+
+function isNonRememberSession(req) {
+  return getCookieValue(req, 'praxis_rm') === '0';
+}
+
+function hasSessionCookies(req) {
+  return Boolean(getCookieValue(req, 'praxis_at') || getCookieValue(req, 'praxis_rt'));
+}
+
+function getLastActivityMs(req) {
+  const raw = getCookieValue(req, 'praxis_la');
+  const value = Number(raw || 0);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return value;
+}
+
+function setLastActivityCookie(req, res) {
+  const secure = isSecureRequest(req);
+  res.append('Set-Cookie', buildCookieHeader('praxis_la', String(Date.now()), {
+    httpOnly: true,
+    secure,
+    sameSite: 'Lax',
+    path: '/',
+    maxAge: Math.ceil(NON_REMEMBER_INACTIVITY_MS / 1000),
+  }));
 }
 
 function getRequestScopedSupabase(req) {
@@ -232,10 +477,7 @@ function getRequestScopedSupabase(req) {
 // Helper to get authenticated user from request
 async function getUser(req) {
   const token = getBearerToken(req);
-  if (!token) return null;
-  const { data: { user }, error } = await supabaseUserAuth.auth.getUser(token);
-  if (error || !user) return null;
-  return user;
+  return getAuthenticatedUser(supabaseUserAuth, token);
 }
 
 function isRlsDenial(error) {
@@ -243,6 +485,58 @@ function isRlsDenial(error) {
   const code = String(error.code || "");
   const msg = String(error.message || "").toLowerCase();
   return code === "42501" || msg.includes("row-level security") || msg.includes("violates") || msg.includes("insufficient_privilege");
+}
+
+function isMissingRelation(error) {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const message = String(error.message || '').toLowerCase();
+  return code === '42P01' ||
+    code === 'PGRST205' ||
+    (message.includes('relation') && message.includes('does not exist')) ||
+    (message.includes('table') && message.includes('schema cache'));
+}
+
+async function getBackendSetupStatus() {
+  const status = {
+    supabaseUrlConfigured: Boolean(process.env.SUPABASE_URL),
+    serviceRoleConfigured: Boolean(SUPABASE_SERVER_KEY),
+    anonKeyConfigured: Boolean(SUPABASE_BROWSER_KEY),
+    profilesTableReady: false,
+    classesTableReady: false,
+    assignmentsTableReady: false,
+    submissionsTableReady: false,
+    missing: [],
+  };
+
+  if (!process.env.SUPABASE_URL || !SUPABASE_SERVER_KEY) {
+    if (!process.env.SUPABASE_URL) status.missing.push('SUPABASE_URL');
+    if (!SUPABASE_SERVER_KEY) status.missing.push('SUPABASE_SERVICE_ROLE_KEY');
+    return status;
+  }
+
+  const checks = [
+    ['profilesTableReady', 'profiles'],
+    ['classesTableReady', 'classes'],
+    ['assignmentsTableReady', 'assignments'],
+    ['submissionsTableReady', 'submissions'],
+  ];
+
+  for (const [field, table] of checks) {
+    const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+    if (!error) {
+      status[field] = true;
+      continue;
+    }
+    if (isMissingRelation(error)) {
+      status.missing.push(table);
+      continue;
+    }
+    status.missing.push(`${table}: ${error.message}`);
+    return status;
+  }
+
+  return status;
 }
 
 // Research-consent flag must never reach any client (IRB: consent status is
@@ -382,7 +676,25 @@ function stripTrailingSlashes(value) {
 }
 
 function canSendNotificationEmails() {
-  return Boolean(RESEND_API_KEY && NOTIFY_FROM_EMAIL);
+  const hasSmtp = Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && NOTIFY_FROM_EMAIL);
+  const hasResend = Boolean(RESEND_API_KEY && NOTIFY_FROM_EMAIL);
+  return hasSmtp || hasResend;
+}
+
+function getSmtpTransport() {
+  if (smtpTransport) return smtpTransport;
+  if (!(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS)) return null;
+
+  smtpTransport = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+  });
+  return smtpTransport;
 }
 
 function maskEmail(email = '') {
@@ -416,13 +728,343 @@ function errorClassForLog(error) {
 
 function validatePasswordStrength(password) {
   const value = String(password || '');
-  if (value.length < 8) {
-    return 'Password must be at least 8 characters.';
+  if (value.length < 10) {
+    return 'Password must be at least 10 characters.';
+  }
+  if (!/[a-z]/.test(value)) {
+    return 'Password must include at least 1 lowercase letter.';
+  }
+  if (!/[A-Z]/.test(value)) {
+    return 'Password must include at least 1 uppercase letter.';
   }
   if (!/\d/.test(value)) {
     return 'Password must include at least 1 number.';
   }
+  if (!/[^A-Za-z0-9]/.test(value)) {
+    return 'Password must include at least 1 special character.';
+  }
   return '';
+}
+
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function getClientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').trim();
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return String(req.ip || req.socket?.remoteAddress || '').trim() || 'unknown';
+}
+
+function cleanupRateBucket(map, now, windowMs) {
+  for (const [key, value] of map.entries()) {
+    const blockedUntil = Number(value?.blockedUntil || 0);
+    const lastTs = Number(value?.attempts?.[value.attempts.length - 1] || 0);
+    const staleWindow = windowMs * 2;
+    if (blockedUntil > now) continue;
+    if (!lastTs || now - lastTs > staleWindow) {
+      map.delete(key);
+    }
+  }
+}
+
+function evaluateRateBucket(map, key, now, { windowMs, maxAttempts, blockMs, progressiveDelay = null }) {
+  const current = map.get(key) || { attempts: [], blockedUntil: 0 };
+  const activeAttempts = (current.attempts || []).filter((ts) => now - Number(ts || 0) <= windowMs);
+  current.attempts = activeAttempts;
+
+  if (Number(current.blockedUntil || 0) > now) {
+    const retryAfterSeconds = Math.max(1, Math.ceil((current.blockedUntil - now) / 1000));
+    map.set(key, current);
+    return { blocked: true, retryAfterSeconds };
+  }
+
+  if (activeAttempts.length >= maxAttempts) {
+    current.blockedUntil = now + blockMs;
+    map.set(key, current);
+    return { blocked: true, retryAfterSeconds: Math.max(1, Math.ceil(blockMs / 1000)), reason: 'rate_limited' };
+  }
+
+  if (progressiveDelay) {
+    const priorFailures = activeAttempts.length;
+    const startAfter = Math.max(1, Number(progressiveDelay.startAfterAttempts || 1));
+    if (priorFailures >= startAfter) {
+      const exponent = Math.max(0, priorFailures - startAfter);
+      const baseDelayMs = Math.max(1, Number(progressiveDelay.baseDelayMs || 1));
+      const maxDelayMs = Math.max(baseDelayMs, Number(progressiveDelay.maxDelayMs || baseDelayMs));
+      const delayMs = Math.min(maxDelayMs, baseDelayMs * (2 ** exponent));
+      const lastFailureTs = Number(activeAttempts[activeAttempts.length - 1] || 0);
+      if (lastFailureTs > 0) {
+        const nextAllowedTs = lastFailureTs + delayMs;
+        if (nextAllowedTs > now) {
+          map.set(key, current);
+          return {
+            blocked: true,
+            retryAfterSeconds: Math.max(1, Math.ceil((nextAllowedTs - now) / 1000)),
+            reason: 'cooldown',
+          };
+        }
+      }
+    }
+  }
+
+  map.set(key, current);
+  return { blocked: false, retryAfterSeconds: 0, reason: 'ok' };
+}
+
+function registerRateFailure(map, key, now, { windowMs, maxAttempts, blockMs }) {
+  const current = map.get(key) || { attempts: [], blockedUntil: 0 };
+  const activeAttempts = (current.attempts || []).filter((ts) => now - Number(ts || 0) <= windowMs);
+  activeAttempts.push(now);
+  current.attempts = activeAttempts;
+  if (activeAttempts.length >= maxAttempts) {
+    current.blockedUntil = now + blockMs;
+  }
+  map.set(key, current);
+}
+
+function clearRateBucketEntry(map, key) {
+  map.delete(key);
+}
+
+function checkSigninRateLimit(req, email) {
+  const now = Date.now();
+  cleanupRateBucket(signinRateLimiter, now, SIGNIN_RATE_WINDOW_MS);
+  cleanupRateBucket(signinIpRateLimiter, now, SIGNIN_IP_RATE_WINDOW_MS);
+
+  const emailKey = `${getClientIp(req)}:${normalizeEmail(email)}`;
+  const ipKey = getClientIp(req);
+
+  const emailCheck = evaluateRateBucket(signinRateLimiter, emailKey, now, {
+    windowMs: SIGNIN_RATE_WINDOW_MS,
+    maxAttempts: SIGNIN_RATE_MAX_ATTEMPTS,
+    blockMs: SIGNIN_RATE_BLOCK_MS,
+    progressiveDelay: {
+      baseDelayMs: SIGNIN_FAILURE_DELAY_BASE_MS,
+      maxDelayMs: SIGNIN_FAILURE_DELAY_MAX_MS,
+      startAfterAttempts: SIGNIN_FAILURE_DELAY_START_AFTER,
+    },
+  });
+  if (emailCheck.blocked) return emailCheck;
+
+  const ipCheck = evaluateRateBucket(signinIpRateLimiter, ipKey, now, {
+    windowMs: SIGNIN_IP_RATE_WINDOW_MS,
+    maxAttempts: SIGNIN_IP_RATE_MAX_ATTEMPTS,
+    blockMs: SIGNIN_IP_RATE_BLOCK_MS,
+  });
+  if (ipCheck.blocked) return ipCheck;
+
+  return { blocked: false, retryAfterSeconds: 0 };
+}
+
+function registerSigninFailure(req, email) {
+  const now = Date.now();
+  registerRateFailure(signinRateLimiter, `${getClientIp(req)}:${normalizeEmail(email)}`, now, {
+    windowMs: SIGNIN_RATE_WINDOW_MS,
+    maxAttempts: SIGNIN_RATE_MAX_ATTEMPTS,
+    blockMs: SIGNIN_RATE_BLOCK_MS,
+  });
+  registerRateFailure(signinIpRateLimiter, getClientIp(req), now, {
+    windowMs: SIGNIN_IP_RATE_WINDOW_MS,
+    maxAttempts: SIGNIN_IP_RATE_MAX_ATTEMPTS,
+    blockMs: SIGNIN_IP_RATE_BLOCK_MS,
+  });
+}
+
+function clearSigninFailures(req, email) {
+  clearRateBucketEntry(signinRateLimiter, `${getClientIp(req)}:${normalizeEmail(email)}`);
+}
+
+async function maybeCleanupOtpRecords() {
+  const now = Date.now();
+  if (now - otpCleanupLastRanAt < OTP_CLEANUP_INTERVAL_MS) return;
+  otpCleanupLastRanAt = now;
+
+  const cutoffIso = new Date(now - OTP_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
+  const { error } = await supabase
+    .from('auth_email_otps')
+    .delete()
+    .lt('created_at', cutoffIso);
+
+  if (error && !isMissingRelation(error)) {
+    console.warn('OTP cleanup failed:', safeLogError(error));
+  }
+}
+
+function otpHash(email, purpose, code) {
+  return crypto
+    .createHmac('sha256', OTP_SECRET)
+    .update(`${purpose}:${normalizeEmail(email)}:${String(code || '').trim()}`)
+    .digest('hex');
+}
+
+function generateOtpCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(OTP_CODE_LENGTH, '0');
+}
+
+async function getLatestOtp(email, purpose) {
+  const { data, error } = await supabase
+    .from('auth_email_otps')
+    .select('*')
+    .eq('email', normalizeEmail(email))
+    .eq('purpose', purpose)
+    .is('consumed_at', null)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data || null;
+}
+
+async function createOtp(email, purpose) {
+  const code = generateOtpCode();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000).toISOString();
+  const resendAvailableAt = new Date(now.getTime() + OTP_RESEND_SECONDS * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('auth_email_otps')
+    .insert({
+      email: normalizeEmail(email),
+      purpose,
+      code_hash: otpHash(email, purpose, code),
+      attempts: 0,
+      max_attempts: OTP_MAX_ATTEMPTS,
+      expires_at: expiresAt,
+      resend_available_at: resendAvailableAt,
+    })
+    .select('id, resend_available_at, expires_at')
+    .single();
+
+  if (error) throw error;
+
+  return {
+    code,
+    otpId: data.id,
+    expiresAt,
+    resendAvailableAt,
+  };
+}
+
+async function consumeOtpRecord(id) {
+  await supabase
+    .from('auth_email_otps')
+    .update({ consumed_at: new Date().toISOString() })
+    .eq('id', id)
+    .is('consumed_at', null);
+}
+
+async function verifyOtpCode(email, purpose, code) {
+  const latestOtp = await getLatestOtp(email, purpose);
+  if (!latestOtp) {
+    return { ok: false, error: 'Invalid or expired verification code.' };
+  }
+
+  const now = new Date();
+  const expiresAt = new Date(latestOtp.expires_at);
+  if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < now.getTime()) {
+    await consumeOtpRecord(latestOtp.id);
+    return { ok: false, error: 'Invalid or expired verification code.' };
+  }
+
+  const incomingHash = otpHash(email, purpose, code);
+  if (incomingHash !== latestOtp.code_hash) {
+    const nextAttempts = Number(latestOtp.attempts || 0) + 1;
+    const maxAttempts = Number(latestOtp.max_attempts || OTP_MAX_ATTEMPTS);
+    const payload = { attempts: nextAttempts };
+    if (nextAttempts >= maxAttempts) {
+      payload.consumed_at = new Date().toISOString();
+    }
+
+    await supabase
+      .from('auth_email_otps')
+      .update(payload)
+      .eq('id', latestOtp.id)
+      .is('consumed_at', null);
+
+    if (nextAttempts >= maxAttempts) {
+      return { ok: false, error: 'Maximum attempts reached. Please request a new code.' };
+    }
+
+    return {
+      ok: false,
+      error: `Invalid verification code. ${Math.max(0, maxAttempts - nextAttempts)} attempts remaining.`,
+    };
+  }
+
+  await consumeOtpRecord(latestOtp.id);
+  return { ok: true };
+}
+
+async function getAuthUserByEmail(email) {
+  const targetEmail = normalizeEmail(email);
+  let page = 1;
+  const perPage = 200;
+
+  while (page <= 10) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
+    if (error) throw error;
+    const users = data?.users || [];
+    const match = users.find((user) => normalizeEmail(user.email) === targetEmail);
+    if (match) return match;
+    if (users.length < perPage) break;
+    page += 1;
+  }
+
+  return null;
+}
+
+async function requestEmailOtp({ email, purpose, subject, introLine, safetyLine = '', recipientName = '' }) {
+  await maybeCleanupOtpRecords();
+  const normalizedEmail = normalizeEmail(email);
+  const existingOtp = await getLatestOtp(normalizedEmail, purpose);
+
+  if (existingOtp?.resend_available_at) {
+    const nextAllowedTime = new Date(existingOtp.resend_available_at);
+    const waitMs = nextAllowedTime.getTime() - Date.now();
+    if (waitMs > 0) {
+      return {
+        ok: false,
+        status: 429,
+        error: 'Please wait before requesting another code.',
+        retryAfterSeconds: Math.ceil(waitMs / 1000),
+      };
+    }
+  }
+
+  const { code } = await createOtp(normalizedEmail, purpose);
+  const safeName = String(recipientName || '').trim();
+  const greetingName = safeName || 'User';
+  const optionalSafetyLine = String(safetyLine || '').trim();
+  await sendEmail({
+    to: normalizedEmail,
+    subject,
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;color:#1d2a44;">
+        <p>Dear ${escapeHtmlEmail(greetingName)},</p>
+        <p>${escapeHtmlEmail(introLine)}</p>
+        <p>Your verification code is:</p>
+        <p style="font-size:28px;font-weight:800;letter-spacing:4px;margin:12px 0;color:#2563eb;">${escapeHtmlEmail(code)}</p>
+        <p>This code expires in ${OTP_TTL_MINUTES} minutes.</p>
+        ${optionalSafetyLine ? `<p>${escapeHtmlEmail(optionalSafetyLine)}</p>` : ''}
+        <p style="margin-top:20px;color:#5a6d8b;font-size:12px;">Do not reply to this email. This mailbox is not monitored.</p>
+        <p style="margin-top:12px;">Best regards,<br/>PraxisWrite Support Team</p>
+      </div>
+    `,
+    text: `Dear ${greetingName},\n\n${introLine}\n\nYour verification code is: ${code}\nThis code expires in ${OTP_TTL_MINUTES} minutes.${optionalSafetyLine ? `\n\n${optionalSafetyLine}` : ''}\n\nDo not reply to this email. This mailbox is not monitored.\n\nBest regards,\nPraxisWrite Support Team`,
+    idempotencyKey: makeIdempotencyKey([
+      'otp',
+      purpose,
+      normalizedEmail,
+      Date.now(),
+    ]),
+  });
+
+  return {
+    ok: true,
+    resendSeconds: OTP_RESEND_SECONDS,
+  };
 }
 
 function makeIdempotencyKey(parts = []) {
@@ -470,16 +1112,34 @@ async function sendEmail({ to, subject, html, text, idempotencyKey }) {
     return { skipped: true };
   }
   const recipients = Array.isArray(to) ? to : [to];
-  // canSendNotificationEmails() above already guarantees the Resend key and
-  // from-address exist here, so don't log anything derived from them
-  // (CodeQL js/clear-text-logging flags even Boolean(SECRET)).
+  const smtp = getSmtpTransport();
+
   console.info('[EMAIL DIAG] Sending email', {
     subject,
     recipients: recipients.map(maskEmail),
     recipientCount: recipients.length,
     idempotencyKey: idempotencyKey || null,
     from: maskEmail(NOTIFY_FROM_EMAIL),
+    provider: smtp ? 'smtp' : 'resend',
   });
+
+  if (smtp) {
+    const payload = await smtp.sendMail({
+      from: NOTIFY_FROM_EMAIL,
+      to: recipients,
+      subject,
+      html,
+      text,
+    });
+
+    console.info(`Email sent for "${subject}" to ${recipients.length} recipient${recipients.length === 1 ? '' : 's'}.`, {
+      smtpMessageId: payload?.messageId || null,
+      recipients: recipients.map(maskEmail),
+    });
+    return payload;
+  }
+
+  // Fallback to Resend if SMTP is not configured.
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -582,13 +1242,14 @@ async function notifyStudentsAboutAssignment({
   if (!recipients.length) return;
 
   const safeTitle = escapeHtmlEmail(assignment.title || 'New assignment');
+  const subjectTitle = String(assignment.title || 'Assignment')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
   const safeClassName = escapeHtmlEmail(className || 'your class');
   const safeDeadline = formatDeadline(assignment.deadline);
-  const normalizedBaseUrl = stripTrailingSlashes(baseUrl);
-  const safeBaseUrl = normalizedBaseUrl ? `${normalizedBaseUrl}/` : '';
   const subject = mode === 'deadline-reminder'
-    ? 'Assignment due soon'
-    : 'New assignment posted';
+    ? `DO NOT REPLY — Assignment due soon: ${subjectTitle}`
+    : `DO NOT REPLY — New assignment posted: ${subjectTitle}`;
 
   await Promise.allSettled(recipients.map((recipient) => {
     const intro = mode === 'deadline-reminder'
@@ -597,16 +1258,10 @@ async function notifyStudentsAboutAssignment({
     const deadlineLine = safeDeadline
       ? `<p><strong>Deadline:</strong> ${escapeHtmlEmail(safeDeadline)}</p>`
       : '';
-    const buttonHtml = safeBaseUrl
-      ? `<p><a href="${escapeHtmlEmail(safeBaseUrl)}" style="display:inline-block;padding:10px 16px;border-radius:999px;background:#4c6fe7;color:#ffffff;text-decoration:none;font-weight:600;">Open praxis</a></p>`
-      : '';
     const textDeadlineLine = safeDeadline ? `Deadline: ${safeDeadline}\n` : '';
-    const accessLine = safeBaseUrl
-      ? `Open praxis here: ${safeBaseUrl}`
-      : `Open praxis from your usual class link to view the assignment.`;
     const text = mode === 'deadline-reminder'
-      ? `Hi ${recipient.name},\n\nThis is a reminder that an assignment is due in about 24 hours.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}\n${accessLine}`
-      : `Hi ${recipient.name},\n\nYour teacher has posted a new assignment.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}\n${accessLine}`;
+      ? `Hi ${recipient.name},\n\nThis is a reminder that an assignment is due in about 24 hours.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}`
+      : `Hi ${recipient.name},\n\nYour teacher has posted a new assignment.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}`;
 
     return sendEmail({
       to: recipient.email,
@@ -617,7 +1272,6 @@ async function notifyStudentsAboutAssignment({
           <p><strong>Class:</strong> ${safeClassName}</p>
           <p><strong>Assignment:</strong> ${safeTitle}</p>
           ${deadlineLine}
-          ${buttonHtml}
         </div>
       `,
       text,
@@ -663,9 +1317,10 @@ async function notifyStudentAboutGradedSubmission({
   const studentName = submission.profiles?.name || 'Student';
   const safeStudentName = escapeHtmlEmail(studentName);
   const safeTitle = escapeHtmlEmail(assignment.title || 'Assignment');
+  const subjectTitle = String(assignment.title || 'Assignment')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
   const safeClassName = escapeHtmlEmail(assignment.classes?.name || assignment.className || 'your class');
-  const normalizedBaseUrl = stripTrailingSlashes(baseUrl);
-  const safeBaseUrl = normalizedBaseUrl ? `${normalizedBaseUrl}/` : '';
   const score = submission.teacher_review?.finalScore;
   const scoreLine = score !== undefined && score !== null && String(score) !== ''
     ? `<p><strong>Score:</strong> ${escapeHtmlEmail(String(score))}</p>`
@@ -673,16 +1328,10 @@ async function notifyStudentAboutGradedSubmission({
   const textScoreLine = score !== undefined && score !== null && String(score) !== ''
     ? `Score: ${score}\n`
     : '';
-  const accessLine = safeBaseUrl
-    ? `Open praxis here: ${safeBaseUrl}`
-    : `Open praxis from your usual class link to view the feedback.`;
-  const buttonHtml = safeBaseUrl
-    ? `<p><a href="${escapeHtmlEmail(safeBaseUrl)}" style="display:inline-block;padding:10px 16px;border-radius:999px;background:#4c6fe7;color:#ffffff;text-decoration:none;font-weight:600;">View feedback</a></p>`
-    : '';
 
   await sendEmail({
     to: studentEmail,
-    subject: 'Feedback ready',
+    subject: `DO NOT REPLY — Feedback available: ${subjectTitle}`,
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;color:#1d2a44;">
         <p>Hi ${safeStudentName},</p>
@@ -690,10 +1339,9 @@ async function notifyStudentAboutGradedSubmission({
         <p><strong>Class:</strong> ${safeClassName}</p>
         <p><strong>Assignment:</strong> ${safeTitle}</p>
         ${scoreLine}
-        ${buttonHtml}
       </div>
     `,
-    text: `Hi ${studentName},\n\nYour teacher has reviewed your work.\nClass: ${assignment.classes?.name || assignment.className || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\n${textScoreLine}\n${accessLine}`,
+    text: `Hi ${studentName},\n\nYour teacher has reviewed your work.\nClass: ${assignment.classes?.name || assignment.className || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\n${textScoreLine}`,
     idempotencyKey: makeIdempotencyKey([
       'grade-published',
       assignment.id,
@@ -732,19 +1380,14 @@ async function notifyStudentAboutReopenedSubmission({
   const studentName = submission.profiles?.name || 'Student';
   const safeStudentName = escapeHtmlEmail(studentName);
   const safeTitle = escapeHtmlEmail(assignment.title || 'Assignment');
+  const subjectTitle = String(assignment.title || 'Assignment')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
   const safeClassName = escapeHtmlEmail(assignment.classes?.name || assignment.className || 'your class');
-  const normalizedBaseUrl = stripTrailingSlashes(baseUrl);
-  const safeBaseUrl = normalizedBaseUrl ? `${normalizedBaseUrl}/` : '';
-  const buttonHtml = safeBaseUrl
-    ? `<p><a href="${escapeHtmlEmail(safeBaseUrl)}" style="display:inline-block;padding:10px 16px;border-radius:999px;background:#4c6fe7;color:#ffffff;text-decoration:none;font-weight:600;">Open assignment</a></p>`
-    : '';
-  const accessLine = safeBaseUrl
-    ? `Open praxis here: ${safeBaseUrl}`
-    : `Open praxis from your usual class link to edit and resubmit.`;
 
   await sendEmail({
     to: studentEmail,
-    subject: 'Assignment reopened',
+    subject: `DO NOT REPLY — Assignment reopened: ${subjectTitle}`,
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;color:#1d2a44;">
         <p>Hi ${safeStudentName},</p>
@@ -752,10 +1395,9 @@ async function notifyStudentAboutReopenedSubmission({
         <p><strong>Class:</strong> ${safeClassName}</p>
         <p><strong>Assignment:</strong> ${safeTitle}</p>
         <p>You can edit your work and submit it again. Your existing work is still saved.</p>
-        ${buttonHtml}
       </div>
     `,
-    text: `Hi ${studentName},\n\nYour teacher has reopened an assignment.\nClass: ${assignment.classes?.name || assignment.className || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\nYou can edit your work and submit it again. Your existing work is still saved.\n\n${accessLine}`,
+    text: `Hi ${studentName},\n\nYour teacher has reopened an assignment.\nClass: ${assignment.classes?.name || assignment.className || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\nYou can edit your work and submit it again. Your existing work is still saved.`,
     idempotencyKey: makeIdempotencyKey([
       'submission-reopened',
       assignment.id,
@@ -798,24 +1440,19 @@ async function notifyTeacherAboutStudentSubmission({
   const studentName = submission.profiles?.name || 'A student';
   const safeStudentName = escapeHtmlEmail(studentName);
   const safeTitle = escapeHtmlEmail(assignment.title || 'Assignment');
+  const subjectTitle = String(assignment.title || 'Assignment')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
   const safeClassName = escapeHtmlEmail(classRow.name || 'your class');
-  const normalizedBaseUrl = stripTrailingSlashes(baseUrl);
-  const safeBaseUrl = normalizedBaseUrl ? `${normalizedBaseUrl}/` : '';
   const submittedAt = formatDeadline(submission.submitted_at || submission.submittedAt || new Date().toISOString());
   const submittedLine = submittedAt
     ? `<p><strong>Submitted:</strong> ${escapeHtmlEmail(submittedAt)}</p>`
     : '';
   const textSubmittedLine = submittedAt ? `Submitted: ${submittedAt}\n` : '';
-  const buttonHtml = safeBaseUrl
-    ? `<p><a href="${escapeHtmlEmail(safeBaseUrl)}" style="display:inline-block;padding:10px 16px;border-radius:999px;background:#4c6fe7;color:#ffffff;text-decoration:none;font-weight:600;">Open teacher dashboard</a></p>`
-    : '';
-  const accessLine = safeBaseUrl
-    ? `Open praxis here: ${safeBaseUrl}`
-    : `Open praxis from your usual teacher link to review the submission.`;
 
   await sendEmail({
     to: teacherEmail,
-    subject: 'New assignment submission',
+    subject: `DO NOT REPLY — New submission received: ${subjectTitle}`,
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;color:#1d2a44;">
         <p>A student has submitted work for review.</p>
@@ -823,10 +1460,9 @@ async function notifyTeacherAboutStudentSubmission({
         <p><strong>Class:</strong> ${safeClassName}</p>
         <p><strong>Assignment:</strong> ${safeTitle}</p>
         ${submittedLine}
-        ${buttonHtml}
       </div>
     `,
-    text: `A student has submitted work for review.\nStudent: ${studentName}\nClass: ${classRow.name || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\n${textSubmittedLine}\n${accessLine}`,
+    text: `A student has submitted work for review.\nStudent: ${studentName}\nClass: ${classRow.name || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\n${textSubmittedLine}`,
     idempotencyKey: makeIdempotencyKey([
       'student-submitted',
       assignment.id,
@@ -834,6 +1470,127 @@ async function notifyTeacherAboutStudentSubmission({
       submission.submitted_at || submission.submittedAt || submission.updated_at || submission.updatedAt || new Date().toISOString(),
     ]),
   });
+}
+
+let notificationOutboxInFlight = false;
+
+async function deliverNotificationOutboxEvent(event) {
+  const payload = event.payload || {};
+  const baseUrl = getConfiguredPublicBaseUrl();
+
+  if (event.event_type === 'assignment_published') {
+    const { data: assignment, error } = await supabase
+      .from('assignments')
+      .select('*, classes(name)')
+      .eq('id', event.aggregate_id)
+      .single();
+    if (error) throw error;
+    await notifyStudentsAboutAssignment({
+      assignment,
+      className: assignment.classes?.name || 'your class',
+      baseUrl,
+      mode: 'published',
+    });
+    return;
+  }
+
+  if (event.event_type === 'submission_received') {
+    const { data: submission, error: submissionError } = await supabase
+      .from('submissions')
+      .select('*, profiles(id, name)')
+      .eq('id', event.aggregate_id)
+      .single();
+    if (submissionError) throw submissionError;
+    const { data: assignment, error: assignmentError } = await supabase
+      .from('assignments')
+      .select('*')
+      .eq('id', submission.assignment_id)
+      .single();
+    if (assignmentError) throw assignmentError;
+    await notifyTeacherAboutStudentSubmission({ assignment, submission, baseUrl });
+    return;
+  }
+
+  if (event.event_type === 'submission_reviewed' || event.event_type === 'submission_reopened') {
+    const { data: submission, error: submissionError } = await supabase
+      .from('submissions')
+      .select('*, profiles(id, name)')
+      .eq('id', event.aggregate_id)
+      .single();
+    if (submissionError) throw submissionError;
+    const { data: assignment, error: assignmentError } = await supabase
+      .from('assignments')
+      .select('*, classes(name)')
+      .eq('id', submission.assignment_id)
+      .single();
+    if (assignmentError) throw assignmentError;
+    if (event.event_type === 'submission_reviewed') {
+      await notifyStudentAboutGradedSubmission({
+        assignment,
+        submission,
+        previousTeacherReview: payload.previousTeacherReview || {},
+        baseUrl,
+      });
+    } else {
+      await notifyStudentAboutReopenedSubmission({
+        assignment,
+        previousSubmission: payload.previousSubmission || {},
+        submission,
+        baseUrl,
+      });
+    }
+    return;
+  }
+
+  throw new Error(`Unsupported notification outbox event: ${event.event_type}`);
+}
+
+async function processNotificationOutbox() {
+  if (notificationOutboxInFlight || !canSendNotificationEmails()) return;
+  notificationOutboxInFlight = true;
+  try {
+    const { data: events, error } = await supabase
+      .from('notification_outbox')
+      .select('*')
+      .in('status', ['pending', 'failed'])
+      .lte('available_at', new Date().toISOString())
+      .order('created_at', { ascending: true })
+      .limit(25);
+    if (error) throw error;
+
+    for (const event of events || []) {
+      const attemptCount = Number(event.attempt_count || 0) + 1;
+      const { data: claimed, error: claimError } = await supabase
+        .from('notification_outbox')
+        .update({ status: 'processing', attempt_count: attemptCount })
+        .eq('id', event.id)
+        .in('status', ['pending', 'failed'])
+        .select('id')
+        .maybeSingle();
+      if (claimError) throw claimError;
+      if (!claimed) continue;
+
+      try {
+        await deliverNotificationOutboxEvent(event);
+        const { error: deliveredError } = await supabase
+          .from('notification_outbox')
+          .update({
+            status: 'delivered',
+            processed_at: new Date().toISOString(),
+            last_error: null,
+          })
+          .eq('id', event.id);
+        if (deliveredError) throw deliveredError;
+      } catch (deliveryError) {
+        await supabase
+          .from('notification_outbox')
+          .update(buildNotificationFailurePatch(deliveryError, attemptCount))
+          .eq('id', event.id);
+      }
+    }
+  } finally {
+    notificationOutboxInFlight = false;
+  }
 }
 
 async function processUpcomingDeadlineReminders() {
@@ -999,8 +1756,9 @@ async function ensureTeacherOwnsClass(classId, teacherId, client = supabase) {
 async function ensureTeacherOwnsAssignment(assignmentId, teacherId, client = supabase) {
   const { data, error } = await client
     .from('assignments')
-    .select('id, class_id, title, status')
+    .select('id, class_id, title, status, version, updated_at')
     .eq('id', assignmentId)
+    .is('deleted_at', null)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
@@ -1081,6 +1839,7 @@ async function ensureStudentCanAccessAssignment(assignmentId, studentId, client 
     .from('assignments')
     .select('id, class_id, title, status')
     .eq('id', assignmentId)
+    .is('deleted_at', null)
     .maybeSingle();
   if (error) throw error;
   if (!data) return null;
@@ -1092,7 +1851,7 @@ async function ensureStudentCanAccessAssignment(assignmentId, studentId, client 
 async function getSubmissionRecord(submissionId, client = supabase) {
   const { data, error } = await client
     .from('submissions')
-    .select('id, assignment_id, student_id, status, teacher_review, updated_at')
+    .select('id, assignment_id, student_id, status, teacher_review, version, updated_at')
     .eq('id', submissionId)
     .maybeSingle();
   if (error) throw error;
@@ -1602,6 +2361,145 @@ app.post("/api/rubric/parse", uploadRubricSingle, async (req, res) => {
 });
 
 // Alias for the new React frontend naming.
+app.get('/api/rubrics', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const client = getRequestScopedSupabase(req);
+    const { data, error: queryError } = await client
+      .from('rubric_library')
+      .select('*')
+      .eq('owner_id', user.id)
+      .neq('status', 'archived')
+      .order('updated_at', { ascending: false });
+    if (queryError) {
+      // Reusable rubrics are optional until the rubric-library migration is
+      // installed. Assignment creation still embeds its rubric on the
+      // assignment itself, so an absent library must not break the builder.
+      if (isMissingRelation(queryError)) {
+        return res.json({ rubrics: [], libraryAvailable: false });
+      }
+      return res.status(400).json({ error: queryError.message });
+    }
+    res.json({ rubrics: data || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/rubrics', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const rubricSchema = req.body?.rubric_schema || req.body?.rubricSchema || {};
+    const title = String(req.body?.title || rubricSchema.title || 'Untitled rubric').trim();
+    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('rubric_library').insert({
+        owner_id: user.id,
+        title,
+        rubric_schema: rubricSchema,
+        status: String(req.body?.status || 'active').toLowerCase(),
+      }).select().single()
+    );
+    if (writeError) return res.status(400).json({ error: writeError.message });
+    res.json({ rubric: data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/rubrics/:id', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const patch = {};
+    if (req.body?.title !== undefined) patch.title = String(req.body.title).trim();
+    if (req.body?.rubric_schema !== undefined || req.body?.rubricSchema !== undefined) {
+      patch.rubric_schema = req.body.rubric_schema || req.body.rubricSchema;
+    }
+    if (req.body?.status !== undefined) patch.status = String(req.body.status).toLowerCase();
+    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('rubric_library').update(patch)
+        .eq('id', req.params.id).eq('owner_id', user.id).select().maybeSingle()
+    );
+    if (writeError) return res.status(400).json({ error: writeError.message });
+    if (!data) return res.status(404).json({ error: 'Rubric not found.' });
+    res.json({ rubric: data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/rubrics/:id', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('rubric_library').update({ status: 'archived' })
+        .eq('id', req.params.id).eq('owner_id', user.id).select('id').maybeSingle()
+    );
+    if (writeError) return res.status(400).json({ error: writeError.message });
+    if (!data) return res.status(404).json({ error: 'Rubric not found.' });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Durable, per-teacher assignment-builder recovery state.
+app.get('/api/assignment-builder-draft', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const client = getRequestScopedSupabase(req);
+    const { data, error: readError } = await client
+      .from('assignment_builder_drafts')
+      .select('draft_state, updated_at')
+      .eq('owner_id', user.id)
+      .maybeSingle();
+    if (readError) return res.status(400).json({ error: readError.message });
+    res.json({ draft: data?.draft_state || null, updatedAt: data?.updated_at || null });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/assignment-builder-draft', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const draftState = req.body?.draft;
+    if (!draftState || typeof draftState !== 'object' || Array.isArray(draftState)) {
+      return res.status(400).json({ error: 'A valid assignment draft is required.' });
+    }
+    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('assignment_builder_drafts').upsert({
+        owner_id: user.id,
+        draft_state: draftState,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'owner_id' }).select('updated_at').single()
+    );
+    if (writeError) return res.status(400).json({ error: writeError.message });
+    res.json({ ok: true, updatedAt: data.updated_at });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/assignment-builder-draft', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const { error: deleteError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('assignment_builder_drafts').delete().eq('owner_id', user.id)
+    );
+    if (deleteError) return res.status(400).json({ error: deleteError.message });
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.post("/api/rubrics/parse", uploadRubricSingle, async (req, res) => {
   return handleRubricFileParse(req, res);
 });
@@ -1673,6 +2571,23 @@ const AI_TIMEOUT_MS = clampNumber(process.env.AI_TIMEOUT_MS, {
   max: 180000,
   fallback: 120000,
 });
+const AI_UPSTREAM_RETRY_DELAYS_MS = [350, 900];
+
+function waitForAiRetry(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function isRetryableAiTransportError(error) {
+  const code = String(error?.cause?.code || error?.code || "").toUpperCase();
+  return [
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "EPIPE",
+    "ETIMEDOUT",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_SOCKET",
+  ].includes(code);
+}
 
 function aiInputCharCount(prompt, messages, system) {
   let total = String(system || '').length + String(prompt || '').length;
@@ -1740,16 +2655,38 @@ const user = skipAiAuthForTest
     const aiTimeoutId = setTimeout(() => aiAbortController.abort(), AI_TIMEOUT_MS);
     let response;
     try {
-      response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify(requestBody),
-        signal: aiAbortController.signal,
-      });
+      for (let attempt = 0; attempt <= AI_UPSTREAM_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+          response = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': process.env.ANTHROPIC_API_KEY,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify(requestBody),
+            signal: aiAbortController.signal,
+          });
+        } catch (error) {
+          if (
+            error?.name === 'AbortError' ||
+            !isRetryableAiTransportError(error) ||
+            attempt >= AI_UPSTREAM_RETRY_DELAYS_MS.length
+          ) {
+            throw error;
+          }
+          await waitForAiRetry(AI_UPSTREAM_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+
+        if (
+          ![429, 500, 502, 503, 504, 529].includes(response.status) ||
+          attempt >= AI_UPSTREAM_RETRY_DELAYS_MS.length
+        ) {
+          break;
+        }
+        await waitForAiRetry(AI_UPSTREAM_RETRY_DELAYS_MS[attempt]);
+      }
     } finally {
       clearTimeout(aiTimeoutId);
     }
@@ -1770,6 +2707,12 @@ const user = skipAiAuthForTest
     res.json({ response: text });
   } catch (error) {
     if (error.name === 'AbortError') return res.status(504).json({ error: 'AI request timed out. Please try again.' });
+    if (isRetryableAiTransportError(error)) {
+      return res.status(503).json({
+        error: 'The AI connection was interrupted. Please try again.',
+        retryable: true,
+      });
+    }
     res.status(500).json({ error: error.message });
   } finally {
     aiRequestsInFlight--;
@@ -1781,6 +2724,7 @@ const user = skipAiAuthForTest
 function validateSignupPayload({ email, password, name, role }, signupCode) {
   if (!email || !password || !name || !role) return 'email, password, name and role are required';
   if (!['student', 'teacher'].includes(role)) return 'Please choose student or teacher.';
+  if (!isAuiEmail(email)) return 'Access is restricted to @aui.ma accounts.';
   // Optional gate: when TEACHER_SIGNUP_CODE is set, teacher self-signup requires
   // it, so a public pilot URL can't be used to mint teacher accounts (which can
   // spend the AI budget). Inert when the env var is unset — default unchanged.
@@ -1809,12 +2753,20 @@ async function deleteSignupUser(userId, email) {
   }
 }
 
-async function createSignupProfile(userId, name, role) {
+async function createSignupProfile(userId, name, role, email = null) {
   return supabase
     .from('profiles')
-    .insert({ id: userId, name, role })
+    .insert({ id: userId, name, role, email })
     .select()
     .single();
+}
+
+function isAuiEmail(email) {
+  return String(email || '').trim().toLowerCase().endsWith('@aui.ma');
+}
+
+function authDeliveryErrorMessage() {
+  return 'We could not send the verification code right now. Please try again in a minute.';
 }
 
 // Sign up
@@ -1822,22 +2774,37 @@ app.post('/api/auth/signup', async (req, res) => {
   let createdUserId = null;
   let createdUserEmail = null;
   try {
-    const { email, password, name, role, signupCode } = req.body;
-    const validationError = validateSignupPayload({ email, password, name, role }, signupCode);
+    const { email, password, name, role, signupCode, otpCode } = req.body;
+    const cleanEmail = normalizeEmail(email);
+    const cleanName = String(name || '').trim();
+    const validationError = validateSignupPayload({ email: cleanEmail, password, name: cleanName, role }, signupCode);
     if (validationError) return res.status(400).json({ error: validationError });
+    if (!/^\d{6}$/.test(String(otpCode || '').trim())) {
+      return res.status(400).json({ error: 'A valid 6-digit verification code is required.' });
+    }
+
+    const otpCheck = await verifyOtpCode(cleanEmail, OTP_PURPOSE_SIGNUP, otpCode);
+    if (!otpCheck.ok) {
+      return res.status(400).json({ error: otpCheck.error });
+    }
+
+    const existingUser = await getAuthUserByEmail(cleanEmail);
+    if (existingUser) {
+      return res.status(400).json({ error: 'An account with this email already exists.' });
+    }
 
     const { data, error } = await supabase.auth.admin.createUser({
-      email,
+      email: cleanEmail,
       password,
-      user_metadata: { name, role },
+      user_metadata: { name: cleanName, role },
       email_confirm: true,
     });
     if (error) return res.status(400).json({ error: error.message });
     createdUserId = data?.user?.id || null;
-    createdUserEmail = data?.user?.email || email;
+    createdUserEmail = data?.user?.email || cleanEmail;
     if (!createdUserId) return res.status(500).json({ error: SIGNUP_PROFILE_ERROR_MESSAGE });
 
-    const { data: profile, error: profileError } = await createSignupProfile(createdUserId, name, role);
+    const { data: profile, error: profileError } = await createSignupProfile(createdUserId, cleanName, role, cleanEmail);
     if (profileError || !profile) {
       await deleteSignupUser(createdUserId, createdUserEmail);
       return res.status(500).json({ error: SIGNUP_PROFILE_ERROR_MESSAGE });
@@ -1847,6 +2814,43 @@ app.post('/api/auth/signup', async (req, res) => {
   } catch (error) {
     if (createdUserId) await deleteSignupUser(createdUserId, createdUserEmail || req.body?.email);
     res.status(500).json({ error: createdUserId ? SIGNUP_PROFILE_ERROR_MESSAGE : error.message });
+  }
+});
+
+app.post('/api/auth/signup/request-code', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const name = String(req.body?.name || '').trim();
+    if (!email) return res.status(400).json({ error: 'Email is required.' });
+    if (!isAuiEmail(email)) {
+      return res.status(400).json({ error: 'Access is restricted to @aui.ma accounts.' });
+    }
+    if (!canSendNotificationEmails()) {
+      return res.status(503).json({ error: 'Verification email is not configured on the server yet.' });
+    }
+
+    const existingUser = await getAuthUserByEmail(email);
+    if (existingUser) {
+      return res.json({ ok: true, resendSeconds: OTP_RESEND_SECONDS });
+    }
+
+    const result = await requestEmailOtp({
+      email,
+      purpose: OTP_PURPOSE_SIGNUP,
+      subject: 'DO NOT REPLY: PRAXISWRITE SIGNUP VERIFICATION CODE',
+      introLine: 'Use this code to verify your email address and complete your PraxisWrite sign-up.',
+      safetyLine: 'If you did not request this email, you can safely ignore it.',
+      recipientName: name,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error, retryAfterSeconds: result.retryAfterSeconds || 0 });
+    }
+
+    return res.json({ ok: true, resendSeconds: result.resendSeconds });
+  } catch (error) {
+    console.error('Signup code email dispatch failed:', errorClassForLog(error));
+    res.status(500).json({ error: authDeliveryErrorMessage() });
   }
 });
 
@@ -1903,12 +2907,39 @@ function groupBenchmarkMetricsByLevel(submissions, assignmentById, excludedStude
 // Sign in
 app.post('/api/auth/signin', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const { data, error } = await supabaseUserAuth.auth.signInWithPassword({ email, password });
-    if (error) return res.status(401).json({ error: error.message });
+    const { email, password, stayLoggedIn = true } = req.body;
+    const cleanEmail = String(email || '').trim().toLowerCase();
+
+    const rateLimit = checkSigninRateLimit(req, cleanEmail);
+    if (rateLimit.blocked) {
+      res.set('Retry-After', String(rateLimit.retryAfterSeconds));
+      const isShortCooldown = rateLimit.reason === 'cooldown';
+      return res.status(429).json({
+        error: isShortCooldown
+          ? 'Too many recent sign-in attempts for this account. Please wait a few seconds and try again.'
+          : 'Too many sign-in attempts. Please try again later.',
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+      });
+    }
+
+    if (!isAuiEmail(cleanEmail)) {
+      registerSigninFailure(req, cleanEmail);
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+    const { data, error } = await supabaseUserAuth.auth.signInWithPassword({ email: cleanEmail, password });
+    if (error) {
+      registerSigninFailure(req, cleanEmail);
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
     const profile = await getProfile(data.user.id);
-    if (!profile) return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
-    res.json({ session: data.session, profile: sanitizeProfileForClient(profile) });
+    if (!profile) {
+      registerSigninFailure(req, cleanEmail);
+      return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
+    }
+
+    clearSigninFailures(req, cleanEmail);
+    setAuthCookies(req, res, data.session, Boolean(stayLoggedIn));
+    res.json({ profile: sanitizeProfileForClient(profile) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1917,13 +2948,19 @@ app.post('/api/auth/signin', async (req, res) => {
 // Refresh expired Supabase session
 app.post('/api/auth/refresh', async (req, res) => {
   try {
-    const { refresh_token } = req.body;
+    if (req.sessionInactive === true) {
+      return res.status(401).json({ error: 'Session expired due to inactivity.' });
+    }
+    const refresh_token = req.body?.refresh_token || getCookieValue(req, 'praxis_rt');
     if (!refresh_token) return res.status(400).json({ error: 'refresh_token required' });
+
+    const stayLoggedIn = req.body?.stayLoggedIn === true || getCookieValue(req, 'praxis_rm') !== '0';
 
     const { data, error } = await supabaseUserAuth.auth.refreshSession({ refresh_token });
     if (error) return res.status(401).json({ error: error.message });
 
-    res.json({ session: data.session });
+    setAuthCookies(req, res, data.session, stayLoggedIn);
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1932,24 +2969,79 @@ app.post('/api/auth/refresh', async (req, res) => {
 // Sign out
 app.post('/api/auth/signout', async (req, res) => {
   try {
-    const auth = req.headers.authorization;
-    if (auth) await supabase.auth.admin.signOut(auth.slice(7));
-    res.json({ ok: true });
+    const token = getBearerToken(req);
+    if (token) await supabase.auth.admin.signOut(token);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    clearAuthCookies(req, res);
+    return res.status(500).json({ error: error.message });
   }
+  clearAuthCookies(req, res);
+  res.json({ ok: true });
 });
 
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
-    const { email, redirectTo: requestedRedirect } = req.body || {};
-    if (!email) return res.status(400).json({ error: 'Email is required' });
-    const redirectTo = appendResetQuery(getPasswordResetBaseUrl(req, requestedRedirect));
-    const { error } = await supabaseUserAuth.auth.resetPasswordForEmail(String(email).trim(), {
-      redirectTo,
+    const email = normalizeEmail(req.body?.email);
+    if (!email) return res.status(400).json({ error: 'Email is required.' });
+    if (!canSendNotificationEmails()) {
+      return res.status(503).json({ error: 'Verification email is not configured on the server yet.' });
+    }
+
+    const user = await getAuthUserByEmail(email);
+    if (!user || !isAuiEmail(email)) {
+      return res.json({ ok: true, resendSeconds: OTP_RESEND_SECONDS });
+    }
+
+    const result = await requestEmailOtp({
+      email,
+      purpose: OTP_PURPOSE_PASSWORD_RESET,
+      subject: 'DO NOT REPLY: PRAXISWRITE PASSWORD RESET CODE',
+      introLine: 'Use this code to reset your PraxisWrite password.',
+      safetyLine: 'If you did not request a password reset, you can safely ignore this email.',
+      recipientName: 'User',
     });
+
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error, retryAfterSeconds: result.retryAfterSeconds || 0 });
+    }
+
+    return res.json({ ok: true, resendSeconds: result.resendSeconds });
+  } catch (error) {
+    console.error('Forgot-password code email dispatch failed:', errorClassForLog(error));
+    res.status(500).json({ error: authDeliveryErrorMessage() });
+  }
+});
+
+app.post('/api/auth/forgot-password/reset', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const code = String(req.body?.code || '').trim();
+    const password = String(req.body?.password || '');
+
+    if (!email || !code || !password) {
+      return res.status(400).json({ error: 'Email, code and password are required.' });
+    }
+    if (!isAuiEmail(email)) {
+      return res.status(400).json({ error: 'Access is restricted to @aui.ma accounts.' });
+    }
+
+    const passwordError = validatePasswordStrength(password);
+    if (passwordError) return res.status(400).json({ error: passwordError });
+
+    const otpCheck = await verifyOtpCode(email, OTP_PURPOSE_PASSWORD_RESET, code);
+    if (!otpCheck.ok) {
+      return res.status(400).json({ error: otpCheck.error });
+    }
+
+    const user = await getAuthUserByEmail(email);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid or expired verification code.' });
+    }
+
+    const { error } = await supabase.auth.admin.updateUserById(user.id, { password });
     if (error) return res.status(400).json({ error: error.message });
-    res.json({ ok: true, redirectTo });
+
+    return res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1981,6 +3073,151 @@ app.get('/api/notifications/status', async (req, res) => {
       publicBaseUrl: getConfiguredPublicBaseUrl(),
       forgotPasswordRedirectTo: appendResetQuery(getPasswordResetBaseUrl(req, req.query?.redirectTo)),
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/bug-reports', async (req, res) => {
+  let uploadedPath = null;
+  try {
+    const user = await getUser(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const profile = await getProfile(user.id);
+    if (!profile) return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
+    const description = String(req.body?.description || '').trim();
+    if (description.length < 10 || description.length > 5000) {
+      return res.status(400).json({ error: 'Description must be between 10 and 5000 characters.' });
+    }
+    let attachment = null;
+    try {
+      attachment = decodeBugReportAttachment(req.body?.screenshot || null);
+    } catch (error) {
+      const status = /3 MB or smaller/.test(error.message) ? 413 : 400;
+      return res.status(status).json({ error: error.message });
+    }
+
+    const reportId = crypto.randomUUID();
+    if (attachment) {
+      const attachmentPath = `${user.id}/${reportId}/${attachment.name}`;
+      const { error: uploadError } = await supabase.storage
+        .from(BUG_REPORT_BUCKET)
+        .upload(attachmentPath, attachment.buffer, {
+          contentType: attachment.mimeType,
+          upsert: false,
+        });
+      if (uploadError) {
+        return res.status(400).json({ error: `Screenshot upload failed: ${uploadError.message}` });
+      }
+      uploadedPath = attachmentPath;
+    }
+
+    const { data, error } = await submissionWriteWithFallback(req, (client) =>
+      client.from('bug_reports').insert({
+        id: reportId,
+        reporter_id: user.id,
+        reporter_role: profile.role,
+        reporter_name: profile.name,
+        reporter_email: profile.email || user.email || null,
+        description,
+        attachment_path: uploadedPath,
+        attachment_name: attachment?.name || null,
+        attachment_mime_type: attachment?.mimeType || null,
+        attachment_size: attachment?.size || null,
+        route: String(req.body?.route || '').slice(0, 500) || null,
+        context: req.body?.context && typeof req.body.context === 'object'
+          ? req.body.context
+          : {},
+      }).select().single()
+    );
+    if (error) {
+      if (uploadedPath) {
+        await supabase.storage.from(BUG_REPORT_BUCKET).remove([uploadedPath]);
+      }
+      return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+    }
+    res.json({ report: data });
+  } catch (error) {
+    if (uploadedPath) {
+      try {
+        await supabase.storage.from(BUG_REPORT_BUCKET).remove([uploadedPath]);
+      } catch {
+        // Preserve the original request error; orphan cleanup can be retried operationally.
+      }
+    }
+    res.status(500).json({ error: 'The report could not be saved.' });
+  }
+});
+
+app.get('/api/admin/bug-reports', async (req, res) => {
+  try {
+    const user = await requireAdmin(req, res);
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('bug_reports')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ reports: data || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/admin/bug-reports/:id/attachment', async (req, res) => {
+  try {
+    const user = await requireAdmin(req, res);
+    if (!user) return;
+    const { data: report, error } = await supabase
+      .from('bug_reports')
+      .select('attachment_path')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) return res.status(400).json({ error: error.message });
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+    if (!report.attachment_path) return res.status(404).json({ error: 'This report has no screenshot.' });
+
+    const { data, error: signedUrlError } = await supabase.storage
+      .from(BUG_REPORT_BUCKET)
+      .createSignedUrl(report.attachment_path, 300);
+    if (signedUrlError) return res.status(400).json({ error: signedUrlError.message });
+    res.json({ url: data.signedUrl, expiresIn: 300 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/admin/bug-reports/:id', async (req, res) => {
+  try {
+    const user = await requireAdmin(req, res);
+    if (!user) return;
+    const allowedStatuses = new Set(['open', 'in_progress', 'resolved', 'closed']);
+    const allowedPriorities = new Set(['low', 'normal', 'high', 'urgent']);
+    const patch = {};
+    if (req.body?.status !== undefined) {
+      const status = String(req.body.status).toLowerCase();
+      if (!allowedStatuses.has(status)) return res.status(400).json({ error: 'Invalid report status.' });
+      patch.status = status;
+      patch.resolved_at = ['resolved', 'closed'].includes(status) ? new Date().toISOString() : null;
+    }
+    if (req.body?.priority !== undefined) {
+      const priority = String(req.body.priority).toLowerCase();
+      if (!allowedPriorities.has(priority)) return res.status(400).json({ error: 'Invalid report priority.' });
+      patch.priority = priority;
+    }
+    if (req.body?.adminNotes !== undefined) {
+      patch.admin_notes = String(req.body.adminNotes).slice(0, 5000);
+    }
+    const { data, error } = await supabase
+      .from('bug_reports')
+      .update(patch)
+      .eq('id', req.params.id)
+      .select()
+      .maybeSingle();
+    if (error) return res.status(400).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Report not found.' });
+    res.json({ report: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2142,15 +3379,51 @@ app.get('/api/auth/me', async (req, res) => {
 
 // ── Classes endpoints ────────────────────────────────────────
 
+function normalizeClassInviteCode(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+function generateClassInviteCode(name = '') {
+  const letters = String(name || '')
+    .toUpperCase()
+    .replace(/[^A-Z]/g, '');
+  const prefix = `${letters}CRS`.slice(0, 3);
+  const suffix = crypto.randomInt(1000, 10000);
+  return `${prefix}${suffix}`;
+}
+
+async function createClassWithUniqueInviteCode(client, classData, requestedCode = '') {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const inviteCode = attempt === 0 && normalizeClassInviteCode(requestedCode)
+      ? normalizeClassInviteCode(requestedCode)
+      : generateClassInviteCode(classData.name);
+    const { data, error } = await client
+      .from('classes')
+      .insert({ ...classData, invite_code: inviteCode })
+      .select()
+      .single();
+
+    if (!error) return { data, error: null };
+    if (error.code !== '23505') return { data: null, error };
+  }
+
+  return { data: null, error: new Error('Could not generate a unique course access code.') };
+}
+
 // Get teacher's classes
 app.get('/api/classes', async (req, res) => {
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const { data, error } = await readClient
+    const { user, error: teacherError, status } = await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+
+    // Authorization is established above and teacher_id scopes the result.
+    // Use the server client so profile RLS does not erase nested roster names.
+    const { data, error } = await supabase
       .from('classes')
-      .select('*, class_members(student_id, profiles(id, name))')
+      .select('*, class_members(student_id, status, profiles(id, name, email))')
       .eq('teacher_id', user.id)
       .order('created_at', { ascending: false });
     if (error) return res.status(400).json({ error: error.message });
@@ -2165,14 +3438,72 @@ app.post('/api/classes', async (req, res) => {
   try {
     const { user, error: teacherError, status } = await requireTeacherProfile(req);
     if (teacherError) return res.status(status).json({ error: teacherError });
-    const { name } = req.body;
-    const { data, error } = await writeWithRequestScopedFallback(req, (client) => client
-      .from('classes')
-      .insert({ name, teacher_id: user.id })
-      .select()
-      .single());
+    const name = String(req.body?.name || '').trim();
+    if (!name) return res.status(400).json({ error: 'A course name is required.' });
+    const classData = {
+      name,
+      teacher_id: user.id,
+      description: String(req.body?.description || '').trim() || null,
+      semester: String(req.body?.semester || '').trim() || null,
+      is_published: req.body?.isPublished !== false,
+      archived: false,
+    };
+    const { data, error } = await writeWithRequestScopedFallback(
+      req,
+      (client) => createClassWithUniqueInviteCode(
+        client,
+        classData,
+        req.body?.inviteCode
+      )
+    );
     if (error) return res.status(400).json({ error: error.message });
     res.json({ class: data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Join a published course using its durable access code.
+app.post('/api/classes/join-by-code', async (req, res) => {
+  try {
+    const user = await getUser(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const profile = await getProfile(user.id);
+    if (profile?.role !== 'student') {
+      return res.status(403).json({ error: 'Only student accounts can join courses.' });
+    }
+
+    const inviteCode = normalizeClassInviteCode(req.body?.code);
+    if (!inviteCode) return res.status(400).json({ error: 'Please enter a valid course code.' });
+
+    const { data: classRow, error: classError } = await supabase
+      .from('classes')
+      .select('id, name, invite_code, description, semester, is_published, archived, teacher_id')
+      .ilike('invite_code', inviteCode)
+      .maybeSingle();
+
+    if (classError) return res.status(400).json({ error: classError.message });
+    if (!classRow) {
+      return res.status(404).json({ error: 'Invalid course code. Please check the code provided by your instructor.' });
+    }
+    if (classRow.archived || classRow.is_published === false) {
+      return res.status(409).json({ error: 'This course is currently unavailable. Please contact your instructor.' });
+    }
+
+    const { data: membership, error: membershipError } = await writeWithRequestScopedFallback(
+      req,
+      (client) => client
+        .from('class_members')
+        .upsert(
+          { class_id: classRow.id, student_id: user.id, status: 'approved' },
+          { onConflict: 'class_id,student_id' }
+        )
+        .select('class_id, student_id, status')
+        .single()
+    );
+    if (membershipError) return res.status(400).json({ error: membershipError.message });
+
+    res.json({ ok: true, class: classRow, membership });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2314,12 +3645,40 @@ app.get('/api/student/classes', async (req, res) => {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
     const readClient = getRequestScopedSupabase(req);
-    const { data, error } = await readClient
+    const { data: memberships, error: membershipError } = await readClient
       .from('class_members')
-      .select('class_id, status, classes(id, name, teacher_id, profiles(name))')
+      .select('class_id, status')
       .eq('student_id', user.id);
-    if (error) return res.status(400).json({ error: error.message });
-    const rows = (data || []).filter((entry) => entry.classes);
+    if (membershipError) return res.status(400).json({ error: membershipError.message });
+
+    // The membership query above is evaluated with the student's JWT/RLS and
+    // therefore proves exactly which class IDs this user may access. Load only
+    // those verified classes with the server client so a missing/narrow class
+    // SELECT policy cannot silently turn an existing membership into
+    // `classes: null`.
+    const classIds = Array.from(
+      new Set((memberships || []).map((entry) => entry.class_id).filter(Boolean))
+    );
+    if (!classIds.length) {
+      return res.json({ classes: [], pendingClasses: [] });
+    }
+
+    const { data: classRows, error: classError } = await supabase
+      .from('classes')
+      .select('id, name, teacher_id, invite_code, description, semester, is_published, archived, profiles(name)')
+      .in('id', classIds);
+    if (classError) return res.status(400).json({ error: classError.message });
+
+    const classesById = new Map(
+      (classRows || []).map((classRow) => [String(classRow.id), classRow])
+    );
+    const rows = (memberships || [])
+      .map((membership) => ({
+        ...membership,
+        classes: classesById.get(String(membership.class_id)) || null,
+      }))
+      .filter((entry) => entry.classes);
+
     res.json({
       classes: rows.filter((entry) => entry.status !== 'pending').map((entry) => entry.classes),
       pendingClasses: rows.filter((entry) => entry.status === 'pending').map((entry) => entry.classes),
@@ -2378,9 +3737,10 @@ app.get('/api/classes/:classId/members', async (req, res) => {
     const readClient = getRequestScopedSupabase(req);
     const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
     if (!ownedClass) return res.status(403).json({ error: 'You can only view rosters for your own classes.' });
-    const { data, error } = await readClient
+    // Ownership is verified before this server-side roster/profile read.
+    const { data, error } = await supabase
       .from('class_members')
-      .select('student_id, status, profiles(id, name)')
+      .select('student_id, status, profiles(id, name, email)')
       .eq('class_id', req.params.classId);
     if (error) return res.status(400).json({ error: error.message });
     res.json({
@@ -2388,6 +3748,213 @@ app.get('/api/classes/:classId/members', async (req, res) => {
         .filter((entry) => entry.student_id !== user.id && entry.profiles)
         .map((entry) => ({ ...entry.profiles, status: entry.status || 'approved' })),
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send a teacher-authored email to one or all approved students in a course.
+app.post('/api/classes/:classId/messages', async (req, res) => {
+  try {
+    const { user, profile, error: teacherError, status } = await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+    if (!canSendNotificationEmails()) {
+      return res.status(503).json({
+        error: 'Email delivery is not configured. Set SMTP credentials or RESEND_API_KEY and NOTIFY_FROM_EMAIL.',
+      });
+    }
+
+    const recipientMode = req.body?.recipientMode === 'individual' ? 'individual' : 'all';
+    const { data: classRow, error: classError } = await supabase
+      .from('classes')
+      .select('id, name, teacher_id, is_published, archived')
+      .eq('id', req.params.classId)
+      .eq('teacher_id', user.id)
+      .maybeSingle();
+    if (classError) return res.status(400).json({ error: classError.message });
+    if (!classRow) return res.status(403).json({ error: 'You can only message students in your own course.' });
+    const studentId = String(req.body?.studentId || '').trim();
+    const subject = String(req.body?.subject || '').trim();
+    const body = String(req.body?.body || '').trim();
+    const requestId = String(req.body?.requestId || crypto.randomUUID())
+      .replace(/[^A-Za-z0-9_-]/g, '')
+      .slice(0, 120);
+
+    if (!subject || subject.length > 180) {
+      return res.status(400).json({ error: 'Enter a subject of 180 characters or fewer.' });
+    }
+    if (!body || body.length > 20000) {
+      return res.status(400).json({ error: 'Enter a message of 20,000 characters or fewer.' });
+    }
+    if (recipientMode === 'individual' && !studentId) {
+      return res.status(400).json({ error: 'Select an enrolled student.' });
+    }
+    let membershipQuery = supabase
+      .from('class_members')
+      .select('student_id, status, profiles(id, name, email)')
+      .eq('class_id', classRow.id)
+      .eq('status', 'approved');
+    if (recipientMode === 'individual') {
+      membershipQuery = membershipQuery.eq('student_id', studentId);
+    }
+
+    const membershipResult = await membershipQuery;
+    if (membershipResult.error) {
+      return res.status(400).json({ error: membershipResult.error.message });
+    }
+    const memberships = membershipResult.data || [];
+    if (!memberships.length) {
+      return res.status(400).json({
+        error: recipientMode === 'individual'
+          ? 'That student is not enrolled in this course.'
+          : 'This course has no enrolled students with approved access.',
+      });
+    }
+    if (memberships.length > 200) {
+      return res.status(400).json({ error: 'Course messages are limited to 200 recipients at a time.' });
+    }
+
+    const missingEmailIds = memberships
+      .filter((entry) => !normalizeEmail(entry.profiles?.email))
+      .map((entry) => entry.student_id);
+    const authEmailMap = missingEmailIds.length
+      ? await getAuthUserEmailMap(missingEmailIds)
+      : new Map();
+    const recipients = memberships
+      .map((entry) => ({
+        id: entry.student_id,
+        name: entry.profiles?.name || 'Student',
+        email: normalizeEmail(entry.profiles?.email || authEmailMap.get(entry.student_id)),
+      }))
+      .filter((entry) => entry.email);
+
+    if (!recipients.length) {
+      return res.status(400).json({ error: 'No deliverable student email addresses were found.' });
+    }
+
+    const safeBody = escapeHtmlEmail(body).replace(/\r?\n/g, '<br>');
+    const safeTeacherName = escapeHtmlEmail(profile?.name || 'Your instructor');
+    const safeCourseName = escapeHtmlEmail(classRow.name || 'your course');
+    const results = await Promise.allSettled(
+      recipients.map((recipient) => sendEmail({
+        to: recipient.email,
+        subject,
+        html: `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;"><p>Hi ${escapeHtmlEmail(recipient.name)},</p><div>${safeBody}</div><p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p></div>`,
+        text: `Hi ${recipient.name},\n\n${body}\n\nSent by ${profile?.name || 'Your instructor'} · ${classRow.name}`,
+        idempotencyKey: makeIdempotencyKey(['teacher-course-message', user.id, classRow.id, requestId, recipient.id]),
+      }))
+    );
+    const deliveredCount = results.filter(
+      (result) => result.status === 'fulfilled' && !result.value?.skipped
+    ).length;
+    const failedCount = recipients.length - deliveredCount;
+
+    if (deliveredCount === 0) {
+      return res.status(502).json({ error: 'The email provider did not deliver the message. Please try again.' });
+    }
+
+    const messageRecord = {
+      teacher_id: user.id,
+      class_id: classRow.id,
+      recipient_mode: recipientMode,
+      recipient_student_id: recipientMode === 'individual' ? recipients[0].id : null,
+      recipient_emails: recipients.map((recipient) => recipient.email),
+      subject,
+      body,
+      status: failedCount > 0 ? 'partially_sent' : 'sent',
+      delivered_count: deliveredCount,
+      failed_count: failedCount,
+      provider_request_id: requestId,
+      sent_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const { data: storedMessage, error: messageStoreError } =
+      await writeWithRequestScopedFallback(req, (client) =>
+        client.from('course_messages')
+          .upsert(messageRecord, { onConflict: 'teacher_id,provider_request_id' })
+          .select()
+          .single()
+      );
+    if (messageStoreError) {
+      console.error('Delivered course email could not be recorded:', safeLogError(messageStoreError));
+    }
+
+    res.json({
+      ok: true,
+      message: storedMessage || null,
+      courseId: classRow.id,
+      recipientMode,
+      recipientCount: recipients.length,
+      deliveredCount,
+      failedCount,
+      sentAt: new Date().toISOString(),
+      recipient: recipientMode === 'individual'
+        ? { id: recipients[0].id, name: recipients[0].name }
+        : null,
+    });
+  } catch (error) {
+    console.error('Teacher course message failed:', errorClassForLog(error));
+    res.status(500).json({ error: 'The course message could not be sent.' });
+  }
+});
+
+app.get('/api/course-messages', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const client = getRequestScopedSupabase(req);
+    const { data, error: readError } = await client
+      .from('course_messages')
+      .select('*, classes(name, invite_code)')
+      .eq('teacher_id', user.id)
+      .order('created_at', { ascending: false });
+    if (readError) return res.status(400).json({ error: readError.message });
+    res.json({ messages: data || [] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/course-messages/drafts', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const classId = String(req.body?.classId || '').trim();
+    const ownedClass = await ensureTeacherOwnsClass(classId, user.id, getRequestScopedSupabase(req));
+    if (!ownedClass) return res.status(403).json({ error: 'You can only save messages for your own course.' });
+    const payload = {
+      teacher_id: user.id,
+      class_id: classId,
+      recipient_mode: req.body?.recipientMode === 'individual' ? 'individual' : 'all',
+      recipient_student_id: req.body?.studentId || null,
+      recipient_emails: Array.isArray(req.body?.recipientEmails) ? req.body.recipientEmails : [],
+      subject: String(req.body?.subject || ''),
+      body: String(req.body?.body || ''),
+      status: 'draft',
+      updated_at: new Date().toISOString(),
+    };
+    const draftId = String(req.body?.id || '').trim();
+    const result = draftId
+      ? await writeWithRequestScopedFallback(req, (client) => client.from('course_messages')
+          .update(payload).eq('id', draftId).eq('teacher_id', user.id).eq('status', 'draft').select().single())
+      : await writeWithRequestScopedFallback(req, (client) => client.from('course_messages')
+          .insert(payload).select().single());
+    if (result.error) return res.status(400).json({ error: result.error.message });
+    res.json({ message: result.data });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/course-messages/:id', async (req, res) => {
+  try {
+    const { user, error, status } = await requireTeacherProfile(req);
+    if (error) return res.status(status).json({ error });
+    const { error: deleteError } = await writeWithRequestScopedFallback(req, (client) =>
+      client.from('course_messages').delete().eq('id', req.params.id).eq('teacher_id', user.id)
+    );
+    if (deleteError) return res.status(400).json({ error: deleteError.message });
+    res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2415,6 +3982,83 @@ const ASSIGNMENT_ALLOWED_FIELDS = new Set([
   'auto_outline_from_chat',
   'class_id',
 ]);
+
+async function saveAssignmentRevision(assignment, userId, changeType) {
+  if (!assignment?.id) return;
+  const revisionNumber = Number(assignment.version || 1);
+  const { error } = await supabase.from('assignment_revisions').upsert({
+    assignment_id: assignment.id,
+    revision_number: revisionNumber,
+    snapshot: assignment,
+    change_type: changeType,
+    created_by: userId || null,
+  }, { onConflict: 'assignment_id,revision_number', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+async function saveSubmissionRevision(submission, userId, changeType) {
+  if (!submission?.id) return;
+  const revisionNumber = Number(submission.version || 1);
+  const { error } = await supabase.from('submission_revisions').upsert({
+    submission_id: submission.id,
+    revision_number: revisionNumber,
+    snapshot: submission,
+    change_type: changeType,
+    created_by: userId || null,
+  }, { onConflict: 'submission_id,revision_number', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+async function enqueueDomainEvent({ eventType, aggregateType, aggregateId, idempotencyKey, payload }) {
+  const { error } = await supabase.from('notification_outbox').upsert({
+    event_type: eventType,
+    aggregate_type: aggregateType,
+    aggregate_id: aggregateId,
+    idempotency_key: idempotencyKey,
+    payload: payload || {},
+  }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+  if (error) throw error;
+}
+
+function getIdempotencyKey(req) {
+  return String(req.get('Idempotency-Key') || '').trim().slice(0, 200);
+}
+
+async function getIdempotentResponse(userId, operation, idempotencyKey) {
+  if (!idempotencyKey) return null;
+  const { data, error } = await supabase
+    .from('api_idempotency_keys')
+    .select('response_status, response_body')
+    .eq('user_id', userId)
+    .eq('operation', operation)
+    .eq('idempotency_key', idempotencyKey)
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function saveIdempotentResponse({
+  userId,
+  operation,
+  idempotencyKey,
+  resourceType,
+  resourceId,
+  responseStatus,
+  responseBody,
+}) {
+  if (!idempotencyKey) return;
+  const { error } = await supabase.from('api_idempotency_keys').upsert({
+    user_id: userId,
+    operation,
+    idempotency_key: idempotencyKey,
+    resource_type: resourceType,
+    resource_id: resourceId,
+    response_status: responseStatus,
+    response_body: responseBody,
+  }, { onConflict: 'user_id,operation,idempotency_key' });
+  if (error) throw error;
+}
 
 function sanitizePayload(payload = {}, allowedFields = new Set()) {
   return Object.fromEntries(
@@ -2467,6 +4111,7 @@ async function queryAssignmentsForClass(req, classId, accessRole) {
       .from('assignments')
       .select('*')
       .eq('class_id', classId)
+      .is('deleted_at', null)
       .order('created_at', { ascending: false });
     if (accessRole === 'student') {
       query = query.eq('status', 'published');
@@ -2515,6 +4160,11 @@ app.post('/api/classes/:classId/assignments', async (req, res) => {
     const readClient = getRequestScopedSupabase(req);
     const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
     if (!ownedClass) return res.status(403).json({ error: 'You can only add assignments to your own classes.' });
+    const idempotencyKey = getIdempotencyKey(req);
+    const replay = await getIdempotentResponse(user.id, 'create_assignment', idempotencyKey);
+    if (replay?.response_body) {
+      return res.status(replay.response_status || 200).json(replay.response_body);
+    }
     const payload = sanitizeAssignmentPayload(req.body);
     const { data, error, label } = await assignmentWriteWithFallback(req, (client) => client
       .from('assignments')
@@ -2534,7 +4184,18 @@ app.post('/api/classes/:classId/assignments', async (req, res) => {
     if (label && label !== 'server key') {
       console.info(`Assignment created with ${label} after teacher ownership verification.`);
     }
-    res.json({ assignment: data });
+    await saveAssignmentRevision(data, user.id, 'created');
+    const responseBody = { assignment: data };
+    await saveIdempotentResponse({
+      userId: user.id,
+      operation: 'create_assignment',
+      idempotencyKey,
+      resourceType: 'assignment',
+      resourceId: data.id,
+      responseStatus: 200,
+      responseBody,
+    });
+    res.json(responseBody);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2548,14 +4209,26 @@ app.patch('/api/assignments/:id', async (req, res) => {
     const readClient = getRequestScopedSupabase(req);
     const ownedAssignment = await ensureTeacherOwnsAssignment(req.params.id, user.id, readClient);
     if (!ownedAssignment) return res.status(403).json({ error: 'You can only update assignments in your own classes.' });
-    const ownedClass = await ensureTeacherOwnsClass(ownedAssignment.class_id, user.id, readClient);
-    const payload = sanitizeAssignmentPayload(req.body);
+    const expectedVersion = Number(req.body?.expected_version || ownedAssignment.version || 1);
+    if (Number(ownedAssignment.version || 1) !== expectedVersion) {
+      return res.status(409).json({
+        error: 'Assignment was modified elsewhere. Refresh before saving again.',
+        conflict: true,
+        version: ownedAssignment.version,
+      });
+    }
+    const payload = {
+      ...sanitizeAssignmentPayload(req.body),
+      version: expectedVersion + 1,
+    };
     const { data, error, label } = await assignmentWriteWithFallback(req, (client) => client
       .from('assignments')
       .update(payload)
       .eq('id', req.params.id)
+      .eq('version', expectedVersion)
+      .is('deleted_at', null)
       .select()
-      .single());
+      .maybeSingle());
     if (error) {
       if (/row-level security policy/i.test(error.message || "")) {
         return res.status(400).json({
@@ -2566,19 +4239,34 @@ app.patch('/api/assignments/:id', async (req, res) => {
       }
       return res.status(400).json({ error: error.message });
     }
+    if (!data) {
+      return res.status(409).json({
+        error: 'Assignment was modified elsewhere. Refresh before saving again.',
+        conflict: true,
+      });
+    }
     if (label && label !== 'server key') {
       console.info(`Assignment updated with ${label} after teacher ownership verification.`);
     }
     if (ownedAssignment.status !== 'published' && data?.status === 'published') {
-      notifyStudentsAboutAssignment({
-        assignment: data,
-        className: ownedClass?.name || 'your class',
-        baseUrl: getRequestBaseUrl(req),
-        mode: 'published',
-      }).catch((notifyError) => {
-        console.error('Assignment publish email failed:', notifyError);
+      await enqueueDomainEvent({
+        eventType: 'assignment_published',
+        aggregateType: 'assignment',
+        aggregateId: data.id,
+        idempotencyKey: `assignment-published:${data.id}:${data.version}`,
+        payload: { assignmentId: data.id, classId: data.class_id, version: data.version },
+      });
+      processNotificationOutbox().catch((notifyError) => {
+        console.error('Assignment publish outbox processing failed:', notifyError);
       });
     }
+    await saveAssignmentRevision(
+      data,
+      user.id,
+      ownedAssignment.status !== 'published' && data.status === 'published'
+        ? 'published'
+        : 'updated'
+    );
     res.json({ assignment: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2594,28 +4282,19 @@ app.delete('/api/assignments/:id', async (req, res) => {
     const ownedAssignment = await ensureTeacherOwnsAssignment(req.params.id, user.id, readClient);
     if (!ownedAssignment) return res.status(403).json({ error: 'You can only delete assignments in your own classes.' });
 
-    const { data: submissionsToArchive, error: fetchError } = await supabase
-      .from('submissions')
-      .select('*')
-      .eq('assignment_id', req.params.id);
-    if (fetchError) return res.status(400).json({ error: fetchError.message });
-    // Preserve de-identified keystroke/writing-process data before the hard delete.
-    await archiveSubmissionsForDeletion(submissionsToArchive, {
-      reason: 'assignment_deleted',
-      classId: ownedAssignment.class_id ?? null,
-    });
-
-    const { error: submissionDeleteError } = await supabase
-      .from('submissions')
-      .delete()
-      .eq('assignment_id', req.params.id);
-    if (submissionDeleteError) return res.status(400).json({ error: submissionDeleteError.message });
-
-    const { error } = await supabase
+    const deletedAt = new Date().toISOString();
+    const { data, error } = await supabase
       .from('assignments')
-      .delete()
-      .eq('id', req.params.id);
+      .update({
+        deleted_at: deletedAt,
+        status: 'archived',
+        version: Number(ownedAssignment.version || 1) + 1,
+      })
+      .eq('id', req.params.id)
+      .select()
+      .single();
     if (error) return res.status(400).json({ error: error.message });
+    await saveAssignmentRevision(data, user.id, 'archived');
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -2627,9 +4306,32 @@ app.delete('/api/assignments/:id', async (req, res) => {
 async function querySubmissionsForAssignments(assignmentIds, client = supabase) {
   const { data, error } = await client
     .from('submissions')
-    .select('*, profiles(id, name)')
+    .select([
+      'id',
+      'assignment_id',
+      'student_id',
+      'status',
+      'draft_text',
+      'final_text',
+      'reflections',
+      'self_assessment',
+      'teacher_review',
+      'submitted_at',
+      'started_at',
+      'created_at',
+      'updated_at',
+      'version',
+      'deleted_at',
+      'profiles(id, name, email)',
+    ].join(','))
     .in('assignment_id', assignmentIds);
-  return { data: data || [], error };
+  return {
+    data: (data || []).map((submission) => ({
+      ...submission,
+      detail_loaded: false,
+    })),
+    error,
+  };
 }
 
 
@@ -2659,6 +4361,48 @@ app.get('/api/classes/:classId/submissions', async (req, res) => {
   } catch (error) {
     console.error('Unexpected class submissions failure:', safeLogError(error));
     res.status(500).json({ error: 'Could not load submissions right now. Please refresh and try again.' });
+  }
+});
+
+// Get all submissions across the authenticated teacher's classes in one
+// request. This supports low-cost near-real-time review updates without an
+// N+1 request for every course.
+app.get('/api/teacher/submissions', async (req, res) => {
+  try {
+    const { user, error: teacherError, status } = await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+    const readClient = getRequestScopedSupabase(req);
+
+    const { data: classes, error: classError } = await readClient
+      .from('classes')
+      .select('id')
+      .eq('teacher_id', user.id);
+    if (classError) return res.status(400).json({ error: classError.message });
+
+    const classIds = (classes || []).map((entry) => entry.id).filter(Boolean);
+    if (!classIds.length) return res.json({ submissions: [] });
+
+    const { data: assignments, error: assignmentError } = await readClient
+      .from('assignments')
+      .select('id')
+      .in('class_id', classIds);
+    if (assignmentError) {
+      return res.status(400).json({ error: assignmentError.message });
+    }
+
+    const assignmentIds = (assignments || []).map((entry) => entry.id).filter(Boolean);
+    if (!assignmentIds.length) return res.json({ submissions: [] });
+
+    const { data, error } = await querySubmissionsForAssignments(
+      assignmentIds,
+      readClient
+    );
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ submissions: data });
+  } catch (error) {
+    console.error('Unexpected teacher submissions failure:', safeLogError(error));
+    res.status(500).json({ error: 'Could not refresh submissions right now.' });
   }
 });
 
@@ -2778,6 +4522,7 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
         .single());
       if (createError) return res.status(400).json({ error: createError.message });
       data = newData;
+      await saveSubmissionRevision(data, user.id, 'started');
     } else if (error) {
       return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
     }
@@ -2889,6 +4634,11 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
     if (!accessibleAssignment) {
       return res.status(403).json({ error: 'You do not have access to this assignment.' });
     }
+    const idempotencyKey = getIdempotencyKey(req);
+    const replay = await getIdempotentResponse(user.id, 'submit_assignment', idempotencyKey);
+    if (replay?.response_body) {
+      return res.status(replay.response_status || 200).json(replay.response_body);
+    }
 
     const payload = sanitizeStudentSubmissionPayload(req.body);
     const submittedAt = new Date().toISOString();
@@ -2910,6 +4660,13 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
     if (existingError) return res.status(isRlsDenial(existingError) ? 403 : 400).json({ error: existingError.message });
 
     if (existing?.id) {
+      const { data: existingRow, error: existingRowError } = await submissionClient
+        .from('submissions')
+        .select('version')
+        .eq('id', existing.id)
+        .single();
+      if (existingRowError) return res.status(400).json({ error: existingRowError.message });
+      nextPayload.version = Number(existingRow.version || 1) + 1;
       const { data, error } = await submissionWriteWithFallback(req, (client) => client
         .from('submissions')
         .update(nextPayload)
@@ -2917,14 +4674,33 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
         .select('*, profiles(id, name)')
         .single());
       if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
-      await waitForNotifications('Teacher submission notification email', [
-        notifyTeacherAboutStudentSubmission({
-          assignment: accessibleAssignment,
-          submission: data,
-          baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-        }),
-      ]);
-      return res.json({ submission: data });
+      await saveSubmissionRevision(data, user.id, 'submitted');
+      await enqueueDomainEvent({
+        eventType: 'submission_received',
+        aggregateType: 'submission',
+        aggregateId: data.id,
+        idempotencyKey: `submission-received:${data.id}:${data.version}`,
+        payload: {
+          submissionId: data.id,
+          assignmentId: data.assignment_id,
+          studentId: data.student_id,
+          version: data.version,
+        },
+      });
+      processNotificationOutbox().catch((notifyError) => {
+        console.error('Submission outbox processing failed:', notifyError);
+      });
+      const responseBody = { submission: data };
+      await saveIdempotentResponse({
+        userId: user.id,
+        operation: 'submit_assignment',
+        idempotencyKey,
+        resourceType: 'submission',
+        resourceId: data.id,
+        responseStatus: 200,
+        responseBody,
+      });
+      return res.json(responseBody);
     }
 
     const { data, error } = await submissionWriteWithFallback(req, (client) => client
@@ -2938,14 +4714,33 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
       .select('*, profiles(id, name)')
       .single());
     if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
-    await waitForNotifications('Teacher submission notification email', [
-      notifyTeacherAboutStudentSubmission({
-        assignment: accessibleAssignment,
-        submission: data,
-        baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-      }),
-    ]);
-    res.json({ submission: data });
+    await saveSubmissionRevision(data, user.id, 'submitted');
+    await enqueueDomainEvent({
+      eventType: 'submission_received',
+      aggregateType: 'submission',
+      aggregateId: data.id,
+      idempotencyKey: `submission-received:${data.id}:${data.version}`,
+      payload: {
+        submissionId: data.id,
+        assignmentId: data.assignment_id,
+        studentId: data.student_id,
+        version: data.version,
+      },
+    });
+    processNotificationOutbox().catch((notifyError) => {
+      console.error('Submission outbox processing failed:', notifyError);
+    });
+    const responseBody = { submission: data };
+    await saveIdempotentResponse({
+      userId: user.id,
+      operation: 'submit_assignment',
+      idempotencyKey,
+      resourceType: 'submission',
+      resourceId: data.id,
+      responseStatus: 200,
+      responseBody,
+    });
+    res.json(responseBody);
   } catch (error) {
     console.error('Unexpected submit failure:', errorClassForLog(error));
     res.status(500).json({ error: 'Could not submit your work right now. Please try again.' });
@@ -3037,6 +4832,41 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
   }
 });
 
+// Load heavy process data only when a student or owning teacher opens one
+// submission. Class/assignment lists deliberately exclude event and chat arrays.
+app.get('/api/submissions/:id', async (req, res) => {
+  try {
+    const user = await getUser(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const readClient = getRequestScopedSupabase(req);
+    const existing = await getSubmissionRecord(req.params.id, readClient);
+    if (!existing) return res.status(404).json({ error: 'Submission not found' });
+
+    if (existing.student_id !== user.id) {
+      const ownedAssignment = await ensureTeacherOwnsAssignment(
+        existing.assignment_id,
+        user.id,
+        readClient
+      );
+      if (!ownedAssignment) {
+        return res.status(403).json({ error: 'You do not have permission to view this submission.' });
+      }
+    }
+
+    const { data, error } = await readClient
+      .from('submissions')
+      .select('*, profiles(id, name)')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+    if (!data) return res.status(404).json({ error: 'Submission not found' });
+    res.json({ submission: { ...data, detail_loaded: true } });
+  } catch (error) {
+    console.error('Unexpected submission detail failure:', errorClassForLog(error));
+    res.status(500).json({ error: 'Could not load this submission right now. Please try again.' });
+  }
+});
+
 // Update submission
 app.patch('/api/submissions/:id', async (req, res) => {
   try {
@@ -3071,10 +4901,14 @@ app.patch('/api/submissions/:id', async (req, res) => {
           updated_at: submission.updated_at,
         });
       }
-      payload = built.payload;
+      payload = {
+        ...built.payload,
+        version: Number(submission.version || 1) + 1,
+      };
     } else {
       payload = submissionPayloadWithGradedStatus({
         ...sanitizeTeacherSubmissionPayload(req.body),
+        version: Number(submission.version || 1) + 1,
         updated_at: new Date().toISOString(),
       });
     }
@@ -3083,24 +4917,39 @@ app.patch('/api/submissions/:id', async (req, res) => {
       .from('submissions')
       .update(payload)
       .eq('id', req.params.id)
+      .eq('version', Number(submission.version || 1))
       .select('*, profiles(id, name)')
-      .single());
+      .maybeSingle());
     if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+    if (!data) {
+      return res.status(409).json({
+        error: 'Submission was modified elsewhere. Refresh before saving again.',
+        conflict: true,
+      });
+    }
+    await saveSubmissionRevision(data, user.id, isStudentOwner ? 'autosaved' : 'reviewed');
     if (ownedAssignment) {
-      await waitForNotifications('Student review notification email', [
-        notifyStudentAboutGradedSubmission({
-          assignment: ownedAssignment,
-          submission: data,
-          previousTeacherReview: submission.teacher_review,
-          baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-        }),
-        notifyStudentAboutReopenedSubmission({
-          assignment: ownedAssignment,
-          previousSubmission: submission,
-          submission: data,
-          baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-        }),
-      ]);
+      if (teacherReviewWasNewlySaved(submission.teacher_review, data.teacher_review)) {
+        await enqueueDomainEvent({
+          eventType: 'submission_reviewed',
+          aggregateType: 'submission',
+          aggregateId: data.id,
+          idempotencyKey: `submission-reviewed:${data.id}:${data.version}`,
+          payload: { previousTeacherReview: submission.teacher_review || {} },
+        });
+      }
+      if (submissionWasReopened(submission, data)) {
+        await enqueueDomainEvent({
+          eventType: 'submission_reopened',
+          aggregateType: 'submission',
+          aggregateId: data.id,
+          idempotencyKey: `submission-reopened:${data.id}:${data.version}`,
+          payload: { previousSubmission: submission },
+        });
+      }
+      processNotificationOutbox().catch((notifyError) => {
+        console.error('Student review outbox processing failed:', notifyError);
+      });
     }
     res.json({ submission: data });
   } catch (error) {
@@ -3990,17 +5839,36 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
   if (canSendNotificationEmails()) {
-    processUpcomingDeadlineReminders().catch((error) => {
-      console.error('Initial deadline reminder check failed:', error);
-    });
-    if (deadlineReminderJob) clearInterval(deadlineReminderJob);
-    deadlineReminderJob = setInterval(() => {
-      processUpcomingDeadlineReminders().catch((error) => {
-        console.error('Scheduled deadline reminder check failed:', error);
+    getBackendSetupStatus()
+      .then((setupStatus) => {
+        if (!setupStatus.assignmentsTableReady) {
+          console.log('Deadline reminder job skipped: assignments table is not ready yet.');
+          return;
+        }
+
+        processUpcomingDeadlineReminders().catch((error) => {
+          console.error('Initial deadline reminder check failed:', error);
+        });
+        processNotificationOutbox().catch((error) => {
+          console.error('Initial notification outbox check failed:', error);
+        });
+        if (deadlineReminderJob) clearInterval(deadlineReminderJob);
+        deadlineReminderJob = setInterval(() => {
+          processUpcomingDeadlineReminders().catch((error) => {
+            console.error('Scheduled deadline reminder check failed:', error);
+          });
+        }, DEADLINE_REMINDER_POLL_MS);
+        if (notificationOutboxJob) clearInterval(notificationOutboxJob);
+        notificationOutboxJob = setInterval(() => {
+          processNotificationOutbox().catch((error) => {
+            console.error('Scheduled notification outbox check failed:', error);
+          });
+        }, 30_000);
+      })
+      .catch((error) => {
+        console.error('Deadline reminder setup check failed:', error);
       });
-    }, DEADLINE_REMINDER_POLL_MS);
   } else {
     console.log('Email notifications are disabled. Set RESEND_API_KEY and NOTIFY_FROM_EMAIL to enable publish/deadline emails.');
   }
 });
-

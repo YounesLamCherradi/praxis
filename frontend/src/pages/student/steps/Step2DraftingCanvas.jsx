@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useStudentWorkspace } from "../../../contexts/StudentWorkspaceContext";
+import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -356,10 +356,6 @@ export default function Step2DraftingCanvas() {
     activeSubmission?.studentEmail ||
     "student@aui.ma";
 
-  const integrityLogKey = useMemo(() => {
-    return `praxis_integrity_logs:${studentEmail}:${assignmentId}`;
-  }, [studentEmail, assignmentId]);
-
   const draftValue =
     typedText !== undefined && typedText !== null
       ? typedText
@@ -461,7 +457,7 @@ export default function Step2DraftingCanvas() {
 
   useEffect(() => {
     lastValueRef.current = draftValue;
-  }, [assignmentId]);
+  }, [assignmentId, activeSubmission?.id]);
 
 
   useEffect(() => {
@@ -480,18 +476,6 @@ export default function Step2DraftingCanvas() {
     writingSessionStartedAtRef.current =
       activeSubmission?.writingSessionStartedAt || null;
   }, [activeSubmission?.id, assignmentId]);
-
-  useEffect(() => {
-    try {
-      const saved = JSON.parse(
-        localStorage.getItem(integrityLogKey) || "[]"
-      );
-
-      setIntegrityLogs(Array.isArray(saved) ? saved : []);
-    } catch {
-      setIntegrityLogs([]);
-    }
-  }, [integrityLogKey]);
 
   useEffect(() => {
     return () => {
@@ -755,12 +739,6 @@ export default function Step2DraftingCanvas() {
   function saveIntegrityLogs(nextLogs) {
     integrityLogsRef.current = nextLogs;
     setIntegrityLogs(nextLogs);
-
-    try {
-      localStorage.setItem(integrityLogKey, JSON.stringify(nextLogs));
-    } catch {
-      // Local logging should never interrupt drafting.
-    }
   }
 
   function recordIntegrityEvent({
@@ -1173,6 +1151,21 @@ export default function Step2DraftingCanvas() {
   }
 
   function handleBlur() {
+    /*
+     * Switching browser tabs can throttle the normal debounced autosave.
+     * Flush the exact controlled-editor value before any focus-triggered
+     * workspace refresh occurs, regardless of whether focus monitoring is
+     * enabled for this assignment.
+     */
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+
+    const savedAt = persistWritingEvidence(draftValue);
+    setLastSavedAt(savedAt);
+    setSaveStatus("saved");
+
     if (!settings.trackFocusLoss) return;
 
     const timestamp = new Date().toISOString();
@@ -1214,7 +1207,6 @@ export default function Step2DraftingCanvas() {
       },
     });
 
-    persistWritingEvidence(draftValue);
   }
 
   function handleReviewDraft() {

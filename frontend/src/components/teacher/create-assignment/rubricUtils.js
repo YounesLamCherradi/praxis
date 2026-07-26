@@ -212,6 +212,43 @@ export function calculateTotal(criteria = []) {
   );
 }
 
+export function fitCriteriaToTotal(criteria = [], requestedTotal = 20) {
+  const normalized = safeArray(criteria).map(normalizeCriterion);
+  const target = Math.max(1, Math.floor(Number(requestedTotal) || 20));
+  if (!normalized.length) return normalized;
+
+  const currentTotal = calculateTotal(normalized);
+  const rawPoints = normalized.map((criterion) =>
+    currentTotal > 0
+      ? (Number(criterion.points || 0) / currentTotal) * target
+      : target / normalized.length
+  );
+  const assignedPoints = rawPoints.map(Math.floor);
+  let remainder = target - assignedPoints.reduce((sum, points) => sum + points, 0);
+
+  rawPoints
+    .map((points, index) => ({ index, fraction: points - Math.floor(points) }))
+    .sort((a, b) => b.fraction - a.fraction)
+    .forEach(({ index }) => {
+      if (remainder > 0) {
+        assignedPoints[index] += 1;
+        remainder -= 1;
+      }
+    });
+
+  return normalized.map((criterion, index) => {
+    const oldMaximum = Number(criterion.points || 0);
+    const points = assignedPoints[index];
+    const bands = safeArray(criterion.bands).map((band) => {
+      const ratio = oldMaximum > 0 ? Number(band.points || 0) / oldMaximum : 0;
+      const bandPoints = Math.min(points, roundToHalf(points * ratio));
+      return { ...band, points: bandPoints, score: bandPoints };
+    });
+
+    return normalizeCriterion({ ...criterion, points, maxScore: points, bands }, index);
+  });
+}
+
 export function parseRubricText(text = "") {
   const lines = String(text || "")
     .split(/\r?\n/)

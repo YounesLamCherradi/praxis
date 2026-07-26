@@ -14,13 +14,35 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const profile = AuthService.getProfile();
+    let active = true;
 
-    if (profile) {
-      setUser(profile);
+    async function bootstrapAuth() {
+      const cachedProfile = AuthService.getProfile();
+      if (cachedProfile && active) {
+        setUser(cachedProfile);
+      }
+
+      try {
+        const restoredProfile = await AuthService.restoreSession();
+        if (restoredProfile && active) {
+          setUser(restoredProfile);
+        }
+      } catch (error) {
+        // A temporary backend outage must not create an unhandled rejection.
+        // Keep the cached profile so local recovery data remains accessible.
+        console.error("Could not restore the server session:", error);
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
     }
 
-    setLoading(false);
+    bootstrapAuth();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function signIn(email, password, stayLoggedIn = true) {
@@ -35,13 +57,21 @@ export function AuthProvider({ children }) {
     return profile;
   }
 
-  async function signUp(name, email, password, role) {
-    const profile = await AuthService.signUp(
-      name,
-      email,
-      password,
-      role
-    );
+  async function signUp(name, email, password, role, otpCode = "") {
+    const profile = otpCode
+      ? await AuthService.signUpWithCode(
+          name,
+          email,
+          password,
+          role,
+          otpCode
+        )
+      : await AuthService.signUp(
+          name,
+          email,
+          password,
+          role
+        );
 
     setUser(profile);
 
