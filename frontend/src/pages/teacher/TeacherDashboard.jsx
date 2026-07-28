@@ -177,7 +177,7 @@ function getTeacherIdentity(authUser, authProfile) {
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const workspaceRequestIdRef = useRef(0);
   const handledDeepLinkRef = useRef("");
   const {
@@ -246,7 +246,12 @@ export default function TeacherDashboard() {
     [activeAssignments]
   );
 
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(() => {
+    const requestedTab = String(searchParams.get("tab") || "").trim();
+    return ["overview", "assignments", "communication"].includes(requestedTab)
+      ? requestedTab
+      : "overview";
+  });
 
   const [assignmentWorkspaceRequest, setAssignmentWorkspaceRequest] = useState({
     mode: "browse",
@@ -255,6 +260,54 @@ export default function TeacherDashboard() {
     statusFilter: "All",
     requestId: 0,
   });
+
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams);
+
+    if (activeTab === "overview") {
+      next.delete("tab");
+    } else {
+      next.set("tab", activeTab);
+    }
+
+    if (activeTab !== "assignments") {
+      next.delete("course");
+      next.delete("assignment");
+      next.delete("review");
+      next.delete("status");
+    }
+
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [activeTab, searchParams, setSearchParams]);
+
+  function rememberTeacherAssignmentLocation({
+    courseId,
+    assignmentId,
+    statusFilter,
+  } = {}) {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "assignments");
+
+    if (courseId) next.set("course", String(courseId));
+    else next.delete("course");
+
+    if (assignmentId) next.set("assignment", String(assignmentId));
+    else next.delete("assignment");
+
+    if (assignmentId && statusFilter && statusFilter !== "All") {
+      next.set("status", String(statusFilter));
+    } else {
+      next.delete("status");
+    }
+
+    if (!assignmentId) next.delete("review");
+
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [classNameInput, setClassNameInput] = useState("");
@@ -862,15 +915,25 @@ export default function TeacherDashboard() {
     );
 
     setActiveTab("assignments");
+
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", "assignments");
+    if (assignment.classId) next.set("course", String(assignment.classId));
+    else next.delete("course");
+    next.set("assignment", String(assignment.id));
+    next.set("review", "submissions");
+    next.set("status", "Pending");
+    setSearchParams(next, { replace: true });
   }
 
   useEffect(() => {
     const assignmentId = String(searchParams.get("assignment") || "").trim();
     const courseId = String(searchParams.get("course") || "").trim();
     const reviewMode = String(searchParams.get("review") || "").trim();
-    if (!assignmentId || reviewMode !== "submissions") return;
+    const statusFilter = String(searchParams.get("status") || "").trim();
+    if (!assignmentId) return;
 
-    const deepLinkKey = `${courseId}:${assignmentId}:${reviewMode}`;
+    const deepLinkKey = `${courseId}:${assignmentId}:${reviewMode}:${statusFilter}`;
     if (handledDeepLinkRef.current === deepLinkKey) return;
 
     const assignment = assignments.find(
@@ -879,10 +942,23 @@ export default function TeacherDashboard() {
     if (!assignment) return;
 
     handledDeepLinkRef.current = deepLinkKey;
-    openAssignmentReview({
-      ...assignment,
-      classId: assignment.classId || courseId || null,
-    });
+    if (reviewMode === "submissions") {
+      openAssignmentReview({
+        ...assignment,
+        classId: assignment.classId || courseId || null,
+      });
+      return;
+    }
+
+    setAssignmentWorkspaceRequest(
+      createWorkspaceRequest({
+        mode: "review",
+        courseId: assignment.classId || courseId || null,
+        assignmentId: assignment.id,
+        statusFilter: statusFilter || "All",
+      })
+    );
+    setActiveTab("assignments");
   }, [assignments, searchParams]);
 
   function openPendingReviews() {
@@ -1890,6 +1966,7 @@ export default function TeacherDashboard() {
             {activeTab === "assignments" && (
               <TeacherAssignments
                 workspaceRequest={assignmentWorkspaceRequest}
+                onNavigationStateChange={rememberTeacherAssignmentLocation}
               />
             )}
 

@@ -3,6 +3,8 @@ import { AlertCircle, ArrowRight, KeyRound, Loader2, Mail, ShieldCheck } from "l
 import AuthService from "../../services/auth";
 
 const RESEND_SECONDS = 60;
+const RESET_CODE_PENDING_KEY = "praxis-password-reset-code-pending-v1";
+const RESET_CODE_COOLDOWN_MS = RESEND_SECONDS * 1000;
 
 export default function ForgotPasswordDialog({ open, onClose }) {
   const [email, setEmail] = useState("");
@@ -38,6 +40,34 @@ export default function ForgotPasswordDialog({ open, onClose }) {
     return () => window.clearInterval(timer);
   }, [resendAt]);
 
+  useEffect(() => {
+    if (!open) return;
+    try {
+      const pending = JSON.parse(
+        window.sessionStorage.getItem(RESET_CODE_PENDING_KEY) || "null"
+      );
+      const requestedAt = Number(pending?.requestedAt || 0);
+      if (
+        !pending?.email ||
+        !requestedAt ||
+        Date.now() - requestedAt >= RESET_CODE_COOLDOWN_MS
+      ) {
+        window.sessionStorage.removeItem(RESET_CODE_PENDING_KEY);
+        return;
+      }
+
+      setEmail(String(pending.email));
+      setCountdownNow(Date.now());
+      setResendAt(requestedAt + RESET_CODE_COOLDOWN_MS);
+      setStep("reset");
+      setMessage(
+        "A password-reset request is already in progress. Check your inbox before requesting another code."
+      );
+    } catch {
+      window.sessionStorage.removeItem(RESET_CODE_PENDING_KEY);
+    }
+  }, [open]);
+
   const waitSeconds = Math.max(0, Math.ceil((resendAt - countdownNow) / 1000));
 
   if (!open) return null;
@@ -54,11 +84,16 @@ export default function ForgotPasswordDialog({ open, onClose }) {
         throw new Error("Access is restricted to @aui.ma accounts.");
       }
 
-      await AuthService.requestPasswordResetCode(cleanEmail);
       const requestedAt = Date.now();
       setCountdownNow(requestedAt);
-      setResendAt(requestedAt + RESEND_SECONDS * 1000);
+      setResendAt(requestedAt + RESET_CODE_COOLDOWN_MS);
       setStep("reset");
+      window.sessionStorage.setItem(
+        RESET_CODE_PENDING_KEY,
+        JSON.stringify({ email: cleanEmail, requestedAt })
+      );
+
+      await AuthService.requestPasswordResetCode(cleanEmail);
       setMessage("If the account exists, a 6-digit code has been sent. Please check your inbox.");
     } catch (err) {
       setError(err.message || "Could not send code right now.");
@@ -88,6 +123,7 @@ export default function ForgotPasswordDialog({ open, onClose }) {
       }
 
       await AuthService.resetPasswordWithCode(cleanEmail, cleanCode, password);
+      window.sessionStorage.removeItem(RESET_CODE_PENDING_KEY);
       setMessage("Password updated. You can now sign in with the new password.");
       setStep("done");
     } catch (err) {
@@ -106,10 +142,15 @@ export default function ForgotPasswordDialog({ open, onClose }) {
 
     try {
       const cleanEmail = email.trim().toLowerCase();
-      await AuthService.requestPasswordResetCode(cleanEmail);
       const requestedAt = Date.now();
       setCountdownNow(requestedAt);
-      setResendAt(requestedAt + RESEND_SECONDS * 1000);
+      setResendAt(requestedAt + RESET_CODE_COOLDOWN_MS);
+      window.sessionStorage.setItem(
+        RESET_CODE_PENDING_KEY,
+        JSON.stringify({ email: cleanEmail, requestedAt })
+      );
+
+      await AuthService.requestPasswordResetCode(cleanEmail);
       setMessage("If the account exists, a new code has been sent.");
     } catch (err) {
       setError(err.message || "Could not resend code.");

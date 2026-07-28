@@ -19,3 +19,12 @@ test("notification failure patches preserve a bounded error and next retry time"
   assert.equal(patch.last_error, "SMTP unavailable");
   assert.equal(patch.available_at, "2026-07-23T12:04:00.000Z");
 });
+
+test("notification failures stop retrying after the maximum attempt count", () => {
+  const now = Date.parse("2026-07-23T12:00:00.000Z");
+  const patch = buildNotificationFailurePatch(new Error("Mailbox rejected"), 8, now);
+  assert.equal(patch.status, "dead_letter");
+  assert.equal(patch.last_error, "Mailbox rejected");
+  assert.equal(patch.processed_at, "2026-07-23T12:00:00.000Z");
+  assert.equal("available_at" in patch, false);
+});

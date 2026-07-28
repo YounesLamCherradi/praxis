@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
@@ -271,7 +271,10 @@ function getDueDateLabel(assignment = {}) {
 
 // --- Main Assignments Component ---
 
-export default function TeacherAssignments({ workspaceRequest = null }) {
+export default function TeacherAssignments({
+  workspaceRequest = null,
+  onNavigationStateChange,
+}) {
   const {
     view,
     setView,
@@ -290,6 +293,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissionStatusFilter, setSubmissionStatusFilter] = useState("All");
+  const appliedWorkspaceRequestRef = useRef(0);
 
   const activeClasses = useMemo(
     () => classes.filter((course) => course?.archived !== true),
@@ -380,6 +384,28 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
     setSubmissionFilterAssignment,
   ]);
 
+  useEffect(() => {
+    if (typeof onNavigationStateChange !== "function") return;
+    if (
+      workspaceRequest?.requestId &&
+      appliedWorkspaceRequestRef.current !== workspaceRequest.requestId
+    ) {
+      return;
+    }
+
+    onNavigationStateChange({
+      courseId: selectedClassId || null,
+      assignmentId: selectedAssignmentId || null,
+      statusFilter: submissionStatusFilter,
+    });
+  }, [
+    onNavigationStateChange,
+    selectedAssignmentId,
+    selectedClassId,
+    submissionStatusFilter,
+    workspaceRequest?.requestId,
+  ]);
+
   // Never auto-select the first assignment. Clear only stale selections.
   useEffect(() => {
     if (!selectedAssignmentId) return;
@@ -398,6 +424,7 @@ export default function TeacherAssignments({ workspaceRequest = null }) {
   // Handle navigation requests coming from Home or the sidebar.
   useEffect(() => {
     if (!workspaceRequest?.requestId) return;
+    appliedWorkspaceRequestRef.current = workspaceRequest.requestId;
 
     const mode = workspaceRequest.mode || "browse";
 

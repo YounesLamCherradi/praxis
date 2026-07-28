@@ -270,8 +270,9 @@ function readBugScreenshot(file) {
 
 export default function StudentDashboard() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const handledDeepLinkRef = useRef("");
+  const restoringDeepLinkRef = useRef(false);
 
   const {
     signOut,
@@ -288,6 +289,7 @@ export default function StudentDashboard() {
     closeStudentAssignment,
     openStudentAssignment,
     studentStep,
+    rememberStudentStep,
     activeAssignment,
     assignments = [],
     submissions = [],
@@ -322,10 +324,27 @@ export default function StudentDashboard() {
     }
 
     handledDeepLinkRef.current = deepLinkKey;
+    restoringDeepLinkRef.current = true;
     openStudentAssignment(assignmentId).then((opened) => {
       if (active && !opened) {
         handledDeepLinkRef.current = "";
+        restoringDeepLinkRef.current = false;
+        return;
       }
+
+      const requestedStep = Number(searchParams.get("step"));
+      if (
+        active &&
+        opened &&
+        Number.isInteger(requestedStep) &&
+        requestedStep >= 1 &&
+        requestedStep <= 4 &&
+        typeof rememberStudentStep === "function"
+      ) {
+        rememberStudentStep(assignmentId, requestedStep);
+      }
+
+      restoringDeepLinkRef.current = false;
     });
 
     return () => {
@@ -334,8 +353,54 @@ export default function StudentDashboard() {
   }, [
     assignments,
     openStudentAssignment,
+    rememberStudentStep,
     searchParams,
     setCurrentClassId,
+  ]);
+
+  useEffect(() => {
+    if (restoringDeepLinkRef.current) return;
+
+    const requestedAssignmentId = String(
+      searchParams.get("assignment") || ""
+    ).trim();
+    const requestedCourseId = String(searchParams.get("course") || "").trim();
+    const requestedDeepLinkKey = `${requestedCourseId}:${requestedAssignmentId}`;
+
+    // Do not erase a valid deep link while its assignment data is still loading.
+    if (
+      !selectedAssignmentId &&
+      requestedAssignmentId &&
+      handledDeepLinkRef.current !== requestedDeepLinkKey
+    ) {
+      return;
+    }
+
+    const next = new URLSearchParams(searchParams);
+
+    if (currentClassId && currentClassId !== "__all__") {
+      next.set("course", String(currentClassId));
+    } else {
+      next.delete("course");
+    }
+
+    if (selectedAssignmentId) {
+      next.set("assignment", String(selectedAssignmentId));
+      next.set("step", String(Math.min(4, Math.max(1, Number(studentStep || 1)))));
+    } else {
+      next.delete("assignment");
+      next.delete("step");
+    }
+
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [
+    currentClassId,
+    searchParams,
+    selectedAssignmentId,
+    setSearchParams,
+    studentStep,
   ]);
 
   const [readNotificationIds, setReadNotificationIds] =

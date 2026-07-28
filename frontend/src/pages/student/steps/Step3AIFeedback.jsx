@@ -1443,9 +1443,9 @@ export default function Step3AIFeedback() {
 
 
   return (
-    <div className="flex min-h-full flex-col gap-3 pb-1">
-      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-4 py-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 pb-1">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="shrink-0 border-b border-slate-100 px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1581,11 +1581,11 @@ export default function Step3AIFeedback() {
             value={draftText}
             onChange={handleFinalTextChange}
             placeholder="Revise your final paragraph in your own words."
-            className="min-h-[470px] w-full resize-none bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:bg-white"
+            className="min-h-0 flex-1 w-full resize-none bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:bg-white"
           />
         ) : (
-          <div className="bg-[#F8FAFC]">
-            <article className="relative w-full bg-[#F8FAFC]">
+          <div className="flex min-h-0 flex-1 bg-[#F8FAFC]">
+            <article className="relative flex min-h-0 flex-1 flex-col bg-[#F8FAFC]">
               <div className="relative z-10 shrink-0 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
                 <div>
                   <div>
@@ -1609,7 +1609,7 @@ export default function Step3AIFeedback() {
               </div>
 
               <div
-                className="max-h-[470px] w-full overflow-y-auto overscroll-contain scroll-smooth px-5 py-5 [scrollbar-gutter:stable] sm:px-7 sm:py-6"
+                className="min-h-0 w-full flex-1 overflow-y-scroll overscroll-contain scroll-smooth px-5 py-5 [scrollbar-color:rgb(148_163_184)_transparent] [scrollbar-gutter:stable] [scrollbar-width:thin] sm:px-7 sm:py-6"
               >
                 <div className="w-full">
                   <HighlightedDraftPreview

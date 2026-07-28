@@ -225,14 +225,27 @@ export async function signOut() {
 }
 
 export async function requestSignupCode(email, name = "") {
-  const data = await fetch("/api/auth/signup/request-code", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email, name }),
-  }).then((r) => r.json());
+  let response;
+  try {
+    response = await fetchWithPolicy("/api/auth/signup/request-code", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, name }),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "The verification service is taking too long. Please wait a moment and check your inbox before requesting another code."
+      );
+    }
+    throw new Error(
+      "Could not reach the verification service. Please check your connection and try again."
+    );
+  }
+  const data = await response.json().catch(() => ({}));
 
   if (data.error) {
     throw new Error(data.error);
@@ -249,20 +262,33 @@ export async function signUp(name, email, password, role, otpCode = "") {
 }
 
 export async function signUpWithCode(name, email, password, role, otpCode) {
-  const data = await fetch("/api/auth/signup", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name,
-      email,
-      password,
-      role,
-      otpCode,
-    }),
-  }).then((r) => r.json());
+  let response;
+  try {
+    response = await fetchWithPolicy("/api/auth/signup", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        email,
+        password,
+        role,
+        otpCode,
+      }),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "Account creation is taking too long because the authentication service is unavailable. Please wait before trying again."
+      );
+    }
+    throw new Error(
+      "Could not reach the authentication service. Please try again."
+    );
+  }
+  const data = await response.json().catch(() => ({}));
 
   if (data.error) {
     throw new Error(data.error);
@@ -273,14 +299,27 @@ export async function signUpWithCode(name, email, password, role, otpCode) {
 }
 
 export async function requestPasswordResetCode(email) {
-  const data = await fetch("/api/auth/forgot-password", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email }),
-  }).then((r) => r.json());
+  let response;
+  try {
+    response = await fetchWithPolicy("/api/auth/forgot-password", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email }),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "The password-reset service is taking too long. Please check your inbox before requesting another code."
+      );
+    }
+    throw new Error(
+      "Could not reach the password-reset service. Please try again."
+    );
+  }
+  const data = await response.json().catch(() => ({}));
 
   if (data.error) {
     throw new Error(data.error);
@@ -290,14 +329,27 @@ export async function requestPasswordResetCode(email) {
 }
 
 export async function resetPasswordWithCode(email, code, password) {
-  const data = await fetch("/api/auth/forgot-password/reset", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ email, code, password }),
-  }).then((r) => r.json());
+  let response;
+  try {
+    response = await fetchWithPolicy("/api/auth/forgot-password/reset", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email, code, password }),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "Password reset is taking too long because the authentication service is unavailable. Please wait before trying again."
+      );
+    }
+    throw new Error(
+      "Could not reach the authentication service. Please try again."
+    );
+  }
+  const data = await response.json().catch(() => ({}));
 
   if (data.error) {
     throw new Error(data.error);

@@ -1,4 +1,5 @@
 const MAX_NOTIFICATION_RETRY_MINUTES = 60;
+const MAX_NOTIFICATION_ATTEMPTS = 8;
 
 function getNotificationRetryDelayMs(attemptCount) {
   const attempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
@@ -10,6 +11,14 @@ function getNotificationRetryDelayMs(attemptCount) {
 }
 
 function buildNotificationFailurePatch(error, attemptCount, nowMs = Date.now()) {
+  const attempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
+  if (attempts >= MAX_NOTIFICATION_ATTEMPTS) {
+    return {
+      status: 'dead_letter',
+      last_error: String(error?.message || error || 'Notification delivery failed.').slice(0, 2000),
+      processed_at: new Date(nowMs).toISOString(),
+    };
+  }
   return {
     status: 'failed',
     last_error: String(error?.message || error || 'Notification delivery failed.').slice(0, 2000),
@@ -18,6 +27,7 @@ function buildNotificationFailurePatch(error, attemptCount, nowMs = Date.now()) 
 }
 
 module.exports = {
+  MAX_NOTIFICATION_ATTEMPTS,
   buildNotificationFailurePatch,
   getNotificationRetryDelayMs,
 };

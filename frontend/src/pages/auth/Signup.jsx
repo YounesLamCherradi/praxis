@@ -23,6 +23,9 @@ import {
   Users,
 } from "lucide-react";
 
+const SIGNUP_CODE_PENDING_KEY = "praxis-signup-code-pending-v1";
+const SIGNUP_CODE_COOLDOWN_MS = 60 * 1000;
+
 export default function Signup() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -49,6 +52,33 @@ export default function Signup() {
   useEffect(() => {
     if (inviteCode) rememberPendingCourseInvite(inviteCode);
   }, [inviteCode]);
+
+  useEffect(() => {
+    try {
+      const pending = JSON.parse(
+        window.sessionStorage.getItem(SIGNUP_CODE_PENDING_KEY) || "null"
+      );
+      const requestedAt = Number(pending?.requestedAt || 0);
+      if (
+        !pending?.email ||
+        !requestedAt ||
+        Date.now() - requestedAt >= SIGNUP_CODE_COOLDOWN_MS
+      ) {
+        window.sessionStorage.removeItem(SIGNUP_CODE_PENDING_KEY);
+        return;
+      }
+
+      setEmail(String(pending.email));
+      setCountdownNow(Date.now());
+      setResendAt(requestedAt + SIGNUP_CODE_COOLDOWN_MS);
+      setCodeRequested(true);
+      setMessage(
+        "A verification request is already in progress. Check your inbox before requesting another code."
+      );
+    } catch {
+      window.sessionStorage.removeItem(SIGNUP_CODE_PENDING_KEY);
+    }
+  }, []);
 
   useEffect(() => {
     if (!resendAt) return undefined;
@@ -102,11 +132,16 @@ export default function Signup() {
         throw new Error("Access is restricted to @aui.ma accounts.");
       }
 
-      await AuthService.requestSignupCode(cleanEmail, name.trim());
       const requestedAt = Date.now();
       setCountdownNow(requestedAt);
-      setResendAt(requestedAt + 60 * 1000);
+      setResendAt(requestedAt + SIGNUP_CODE_COOLDOWN_MS);
       setCodeRequested(true);
+      window.sessionStorage.setItem(
+        SIGNUP_CODE_PENDING_KEY,
+        JSON.stringify({ email: cleanEmail, requestedAt })
+      );
+
+      await AuthService.requestSignupCode(cleanEmail, name.trim());
       setMessage("A 6-digit verification code was sent to your email.");
     } catch (err) {
       setError(err.message || "Could not send verification code.");

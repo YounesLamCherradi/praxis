@@ -35,7 +35,16 @@ function normalizeStoredMessage(row = {}) {
   const emails = Array.isArray(row.recipient_emails) ? row.recipient_emails : [];
   return {
     id: row.id,
-    status: row.status === "draft" ? "Draft" : row.status === "partially_sent" ? "Partially Sent" : "Sent",
+    status:
+      row.status === "draft"
+        ? "Draft"
+        : row.status === "queued" || row.status === "sending"
+          ? "Queued"
+          : row.status === "partially_sent"
+            ? "Partially Sent"
+            : row.status === "failed"
+              ? "Failed"
+              : "Sent",
     channel: row.recipient_mode === "individual" ? "Direct Email" : "Course Email",
     courseId: row.class_id,
     courseCode: row.classes?.invite_code || "",
@@ -384,7 +393,11 @@ export default function TeacherCommunication() {
         id: delivery.message?.id || `comm_${requestId}`,
         type: "email",
         channel: isIndividualRecipient ? "Direct Email" : "Course Email",
-        status: delivery.failedCount > 0 ? "Partially Sent" : "Sent",
+        status: delivery.queued
+          ? "Queued"
+          : delivery.failedCount > 0
+            ? "Partially Sent"
+            : "Sent",
         frontendOnly: false,
 
         courseId: selectedCourse.id,
@@ -409,12 +422,14 @@ export default function TeacherCommunication() {
         subject: subject.trim(),
         body: messageBody.trim(),
 
-        createdAt: delivery.sentAt || new Date().toISOString(),
+        createdAt: delivery.sentAt || delivery.queuedAt || new Date().toISOString(),
       };
 
       persistCommunicationMessage(
         message,
-        delivery.failedCount > 0
+        delivery.queued
+          ? `Email queued for ${delivery.recipientCount} student${delivery.recipientCount === 1 ? "" : "s"}. You can continue working while it is delivered.`
+          : delivery.failedCount > 0
           ? `Email delivered to ${delivery.deliveredCount} of ${delivery.recipientCount} students.`
           : isIndividualRecipient
           ? `Email sent to ${selectedStudent?.studentName || "the selected student"}.`

@@ -43,6 +43,7 @@ function buildGradingFixture() {
     enrollments: [{
       classId: "class_e2e",
       classCode: "ENG-E2E",
+      studentId: "student_e2e",
       studentName: submission.studentName,
       studentEmail: submission.studentEmail,
     }],
@@ -84,6 +85,15 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
         invite_code: "ENG-E2E",
         teacher_id: "teacher_e2e",
         is_published: true,
+        class_members: [{
+          student_id: "student_e2e",
+          status: "approved",
+          profiles: {
+            id: "student_e2e",
+            name: "Ava Tester",
+            email: "ava@test.local",
+          },
+        }],
       }],
     }),
   }));
@@ -109,7 +119,10 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
     final_text: fixture.submissions[0].submittedText,
     teacher_review: {},
     submitted_at: fixture.submissions[0].submittedAt,
-    profiles: { id: "student_e2e", name: "Ava Tester" },
+    // Reproduce a teacher-scoped response where profile RLS removed the
+    // nested student profile. The permanent student_id must still join the
+    // submission to the enrolled roster row.
+    profiles: null,
     version: 1,
   };
   await page.route("**/api/classes/class_e2e/submissions", (route) => route.fulfill({
@@ -180,6 +193,10 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
   await page.getByRole("button", { name: /Assignments/ }).click();
   await page.locator("select").nth(0).selectOption("class_e2e");
   await page.locator("select").nth(1).selectOption("assignment_e2e");
+  await expect(page.getByText("Ava Tester", { exact: true })).toHaveCount(1);
+  await expect(page.getByText("student@aui.ma", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "No Submission", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Review", exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
   await expect(page.getByText("Student Text", { exact: true })).toBeVisible();

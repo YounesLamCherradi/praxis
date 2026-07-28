@@ -104,6 +104,23 @@ test.describe("Teacher assignment modal lifecycle", () => {
     expect(pageErrors).toEqual([]);
   });
 
+  test("refresh restores the assignments tab, course, and assignment", async ({ page }) => {
+    await page.goto("/teacher");
+    await page.getByRole("button", { name: /^Assignments/ }).click();
+    await page.getByLabel("1. Select Course").selectOption("teacher_class");
+    await page.getByLabel("2. Select Assignment").selectOption("existing_assignment");
+
+    await expect(page).toHaveURL(/tab=assignments/);
+    await expect(page).toHaveURL(/course=teacher_class/);
+    await expect(page).toHaveURL(/assignment=existing_assignment/);
+
+    await page.reload();
+
+    await expect(page.getByLabel("1. Select Course")).toHaveValue("teacher_class");
+    await expect(page.getByLabel("2. Select Assignment")).toHaveValue("existing_assignment");
+    await expect(page.getByText("Existing modal audit", { exact: true }).first()).toBeVisible();
+  });
+
   test("a newly created assignment opens a populated details modal", async ({ page }) => {
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(String(error)));

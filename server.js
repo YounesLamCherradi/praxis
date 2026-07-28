@@ -208,7 +208,30 @@ const SERVER_CLIENT_AUTH_OPTIONS = {
     autoRefreshToken: false,
     detectSessionInUrl: false,
   },
+  global: {
+    fetch: fetchWithSupabaseTimeout,
+  },
 };
+
+const SUPABASE_REQUEST_TIMEOUT_MS = Math.max(
+  3_000,
+  Number(process.env.SUPABASE_REQUEST_TIMEOUT_MS || 12_000)
+);
+
+async function fetchWithSupabaseTimeout(url, options = {}) {
+  if (options.signal) return fetch(url, options);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    SUPABASE_REQUEST_TIMEOUT_MS
+  );
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 // Supabase admin client (secret/service role — server only).
 const supabase = createClient(
@@ -467,6 +490,7 @@ function getRequestScopedSupabase(req) {
   return createClient(process.env.SUPABASE_URL, SUPABASE_BROWSER_KEY, {
     ...SERVER_CLIENT_AUTH_OPTIONS,
     global: {
+      fetch: fetchWithSupabaseTimeout,
       headers: {
         Authorization: `Bearer ${token}`,
       },
@@ -506,6 +530,9 @@ async function getBackendSetupStatus() {
     classesTableReady: false,
     assignmentsTableReady: false,
     submissionsTableReady: false,
+    notificationOutboxTableReady: false,
+    notificationDeliveriesTableReady: false,
+    courseMessagesTableReady: false,
     missing: [],
   };
 
@@ -516,14 +543,19 @@ async function getBackendSetupStatus() {
   }
 
   const checks = [
-    ['profilesTableReady', 'profiles'],
-    ['classesTableReady', 'classes'],
-    ['assignmentsTableReady', 'assignments'],
-    ['submissionsTableReady', 'submissions'],
+    ['profilesTableReady', 'profiles', 'id'],
+    ['classesTableReady', 'classes', 'id'],
+    ['assignmentsTableReady', 'assignments', 'id'],
+    ['submissionsTableReady', 'submissions', 'id'],
+    ['notificationOutboxTableReady', 'notification_outbox', 'id'],
+    ['notificationDeliveriesTableReady', 'notification_deliveries', 'idempotency_key'],
+    ['courseMessagesTableReady', 'course_messages', 'id'],
   ];
 
-  for (const [field, table] of checks) {
-    const { error } = await supabase.from(table).select('id', { count: 'exact', head: true });
+  for (const [field, table, keyColumn] of checks) {
+    const { error } = await supabase
+      .from(table)
+      .select(keyColumn, { count: 'exact', head: true });
     if (!error) {
       status[field] = true;
       continue;
@@ -689,6 +721,18 @@ function getSmtpTransport() {
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_SECURE,
+    connectionTimeout: Math.max(
+      3_000,
+      Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000)
+    ),
+    greetingTimeout: Math.max(
+      3_000,
+      Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000)
+    ),
+    socketTimeout: Math.max(
+      5_000,
+      Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 20_000)
+    ),
     auth: {
       user: SMTP_USER,
       pass: SMTP_PASS,
@@ -1016,7 +1060,11 @@ async function getAuthUserByEmail(email) {
 }
 
 async function requestEmailOtp({ email, purpose, subject, introLine, safetyLine = '', recipientName = '' }) {
-  await maybeCleanupOtpRecords();
+  // Retention cleanup is maintenance and must not add a Supabase round trip to
+  // the user-facing "Get code" request. The guarded task logs its own failure.
+  void maybeCleanupOtpRecords().catch((error) => {
+    console.warn('OTP cleanup failed:', safeLogError(error));
+  });
   const normalizedEmail = normalizeEmail(email);
   const existingOtp = await getLatestOtp(normalizedEmail, purpose);
 
@@ -1140,21 +1188,32 @@ async function sendEmail({ to, subject, html, text, idempotencyKey }) {
   }
 
   // Fallback to Resend if SMTP is not configured.
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-    },
-    body: JSON.stringify({
-      from: NOTIFY_FROM_EMAIL,
-      to: recipients,
-      subject,
-      html,
-      text,
-    }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    Math.max(5_000, Number(process.env.RESEND_TIMEOUT_MS || 20_000))
+  );
+  let response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
+      body: JSON.stringify({
+        from: NOTIFY_FROM_EMAIL,
+        to: recipients,
+        subject,
+        html,
+        text,
+      }),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     console.error('[EMAIL DIAG] Resend rejected email', {
@@ -1173,13 +1232,124 @@ async function sendEmail({ to, subject, html, text, idempotencyKey }) {
   return payload;
 }
 
-async function waitForNotifications(label, promises = []) {
-  const results = await Promise.allSettled(promises.filter(Boolean));
-  results.forEach((result) => {
-    if (result.status === 'rejected') {
-      console.error(`${label} failed:`, result.reason?.message || result.reason);
+async function sendDurableEmail(email) {
+  const idempotencyKey = String(email?.idempotencyKey || '').trim();
+  if (!idempotencyKey) {
+    throw new Error('Durable email delivery requires an idempotency key.');
+  }
+
+  const now = new Date().toISOString();
+  const { error: insertError } = await supabase
+    .from('notification_deliveries')
+    .insert({
+      idempotency_key: idempotencyKey,
+      status: 'processing',
+      started_at: now,
+      updated_at: now,
+    });
+
+  if (insertError && insertError.code !== '23505') throw insertError;
+  if (insertError?.code === '23505') {
+    const { data: existing, error: readError } = await supabase
+      .from('notification_deliveries')
+      .select('status, attempt_count')
+      .eq('idempotency_key', idempotencyKey)
+      .single();
+    if (readError) throw readError;
+    if (existing.status === 'delivered' || existing.status === 'processing') {
+      return { deduplicated: true, status: existing.status };
     }
-  });
+    const { error: retryClaimError } = await supabase
+      .from('notification_deliveries')
+      .update({
+        status: 'processing',
+        attempt_count: Number(existing.attempt_count || 1) + 1,
+        started_at: now,
+        updated_at: now,
+        last_error: null,
+      })
+      .eq('idempotency_key', idempotencyKey)
+      .eq('status', 'failed');
+    if (retryClaimError) throw retryClaimError;
+  }
+
+  let result;
+  try {
+    result = await sendEmail(email);
+  } catch (error) {
+    await supabase
+      .from('notification_deliveries')
+      .update({
+        status: 'failed',
+        last_error: safeLogError(error).slice(0, 2000),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('idempotency_key', idempotencyKey);
+    throw error;
+  }
+
+  // Once the provider accepted the message, never mark the key retryable. If
+  // this database write fails, its existing "processing" state deliberately
+  // suppresses an uncertain retry that could duplicate an SMTP delivery.
+  const providerMessageId = result?.messageId || result?.id || null;
+  const { error: deliveredError } = await supabase
+    .from('notification_deliveries')
+    .update({
+      status: 'delivered',
+      provider_message_id: providerMessageId,
+      delivered_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('idempotency_key', idempotencyKey);
+  if (deliveredError) throw deliveredError;
+  return result;
+}
+
+async function enqueueSubmissionStatusNotifications(previousSubmission, submission) {
+  if (teacherReviewWasNewlySaved(previousSubmission?.teacher_review, submission?.teacher_review)) {
+    await enqueueDomainEvent({
+      eventType: 'submission_reviewed',
+      aggregateType: 'submission',
+      aggregateId: submission.id,
+      idempotencyKey: `submission-reviewed:${submission.id}:${submission.version || getTeacherReviewSavedAt(submission.teacher_review) || submission.updated_at}`,
+      payload: { previousTeacherReview: previousSubmission?.teacher_review || {} },
+    });
+  }
+  if (submissionWasReopened(previousSubmission, submission)) {
+    await enqueueDomainEvent({
+      eventType: 'submission_reopened',
+      aggregateType: 'submission',
+      aggregateId: submission.id,
+      idempotencyKey: `submission-reopened:${submission.id}:${submission.version || submission.updated_at}`,
+      payload: { previousSubmission: previousSubmission || {} },
+    });
+  }
+}
+
+async function settleWithConcurrency(items, worker, concurrency = 10) {
+  const values = Array.isArray(items) ? items : [];
+  const results = new Array(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(
+    values.length,
+    Math.max(1, Math.floor(Number(concurrency) || 1))
+  );
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await worker(values[index], index),
+        };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }));
+
   return results;
 }
 
@@ -1188,7 +1358,7 @@ async function getAuthUserEmailMap(userIds = []) {
   const emailMap = new Map();
   if (!wantedIds.length) return emailMap;
 
-  await Promise.all(wantedIds.map(async (userId) => {
+  await settleWithConcurrency(wantedIds, async (userId) => {
     try {
       const { data, error } = await supabase.auth.admin.getUserById(userId);
       if (error) throw error;
@@ -1198,7 +1368,7 @@ async function getAuthUserEmailMap(userIds = []) {
     } catch (error) {
       console.error('Could not load auth email for user %s:', userId, error.message || error);
     }
-  }));
+  }, 10);
 
   return emailMap;
 }
@@ -1216,17 +1386,20 @@ function buildEmailConfigDiagnostic() {
 async function getClassStudentRecipients(classId) {
   const { data, error } = await supabase
     .from('class_members')
-    .select('student_id, profiles(name)')
+    .select('student_id, profiles(name, email)')
     .eq('class_id', classId);
   if (error) throw error;
 
   const studentRows = (data || []).filter((entry) => entry.student_id);
-  const emailMap = await getAuthUserEmailMap(studentRows.map((entry) => entry.student_id));
+  const missingEmailIds = studentRows
+    .filter((entry) => !normalizeEmail(entry.profiles?.email))
+    .map((entry) => entry.student_id);
+  const emailMap = await getAuthUserEmailMap(missingEmailIds);
   return studentRows
     .map((entry) => ({
       id: entry.student_id,
       name: entry.profiles?.name || 'Student',
-      email: emailMap.get(entry.student_id) || '',
+      email: normalizeEmail(entry.profiles?.email || emailMap.get(entry.student_id)),
     }))
     .filter((entry) => entry.email);
 }
@@ -1251,7 +1424,7 @@ async function notifyStudentsAboutAssignment({
     ? `DO NOT REPLY — Assignment due soon: ${subjectTitle}`
     : `DO NOT REPLY — New assignment posted: ${subjectTitle}`;
 
-  await Promise.allSettled(recipients.map((recipient) => {
+  const deliveryResults = await settleWithConcurrency(recipients, (recipient) => {
     const intro = mode === 'deadline-reminder'
       ? `<p>Hi ${escapeHtmlEmail(recipient.name)},</p><p>This is a reminder that an assignment is due in about 24 hours.</p>`
       : `<p>Hi ${escapeHtmlEmail(recipient.name)},</p><p>Your teacher has posted a new assignment.</p>`;
@@ -1263,7 +1436,7 @@ async function notifyStudentsAboutAssignment({
       ? `Hi ${recipient.name},\n\nThis is a reminder that an assignment is due in about 24 hours.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}`
       : `Hi ${recipient.name},\n\nYour teacher has posted a new assignment.\nClass: ${className || 'praxis'}\nAssignment: ${assignment.title || 'Assignment'}\n${textDeadlineLine}`;
 
-    return sendEmail({
+    return sendDurableEmail({
       to: recipient.email,
       subject,
       html: `
@@ -1284,7 +1457,14 @@ async function notifyStudentsAboutAssignment({
           : assignment.updated_at || assignment.created_at || assignment.deadline || 'published',
       ]),
     });
-  }));
+  }, 10);
+  const failedDeliveries = deliveryResults.filter((result) => result.status === 'rejected');
+  if (failedDeliveries.length) {
+    throw new AggregateError(
+      failedDeliveries.map((result) => result.reason),
+      `${failedDeliveries.length} of ${recipients.length} assignment notification emails failed.`
+    );
+  }
 }
 
 async function notifyStudentAboutGradedSubmission({
@@ -1329,7 +1509,7 @@ async function notifyStudentAboutGradedSubmission({
     ? `Score: ${score}\n`
     : '';
 
-  await sendEmail({
+  await sendDurableEmail({
     to: studentEmail,
     subject: `DO NOT REPLY — Feedback available: ${subjectTitle}`,
     html: `
@@ -1385,7 +1565,7 @@ async function notifyStudentAboutReopenedSubmission({
     .trim();
   const safeClassName = escapeHtmlEmail(assignment.classes?.name || assignment.className || 'your class');
 
-  await sendEmail({
+  await sendDurableEmail({
     to: studentEmail,
     subject: `DO NOT REPLY — Assignment reopened: ${subjectTitle}`,
     html: `
@@ -1450,7 +1630,7 @@ async function notifyTeacherAboutStudentSubmission({
     : '';
   const textSubmittedLine = submittedAt ? `Submitted: ${submittedAt}\n` : '';
 
-  await sendEmail({
+  await sendDurableEmail({
     to: teacherEmail,
     subject: `DO NOT REPLY — New submission received: ${subjectTitle}`,
     html: `
@@ -1478,7 +1658,10 @@ async function deliverNotificationOutboxEvent(event) {
   const payload = event.payload || {};
   const baseUrl = getConfiguredPublicBaseUrl();
 
-  if (event.event_type === 'assignment_published') {
+  if (
+    event.event_type === 'assignment_published' ||
+    event.event_type === 'assignment_deadline_reminder'
+  ) {
     const { data: assignment, error } = await supabase
       .from('assignments')
       .select('*, classes(name)')
@@ -1489,7 +1672,9 @@ async function deliverNotificationOutboxEvent(event) {
       assignment,
       className: assignment.classes?.name || 'your class',
       baseUrl,
-      mode: 'published',
+      mode: event.event_type === 'assignment_deadline_reminder'
+        ? 'deadline-reminder'
+        : 'published',
     });
     return;
   }
@@ -1542,6 +1727,65 @@ async function deliverNotificationOutboxEvent(event) {
     return;
   }
 
+  if (event.event_type === 'course_message') {
+    const { data: message, error: messageError } = await supabase
+      .from('course_messages')
+      .select('*, classes(name)')
+      .eq('id', event.aggregate_id)
+      .single();
+    if (messageError) throw messageError;
+
+    const recipients = Array.isArray(payload.recipients) ? payload.recipients : [];
+    const safeBody = escapeHtmlEmail(message.body).replace(/\r?\n/g, '<br>');
+    const safeTeacherName = escapeHtmlEmail(payload.teacherName || 'Your instructor');
+    const safeCourseName = escapeHtmlEmail(message.classes?.name || payload.courseName || 'your course');
+
+    await supabase
+      .from('course_messages')
+      .update({ status: 'sending', updated_at: new Date().toISOString() })
+      .eq('id', message.id);
+
+    const results = await settleWithConcurrency(recipients, (recipient) =>
+      sendDurableEmail({
+        to: recipient.email,
+        subject: message.subject,
+        html: `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;"><p>Hi ${escapeHtmlEmail(recipient.name || 'Student')},</p><div>${safeBody}</div><p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p></div>`,
+        text: `Hi ${recipient.name || 'Student'},\n\n${message.body}\n\nSent by ${payload.teacherName || 'Your instructor'} · ${message.classes?.name || payload.courseName || 'your course'}`,
+        idempotencyKey: makeIdempotencyKey([
+          'teacher-course-message',
+          message.teacher_id,
+          message.provider_request_id,
+          recipient.id || recipient.email,
+        ]),
+      }),
+    10);
+    const deliveredCount = results.filter((result) => result.status === 'fulfilled').length;
+    const failedCount = recipients.length - deliveredCount;
+    const nextStatus = failedCount === 0
+      ? 'sent'
+      : deliveredCount > 0
+        ? 'partially_sent'
+        : 'failed';
+    const { error: updateError } = await supabase
+      .from('course_messages')
+      .update({
+        status: nextStatus,
+        delivered_count: deliveredCount,
+        failed_count: failedCount,
+        sent_at: deliveredCount > 0 ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', message.id);
+    if (updateError) throw updateError;
+    if (failedCount > 0) {
+      throw new AggregateError(
+        results.filter((result) => result.status === 'rejected').map((result) => result.reason),
+        `${failedCount} of ${recipients.length} course message emails failed.`
+      );
+    }
+    return;
+  }
+
   throw new Error(`Unsupported notification outbox event: ${event.event_type}`);
 }
 
@@ -1549,6 +1793,19 @@ async function processNotificationOutbox() {
   if (notificationOutboxInFlight || !canSendNotificationEmails()) return;
   notificationOutboxInFlight = true;
   try {
+    const staleClaimCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { error: recoveryError } = await supabase
+      .from('notification_outbox')
+      .update({
+        status: 'failed',
+        available_at: new Date().toISOString(),
+        last_error: 'Recovered after an interrupted notification worker.',
+        claimed_at: null,
+      })
+      .eq('status', 'processing')
+      .or(`claimed_at.is.null,claimed_at.lt.${staleClaimCutoff}`);
+    if (recoveryError) throw recoveryError;
+
     const { data: events, error } = await supabase
       .from('notification_outbox')
       .select('*')
@@ -1562,7 +1819,11 @@ async function processNotificationOutbox() {
       const attemptCount = Number(event.attempt_count || 0) + 1;
       const { data: claimed, error: claimError } = await supabase
         .from('notification_outbox')
-        .update({ status: 'processing', attempt_count: attemptCount })
+        .update({
+          status: 'processing',
+          attempt_count: attemptCount,
+          claimed_at: new Date().toISOString(),
+        })
         .eq('id', event.id)
         .in('status', ['pending', 'failed'])
         .select('id')
@@ -1578,13 +1839,18 @@ async function processNotificationOutbox() {
             status: 'delivered',
             processed_at: new Date().toISOString(),
             last_error: null,
+            claimed_at: null,
           })
           .eq('id', event.id);
         if (deliveredError) throw deliveredError;
       } catch (deliveryError) {
+        const failurePatch = {
+          ...buildNotificationFailurePatch(deliveryError, attemptCount),
+          claimed_at: null,
+        };
         await supabase
           .from('notification_outbox')
-          .update(buildNotificationFailurePatch(deliveryError, attemptCount))
+          .update(failurePatch)
           .eq('id', event.id);
       }
     }
@@ -1618,13 +1884,22 @@ async function processUpcomingDeadlineReminders() {
     const classNameMap = new Map((classRows || []).map((row) => [row.id, row.name]));
 
     for (const assignment of assignments) {
-      await notifyStudentsAboutAssignment({
-        assignment,
-        className: classNameMap.get(assignment.class_id) || 'your class',
-        baseUrl: getConfiguredPublicBaseUrl(),
-        mode: 'deadline-reminder',
+      await enqueueDomainEvent({
+        eventType: 'assignment_deadline_reminder',
+        aggregateType: 'assignment',
+        aggregateId: assignment.id,
+        idempotencyKey: `assignment-deadline-reminder:${assignment.id}:${assignment.deadline}`,
+        payload: {
+          assignmentId: assignment.id,
+          classId: assignment.class_id,
+          deadline: assignment.deadline,
+          className: classNameMap.get(assignment.class_id) || 'your class',
+        },
       });
     }
+    processNotificationOutbox().catch((error) => {
+      console.error('Deadline reminder outbox processing failed:', error);
+    });
   } catch (error) {
     console.error('Deadline reminder processing failed:', error);
   } finally {
@@ -3780,6 +4055,30 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       .replace(/[^A-Za-z0-9_-]/g, '')
       .slice(0, 120);
 
+    const { data: existingMessage, error: existingMessageError } = await supabase
+      .from('course_messages')
+      .select('*')
+      .eq('teacher_id', user.id)
+      .eq('provider_request_id', requestId)
+      .maybeSingle();
+    if (existingMessageError) throw existingMessageError;
+    if (existingMessage) {
+      return res.status(existingMessage.status === 'queued' || existingMessage.status === 'sending' ? 202 : 200).json({
+        ok: true,
+        queued: existingMessage.status === 'queued' || existingMessage.status === 'sending',
+        replayed: true,
+        message: existingMessage,
+        courseId: existingMessage.class_id,
+        recipientMode: existingMessage.recipient_mode,
+        recipientCount: Array.isArray(existingMessage.recipient_emails)
+          ? existingMessage.recipient_emails.length
+          : 0,
+        deliveredCount: existingMessage.delivered_count || 0,
+        failedCount: existingMessage.failed_count || 0,
+        sentAt: existingMessage.sent_at || null,
+      });
+    }
+
     if (!subject || subject.length > 180) {
       return res.status(400).json({ error: 'Enter a subject of 180 characters or fewer.' });
     }
@@ -3832,27 +4131,6 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       return res.status(400).json({ error: 'No deliverable student email addresses were found.' });
     }
 
-    const safeBody = escapeHtmlEmail(body).replace(/\r?\n/g, '<br>');
-    const safeTeacherName = escapeHtmlEmail(profile?.name || 'Your instructor');
-    const safeCourseName = escapeHtmlEmail(classRow.name || 'your course');
-    const results = await Promise.allSettled(
-      recipients.map((recipient) => sendEmail({
-        to: recipient.email,
-        subject,
-        html: `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;"><p>Hi ${escapeHtmlEmail(recipient.name)},</p><div>${safeBody}</div><p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p></div>`,
-        text: `Hi ${recipient.name},\n\n${body}\n\nSent by ${profile?.name || 'Your instructor'} · ${classRow.name}`,
-        idempotencyKey: makeIdempotencyKey(['teacher-course-message', user.id, classRow.id, requestId, recipient.id]),
-      }))
-    );
-    const deliveredCount = results.filter(
-      (result) => result.status === 'fulfilled' && !result.value?.skipped
-    ).length;
-    const failedCount = recipients.length - deliveredCount;
-
-    if (deliveredCount === 0) {
-      return res.status(502).json({ error: 'The email provider did not deliver the message. Please try again.' });
-    }
-
     const messageRecord = {
       teacher_id: user.id,
       class_id: classRow.id,
@@ -3861,11 +4139,10 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       recipient_emails: recipients.map((recipient) => recipient.email),
       subject,
       body,
-      status: failedCount > 0 ? 'partially_sent' : 'sent',
-      delivered_count: deliveredCount,
-      failed_count: failedCount,
+      status: 'queued',
+      delivered_count: 0,
+      failed_count: 0,
       provider_request_id: requestId,
-      sent_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     const { data: storedMessage, error: messageStoreError } =
@@ -3876,18 +4153,34 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
           .single()
       );
     if (messageStoreError) {
-      console.error('Delivered course email could not be recorded:', safeLogError(messageStoreError));
+      throw messageStoreError;
     }
 
-    res.json({
+    await enqueueDomainEvent({
+      eventType: 'course_message',
+      aggregateType: 'course_message',
+      aggregateId: storedMessage.id,
+      idempotencyKey: `course-message:${user.id}:${requestId}`,
+      payload: {
+        recipients,
+        teacherName: profile?.name || 'Your instructor',
+        courseName: classRow.name || 'your course',
+      },
+    });
+    processNotificationOutbox().catch((deliveryError) => {
+      console.error('Course message outbox processing failed:', deliveryError);
+    });
+
+    res.status(202).json({
       ok: true,
-      message: storedMessage || null,
+      queued: true,
+      message: storedMessage,
       courseId: classRow.id,
       recipientMode,
       recipientCount: recipients.length,
-      deliveredCount,
-      failedCount,
-      sentAt: new Date().toISOString(),
+      deliveredCount: 0,
+      failedCount: 0,
+      queuedAt: new Date().toISOString(),
       recipient: recipientMode === 'individual'
         ? { id: recipients[0].id, name: recipients[0].name }
         : null,
@@ -4393,9 +4686,13 @@ app.get('/api/teacher/submissions', async (req, res) => {
     const assignmentIds = (assignments || []).map((entry) => entry.id).filter(Boolean);
     if (!assignmentIds.length) return res.json({ submissions: [] });
 
+    // Authorization and assignment scope are established above with the
+    // request-scoped client. Use the trusted server client for the final read
+    // so profile RLS does not erase the nested student identity. Without it,
+    // the polling response contains a valid student_id but profiles: null.
     const { data, error } = await querySubmissionsForAssignments(
       assignmentIds,
-      readClient
+      supabase
     );
     if (error) return res.status(400).json({ error: error.message });
 
@@ -4424,9 +4721,12 @@ app.get('/api/assignments/:assignmentId/submissions', async (req, res) => {
       return res.status(400).json({ error: 'Could not verify access to this assignment. Please refresh and try again.' });
     }
     if (!ownedAssignment) return res.status(403).json({ error: 'You can only view submissions for your own assignments.' });
+    // Ownership is verified above. The trusted read is required here because
+    // teachers cannot directly select another user's profile through profile
+    // RLS, even when that user submitted to the teacher's assignment.
     const { data, error: fetchError } = await querySubmissionsForAssignments(
       [req.params.assignmentId],
-      getRequestScopedSupabase(req) || supabase
+      supabase
     );
     if (fetchError) {
       console.error('Could not load assignment submissions:', {
@@ -4783,20 +5083,10 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
         .select('*, profiles(id, name)')
         .single());
       if (updateError) return res.status(400).json({ error: updateError.message });
-      await waitForNotifications('Student review notification email', [
-        notifyStudentAboutGradedSubmission({
-          assignment: ownedAssignment,
-          submission: updated,
-          previousTeacherReview: data.teacher_review,
-          baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-        }),
-        notifyStudentAboutReopenedSubmission({
-          assignment: ownedAssignment,
-          previousSubmission: data,
-          submission: updated,
-          baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-        }),
-      ]);
+      await enqueueSubmissionStatusNotifications(data, updated);
+      processNotificationOutbox().catch((notifyError) => {
+        console.error('Student review outbox processing failed:', notifyError);
+      });
       return res.json({ submission: updated });
     }
 
@@ -4812,20 +5102,10 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
       .single());
 
     if (createError) return res.status(400).json({ error: createError.message });
-    await waitForNotifications('Student review notification email', [
-      notifyStudentAboutGradedSubmission({
-        assignment: ownedAssignment,
-        submission: created,
-        previousTeacherReview: null,
-        baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-      }),
-      notifyStudentAboutReopenedSubmission({
-        assignment: ownedAssignment,
-        previousSubmission: null,
-        submission: created,
-        baseUrl: getConfiguredPublicBaseUrl() || getRequestBaseUrl(req),
-      }),
-    ]);
+    await enqueueSubmissionStatusNotifications(null, created);
+    processNotificationOutbox().catch((notifyError) => {
+      console.error('Student review outbox processing failed:', notifyError);
+    });
     res.json({ submission: created });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -5841,8 +6121,13 @@ app.listen(PORT, "0.0.0.0", () => {
   if (canSendNotificationEmails()) {
     getBackendSetupStatus()
       .then((setupStatus) => {
-        if (!setupStatus.assignmentsTableReady) {
-          console.log('Deadline reminder job skipped: assignments table is not ready yet.');
+        if (
+          !setupStatus.assignmentsTableReady ||
+          !setupStatus.notificationOutboxTableReady ||
+          !setupStatus.notificationDeliveriesTableReady ||
+          !setupStatus.courseMessagesTableReady
+        ) {
+          console.log('Email notification jobs skipped: required persistence tables are not ready yet.');
           return;
         }
 

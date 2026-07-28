@@ -206,6 +206,8 @@ test.describe("Local student assignment workflow", () => {
 
     await page.goto("/student");
     await page.getByRole("button", { name: /Continue Assignment/ }).click();
+    await expect(page).toHaveURL(/assignment=student_flow_assignment/);
+    await expect(page).toHaveURL(/step=2/);
     await expect(page.getByText("Draft Editor", { exact: true })).toBeVisible();
 
     await expect(
@@ -314,6 +316,8 @@ test.describe("Local student assignment workflow", () => {
     await expect(page.getByRole("textbox", { name: "Editable planning outline" })).toHaveValue(editedNotes);
 
     await page.reload();
+    await expect(page).toHaveURL(/assignment=student_flow_assignment/);
+    await expect(page).toHaveURL(/step=2/);
     await expect(page.getByRole("textbox", { name: "Editable planning outline" })).toHaveValue(editedNotes);
   });
 

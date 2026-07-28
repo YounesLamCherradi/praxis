@@ -2552,14 +2552,24 @@ export default function TeacherSubmissions({
         ) === String(selectedAssignment.id)
     );
 
-    const rosterByEmail = new Map();
+    const rosterByIdentity = new Map();
+    const rosterKeyByStudentId = new Map();
+    const rosterKeyByEmail = new Map();
 
     classEnrollments.forEach((enrollment) => {
-      const email = (enrollment.studentEmail || "student@aui.ma").toLowerCase();
-      rosterByEmail.set(email, {
-        id: `${selectedAssignment.id}_${enrollment.studentEmail || "student@aui.ma"}`,
+      const studentId = String(enrollment.studentId || "").trim();
+      const email = String(enrollment.studentEmail || "").trim().toLowerCase();
+      const rosterKey = studentId
+        ? `student:${studentId}`
+        : email
+        ? `email:${email}`
+        : `enrollment:${enrollment.id}`;
+
+      rosterByIdentity.set(rosterKey, {
+        id: `${selectedAssignment.id}_${studentId || email || enrollment.id}`,
+        studentId: studentId || null,
         studentName: enrollment.studentName || "Student",
-        studentEmail: enrollment.studentEmail || "student@aui.ma",
+        studentEmail: enrollment.studentEmail || "",
         assignment: selectedAssignment,
         submission: null,
         progressSubmission: null,
@@ -2567,25 +2577,49 @@ export default function TeacherSubmissions({
         attempts: [],
         status: "Not Started",
       });
+      if (studentId) rosterKeyByStudentId.set(studentId, rosterKey);
+      if (email) rosterKeyByEmail.set(email, rosterKey);
     });
 
     assignmentSubmissions.forEach((submission) => {
+      const resolvedStudentId = String(
+        submission.studentId ||
+          submission.student?.id ||
+          submission.profile?.id ||
+          ""
+      ).trim();
       const resolvedStudentEmail =
         submission.studentEmail ||
         submission.userEmail ||
         submission.student?.email ||
         submission.profile?.email ||
-        "student@aui.ma";
+        "";
+      const resolvedStudentName =
+        submission.studentName ||
+        submission.student?.name ||
+        submission.profile?.name ||
+        "";
+      const meaningfulStudentName =
+        resolvedStudentName.trim().toLowerCase() === "student"
+          ? ""
+          : resolvedStudentName;
 
-      const email = resolvedStudentEmail.toLowerCase();
+      const email = resolvedStudentEmail.trim().toLowerCase();
+      const matchedRosterKey =
+        (resolvedStudentId && rosterKeyByStudentId.get(resolvedStudentId)) ||
+        (email && rosterKeyByEmail.get(email));
+      const rosterKey =
+        matchedRosterKey ||
+        (resolvedStudentId
+          ? `student:${resolvedStudentId}`
+          : email
+          ? `email:${email}`
+          : `submission:${submission.id}`);
 
-      const existingRow = rosterByEmail.get(email) || {
-        id: `${selectedAssignment.id}_${resolvedStudentEmail}`,
-        studentName:
-          submission.studentName ||
-          submission.student?.name ||
-          submission.profile?.name ||
-          "Student",
+      const existingRow = rosterByIdentity.get(rosterKey) || {
+        id: `${selectedAssignment.id}_${resolvedStudentId || email || submission.id}`,
+        studentId: resolvedStudentId || null,
+        studentName: meaningfulStudentName || "Student",
         studentEmail: resolvedStudentEmail,
         assignment: selectedAssignment,
         submission: null,
@@ -2594,10 +2628,11 @@ export default function TeacherSubmissions({
         attempts: [],
         status: "Not Started",
       };
+      existingRow.studentId =
+        resolvedStudentId ||
+        existingRow.studentId;
       existingRow.studentName =
-        submission.studentName ||
-        submission.student?.name ||
-        submission.profile?.name ||
+        meaningfulStudentName ||
         existingRow.studentName ||
         "Student";
 
@@ -2615,10 +2650,19 @@ export default function TeacherSubmissions({
           submission,
         ];
       }
-      rosterByEmail.set(email, existingRow);
+      rosterByIdentity.set(rosterKey, existingRow);
+      if (existingRow.studentId) {
+        rosterKeyByStudentId.set(String(existingRow.studentId), rosterKey);
+      }
+      if (existingRow.studentEmail) {
+        rosterKeyByEmail.set(
+          String(existingRow.studentEmail).trim().toLowerCase(),
+          rosterKey
+        );
+      }
     });
 
-    return Array.from(rosterByEmail.values()).map((row) => {
+    return Array.from(rosterByIdentity.values()).map((row) => {
       const sortedAttempts = [
         ...(row.attempts || []),
       ].sort((a, b) => {
