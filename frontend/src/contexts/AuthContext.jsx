@@ -94,7 +94,7 @@ export function AuthProvider({ children }) {
         signOut,
       }}
     >
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 }

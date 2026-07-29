@@ -1,7 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useAuth } from "../../contexts/AuthContext.jsx";
-import TeacherAssignments from "./TeacherAssignments";
-import TeacherCommunication from "./TeacherCommunication";
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -17,6 +22,9 @@ import {
 import { createBugReport } from "../../services/reportApi";
 import { buildCourseInviteMessage } from "../../utils/courseInvite";
 import { queryClient, queryKeys } from "../../queryClient";
+
+const TeacherAssignments = lazy(() => import("./TeacherAssignments"));
+const TeacherCommunication = lazy(() => import("./TeacherCommunication"));
 
 import {
   Home,
@@ -1963,14 +1971,25 @@ export default function TeacherDashboard() {
               />
             )}
 
-            {activeTab === "assignments" && (
-              <TeacherAssignments
-                workspaceRequest={assignmentWorkspaceRequest}
-                onNavigationStateChange={rememberTeacherAssignmentLocation}
-              />
-            )}
+            <Suspense
+              fallback={
+                <div
+                  className="flex min-h-48 items-center justify-center text-sm font-semibold text-slate-500"
+                  role="status"
+                >
+                  Loading workspace…
+                </div>
+              }
+            >
+              {activeTab === "assignments" && (
+                <TeacherAssignments
+                  workspaceRequest={assignmentWorkspaceRequest}
+                  onNavigationStateChange={rememberTeacherAssignmentLocation}
+                />
+              )}
 
-            {activeTab === "communication" && <TeacherCommunication />}
+              {activeTab === "communication" && <TeacherCommunication />}
+            </Suspense>
           </div>
         </div>
       </main>

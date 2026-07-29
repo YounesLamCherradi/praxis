@@ -5,8 +5,20 @@ export default function ProtectedRoute({
   children,
   roles = [],
 }) {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const location = useLocation();
+
+  if (loading) {
+    return (
+      <div
+        className="flex min-h-screen items-center justify-center bg-[#F8FAFC] text-sm font-semibold text-slate-500"
+        role="status"
+        aria-live="polite"
+      >
+        Checking your Praxis session…
+      </div>
+    );
+  }
 
   // Not logged in
   if (!user) {

@@ -1,4 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BadgeCheck,
@@ -37,8 +44,10 @@ import { joinCourseByCode } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
 import { queryClient, queryKeys } from "../../queryClient";
 
-import AssignmentTray from "./AssignmentTray.jsx";
-import ActiveAssignmentWorkflow from "./ActiveAssignmentWorkflow.jsx";
+const AssignmentTray = lazy(() => import("./AssignmentTray.jsx"));
+const ActiveAssignmentWorkflow = lazy(
+  () => import("./ActiveAssignmentWorkflow.jsx")
+);
 
 function normalizeCourseCode(value) {
   return String(value || "")
@@ -1950,10 +1959,20 @@ export default function StudentDashboard() {
               </div>
             )}
 
-            {selectedAssignmentId ? (
-              <ActiveAssignmentWorkflow />
-            ) : (
-              <div className="space-y-8">
+            <Suspense
+              fallback={
+                <div
+                  className="flex min-h-48 items-center justify-center text-sm font-semibold text-slate-500"
+                  role="status"
+                >
+                  Loading workspace…
+                </div>
+              }
+            >
+              {selectedAssignmentId ? (
+                <ActiveAssignmentWorkflow />
+              ) : (
+                <div className="space-y-8">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
                   <StudentMetricCard
                     cardType="draft"
@@ -1996,10 +2015,11 @@ export default function StudentDashboard() {
                     </p>
                   </div>
 
-                  <AssignmentTray />
+                    <AssignmentTray />
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </Suspense>
           </div>
         </div>
       </main>

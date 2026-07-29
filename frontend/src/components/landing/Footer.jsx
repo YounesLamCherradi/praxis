@@ -18,6 +18,8 @@ export default function Footer() {
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
+                width="256"
+                height="256"
                 className="h-10 w-10 object-contain"
               />
 

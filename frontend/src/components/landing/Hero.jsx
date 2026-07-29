@@ -65,6 +65,8 @@ export default function Hero() {
                 <img
                   src="/praxis-logo.png"
                   alt="Praxis logo"
+                  width="256"
+                  height="256"
                   className="h-6 w-6 object-contain"
                 />
               </div>
@@ -148,6 +150,8 @@ export default function Hero() {
                       <img
                         src="/praxis-logo.png"
                         alt="Praxis logo"
+                        width="256"
+                        height="256"
                         className="h-7 w-7 object-contain"
                       />
                     </div>

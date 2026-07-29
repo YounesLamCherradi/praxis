@@ -48,6 +48,8 @@ export default function Navbar() {
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
+                width="256"
+                height="256"
                 className="w-9 h-9 object-contain"
               />
             </div>

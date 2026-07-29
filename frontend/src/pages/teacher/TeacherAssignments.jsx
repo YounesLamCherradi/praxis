@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
@@ -13,10 +20,28 @@ import {
   Users,
 } from "lucide-react";
 
-import CreateAssignmentModal from "../../components/teacher/CreateAssignmentModal";
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
-import TeacherAssignmentDetails from "./TeacherAssignmentDetails";
-import TeacherSubmissions from "./submissions/TeacherSubmissions";
+
+const CreateAssignmentModal = lazy(
+  () => import("../../components/teacher/CreateAssignmentModal")
+);
+const TeacherAssignmentDetails = lazy(
+  () => import("./TeacherAssignmentDetails")
+);
+const TeacherSubmissions = lazy(
+  () => import("./submissions/TeacherSubmissions")
+);
+
+function WorkspaceLoading() {
+  return (
+    <div
+      className="flex min-h-48 items-center justify-center text-sm font-semibold text-slate-500"
+      role="status"
+    >
+      Loading workspace…
+    </div>
+  );
+}
 
 // --- Normalize Status and Submissions Helpers ---
 
@@ -528,56 +553,60 @@ export default function TeacherAssignments({
 
   if (view === "create") {
     return (
-      <CreateAssignmentModal
-        classes={classes}
-        onCreate={async (assignmentData) => {
-          const createdAssignment = await addAssignment(assignmentData);
+      <Suspense fallback={<WorkspaceLoading />}>
+        <CreateAssignmentModal
+          classes={classes}
+          onCreate={async (assignmentData) => {
+            const createdAssignment = await addAssignment(assignmentData);
 
-          if (createdAssignment) {
-            const relatedClass = classes.find((cls) =>
-              assignmentMatchesClass(createdAssignment, cls)
-            );
+            if (createdAssignment) {
+              const relatedClass = classes.find((cls) =>
+                assignmentMatchesClass(createdAssignment, cls)
+              );
 
-            setSelectedClassId(
-              relatedClass ? String(relatedClass.id) : ""
-            );
-            setSelectedAssignmentId(String(createdAssignment.id));
-            setSubmissionStatusFilter("All");
-          }
+              setSelectedClassId(
+                relatedClass ? String(relatedClass.id) : ""
+              );
+              setSelectedAssignmentId(String(createdAssignment.id));
+              setSubmissionStatusFilter("All");
+            }
 
-          return createdAssignment;
-        }}
-        onUpdate={updateAssignment}
-        onClose={() => setView("list")}
-      />
+            return createdAssignment;
+          }}
+          onUpdate={updateAssignment}
+          onClose={() => setView("list")}
+        />
+      </Suspense>
     );
   }
 
   if (view === "edit") {
     return (
-      <CreateAssignmentModal
-        classes={classes}
-        editingAssignment={selectedAssignment}
-        onCreate={addAssignment}
-        onUpdate={async (updatedAssignment) => {
-          const savedAssignment = await updateAssignment(updatedAssignment);
-          const assignmentToSelect = savedAssignment || updatedAssignment;
-          const relatedClass = classes.find((cls) =>
-            assignmentMatchesClass(assignmentToSelect, cls)
-          );
+      <Suspense fallback={<WorkspaceLoading />}>
+        <CreateAssignmentModal
+          classes={classes}
+          editingAssignment={selectedAssignment}
+          onCreate={addAssignment}
+          onUpdate={async (updatedAssignment) => {
+            const savedAssignment = await updateAssignment(updatedAssignment);
+            const assignmentToSelect = savedAssignment || updatedAssignment;
+            const relatedClass = classes.find((cls) =>
+              assignmentMatchesClass(assignmentToSelect, cls)
+            );
 
-          setSelectedAssignment(assignmentToSelect);
-          setSelectedClassId(
-            relatedClass ? String(relatedClass.id) : ""
-          );
-          setSelectedAssignmentId(String(assignmentToSelect.id));
-          setSubmissionStatusFilter("All");
-        }}
-        onClose={() => {
-          setSelectedAssignment(null);
-          setView("list");
-        }}
-      />
+            setSelectedAssignment(assignmentToSelect);
+            setSelectedClassId(
+              relatedClass ? String(relatedClass.id) : ""
+            );
+            setSelectedAssignmentId(String(assignmentToSelect.id));
+            setSubmissionStatusFilter("All");
+          }}
+          onClose={() => {
+            setSelectedAssignment(null);
+            setView("list");
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -830,11 +859,13 @@ export default function TeacherAssignments({
 
             {/* Pass current active assignment to eliminate duplicate controls */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <TeacherSubmissions
-                activeCourse={selectedClass}
-                activeAssignment={activeAssignment}
-                requestedStatusFilter={submissionStatusFilter}
-              />
+              <Suspense fallback={<WorkspaceLoading />}>
+                <TeacherSubmissions
+                  activeCourse={selectedClass}
+                  activeAssignment={activeAssignment}
+                  requestedStatusFilter={submissionStatusFilter}
+                />
+              </Suspense>
             </div>
           </section>
         ) : (
@@ -868,14 +899,16 @@ export default function TeacherAssignments({
               }}
             />
             <div className="relative z-10 my-4 max-h-[92vh] w-full max-w-[1450px] overflow-y-auto rounded-3xl border border-slate-200 bg-[#F8FAFC] p-4 shadow-2xl sm:p-6">
-              <TeacherAssignmentDetails
-                modalMode
-                assignment={detailsAssignment}
-                onClose={() => {
-                  setSelectedAssignment(null);
-                  setView("list");
-                }}
-              />
+              <Suspense fallback={<WorkspaceLoading />}>
+                <TeacherAssignmentDetails
+                  modalMode
+                  assignment={detailsAssignment}
+                  onClose={() => {
+                    setSelectedAssignment(null);
+                    setView("list");
+                  }}
+                />
+              </Suspense>
             </div>
           </div>,
           document.body

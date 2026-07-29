@@ -6,15 +6,11 @@ const AdminLogin = lazy(() => import("../pages/auth/AdminLogin"));
 const Login = lazy(() => import("../pages/auth/Login"));
 const Signup = lazy(() => import("../pages/auth/Signup"));
 const CourseInvite = lazy(() => import("../pages/CourseInvite"));
-const StudentDashboard = lazy(() => import("../pages/student/StudentDashboard"));
-const TeacherDashboard = lazy(() => import("../pages/teacher/TeacherDashboard"));
+const StudentDashboardRoute = lazy(() => import("./StudentDashboardRoute"));
+const TeacherDashboardRoute = lazy(() => import("./TeacherDashboardRoute"));
 const AdminDashboard = lazy(() => import("../pages/admin/AdminDashboard"));
 
 import ProtectedRoute from "./ProtectedRoute";
-
-// Providers
-import { StudentWorkspaceProvider } from "../contexts/StudentWorkspaceContext";
-import { TeacherWorkspaceProvider } from "../contexts/TeacherWorkspaceContext";
 
 export default function AppRoutes() {
   return (
@@ -43,9 +39,7 @@ export default function AppRoutes() {
           path="/student"
           element={
             <ProtectedRoute roles={["student"]}>
-              <StudentWorkspaceProvider>
-                <StudentDashboard />
-              </StudentWorkspaceProvider>
+              <StudentDashboardRoute />
             </ProtectedRoute>
           }
         />
@@ -55,9 +49,7 @@ export default function AppRoutes() {
           path="/teacher"
           element={
             <ProtectedRoute roles={["teacher"]}>
-              <TeacherWorkspaceProvider>
-                <TeacherDashboard />
-              </TeacherWorkspaceProvider>
+              <TeacherDashboardRoute />
             </ProtectedRoute>
           }
         />

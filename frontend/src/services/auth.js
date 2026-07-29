@@ -4,6 +4,7 @@ let profile = null;
 let refreshPromise = null;
 const API_TIMEOUT_MS = 20_000;
 const API_RETRY_DELAYS_MS = [300, 900];
+const SESSION_RESTORE_TIMEOUT_MS = 5_000;
 
 function wait(milliseconds) {
   return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
@@ -17,25 +18,30 @@ function canRetryRequest(method, response, error) {
 }
 
 async function fetchWithPolicy(path, options = {}) {
-  const method = String(options.method || "GET").toUpperCase();
+  const {
+    timeoutMs = API_TIMEOUT_MS,
+    retryDelaysMs = API_RETRY_DELAYS_MS,
+    ...requestOptions
+  } = options;
+  const method = String(requestOptions.method || "GET").toUpperCase();
   let lastError = null;
 
-  for (let attempt = 0; attempt <= API_RETRY_DELAYS_MS.length; attempt += 1) {
-    const controller = options.signal ? null : new AbortController();
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    const controller = requestOptions.signal ? null : new AbortController();
     const timeoutId = controller
-      ? globalThis.setTimeout(() => controller.abort(), API_TIMEOUT_MS)
+      ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
       : null;
 
     try {
       const response = await fetch(path, {
-        ...options,
-        signal: options.signal || controller.signal,
+        ...requestOptions,
+        signal: requestOptions.signal || controller.signal,
       });
       if (
         canRetryRequest(method, response, null) &&
-        attempt < API_RETRY_DELAYS_MS.length
+        attempt < retryDelaysMs.length
       ) {
-        await wait(API_RETRY_DELAYS_MS[attempt]);
+        await wait(retryDelaysMs[attempt]);
         continue;
       }
       return response;
@@ -43,11 +49,11 @@ async function fetchWithPolicy(path, options = {}) {
       lastError = error;
       if (
         !canRetryRequest(method, null, error) ||
-        attempt >= API_RETRY_DELAYS_MS.length
+        attempt >= retryDelaysMs.length
       ) {
         throw error;
       }
-      await wait(API_RETRY_DELAYS_MS[attempt]);
+      await wait(retryDelaysMs[attempt]);
     } finally {
       if (timeoutId !== null) globalThis.clearTimeout(timeoutId);
     }
@@ -100,13 +106,15 @@ async function tryRefreshSession() {
 
 async function refreshSessionRequest() {
   try {
-    const response = await fetch("/api/auth/refresh", {
+    const response = await fetchWithPolicy("/api/auth/refresh", {
       method: "POST",
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({}),
+      timeoutMs: SESSION_RESTORE_TIMEOUT_MS,
+      retryDelaysMs: [],
     });
     const data = await response.json().catch(() => ({}));
 
@@ -359,22 +367,26 @@ export async function resetPasswordWithCode(email, code, password) {
 }
 
 export async function restoreSession() {
-  let data = await fetch("/api/auth/me", {
+  const sessionRequestOptions = {
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },
-  }).then((r) => r.json());
+    timeoutMs: SESSION_RESTORE_TIMEOUT_MS,
+    retryDelaysMs: [],
+  };
+  let data = await fetchWithPolicy(
+    "/api/auth/me",
+    sessionRequestOptions
+  ).then((r) => r.json());
 
   if (data.error) {
     const refreshed = await tryRefreshSession();
     if (refreshed) {
-      data = await fetch("/api/auth/me", {
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      }).then((r) => r.json());
+      data = await fetchWithPolicy(
+        "/api/auth/me",
+        sessionRequestOptions
+      ).then((r) => r.json());
     }
   }
 
