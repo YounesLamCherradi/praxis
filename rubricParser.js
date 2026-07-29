@@ -1,7 +1,6 @@
 const fs = require("node:fs");
 const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
-const fetch = require("node-fetch");
 
 const SYSTEM_PROMPT = `
 You are an expert academic rubric parser.

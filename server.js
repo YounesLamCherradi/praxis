@@ -3,8 +3,8 @@ const path = require('node:path');
 const express = require('express');
 const compression = require('compression');
 const crypto = require('node:crypto');
-const fetch = require('node-fetch');
-const nodemailer = require('nodemailer');
+// SMTP fallback (kept for possible future use):
+// const nodemailer = require('nodemailer');
 const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const { parseRubricBuffer, parseRubricText } = require('./rubricParser');
@@ -262,11 +262,12 @@ const NOTIFY_FROM_EMAIL =
   process.env.RESEND_FROM_EMAIL ||
   process.env.FROM_EMAIL ||
   '';
-const SMTP_HOST = process.env.SMTP_HOST || '';
-const SMTP_PORT = Number(process.env.SMTP_PORT || 0);
-const SMTP_SECURE = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
+// SMTP configuration (kept for possible future use):
+// const SMTP_HOST = process.env.SMTP_HOST || '';
+// const SMTP_PORT = Number(process.env.SMTP_PORT || 0);
+// const SMTP_SECURE = String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+// const SMTP_USER = process.env.SMTP_USER || '';
+// const SMTP_PASS = process.env.SMTP_PASS || '';
 const DEADLINE_REMINDER_POLL_MS = Math.max(5 * 60 * 1000, Number(process.env.ASSIGNMENT_REMINDER_POLL_MS || 15 * 60 * 1000));
 const DEADLINE_REMINDER_WINDOW_MS = Math.max(5 * 60 * 1000, Number(process.env.ASSIGNMENT_REMINDER_WINDOW_MS || 20 * 60 * 1000));
 const OTP_CODE_LENGTH = 6;
@@ -303,7 +304,7 @@ const signinIpRateLimiter = new Map();
 const ACCOUNT_SETUP_INCOMPLETE_MESSAGE = "Your login worked, but your account setup is incomplete. Please ask your teacher (if you're a student) or contact support so we can finish setting up your account.";
 const SIGNUP_PROFILE_ERROR_MESSAGE = "We couldn't finish setting up your account. Please try creating your account again. If this keeps happening, ask your teacher (if you're a student) or contact support.";
 
-let smtpTransport = null;
+// let smtpTransport = null;
 
 if (!process.env.SUPABASE_URL || !SUPABASE_SERVER_KEY) {
   console.warn('Supabase server client is missing SUPABASE_URL or a service-role key.');
@@ -708,38 +709,40 @@ function stripTrailingSlashes(value) {
 }
 
 function canSendNotificationEmails() {
-  const hasSmtp = Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS && NOTIFY_FROM_EMAIL);
-  const hasResend = Boolean(RESEND_API_KEY && NOTIFY_FROM_EMAIL);
-  return hasSmtp || hasResend;
+  return Boolean(RESEND_API_KEY && NOTIFY_FROM_EMAIL);
 }
 
-function getSmtpTransport() {
-  if (smtpTransport) return smtpTransport;
-  if (!(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS)) return null;
-
-  smtpTransport = nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
-    connectionTimeout: Math.max(
-      3_000,
-      Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000)
-    ),
-    greetingTimeout: Math.max(
-      3_000,
-      Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000)
-    ),
-    socketTimeout: Math.max(
-      5_000,
-      Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 20_000)
-    ),
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
-  });
-  return smtpTransport;
-}
+/*
+ * SMTP transport retained for possible future use.
+ *
+ * function getSmtpTransport() {
+ *   if (smtpTransport) return smtpTransport;
+ *   if (!(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS)) return null;
+ *
+ *   smtpTransport = nodemailer.createTransport({
+ *     host: SMTP_HOST,
+ *     port: SMTP_PORT,
+ *     secure: SMTP_SECURE,
+ *     connectionTimeout: Math.max(
+ *       3_000,
+ *       Number(process.env.SMTP_CONNECTION_TIMEOUT_MS || 10_000)
+ *     ),
+ *     greetingTimeout: Math.max(
+ *       3_000,
+ *       Number(process.env.SMTP_GREETING_TIMEOUT_MS || 10_000)
+ *     ),
+ *     socketTimeout: Math.max(
+ *       5_000,
+ *       Number(process.env.SMTP_SOCKET_TIMEOUT_MS || 20_000)
+ *     ),
+ *     auth: {
+ *       user: SMTP_USER,
+ *       pass: SMTP_PASS,
+ *     },
+ *   });
+ *   return smtpTransport;
+ * }
+ */
 
 function maskEmail(email = '') {
   const value = String(email || '').trim();
@@ -1160,7 +1163,6 @@ async function sendEmail({ to, subject, html, text, idempotencyKey }) {
     return { skipped: true };
   }
   const recipients = Array.isArray(to) ? to : [to];
-  const smtp = getSmtpTransport();
 
   console.info('[EMAIL DIAG] Sending email', {
     subject,
@@ -1168,26 +1170,23 @@ async function sendEmail({ to, subject, html, text, idempotencyKey }) {
     recipientCount: recipients.length,
     idempotencyKey: idempotencyKey || null,
     from: maskEmail(NOTIFY_FROM_EMAIL),
-    provider: smtp ? 'smtp' : 'resend',
+    provider: 'resend',
   });
 
-  if (smtp) {
-    const payload = await smtp.sendMail({
-      from: NOTIFY_FROM_EMAIL,
-      to: recipients,
-      subject,
-      html,
-      text,
-    });
+  /*
+   * SMTP delivery retained for possible future use.
+   *
+   * const smtp = getSmtpTransport();
+   * const payload = await smtp.sendMail({
+   *   from: NOTIFY_FROM_EMAIL,
+   *   to: recipients,
+   *   subject,
+   *   html,
+   *   text,
+   * });
+   * return payload;
+   */
 
-    console.info(`Email sent for "${subject}" to ${recipients.length} recipient${recipients.length === 1 ? '' : 's'}.`, {
-      smtpMessageId: payload?.messageId || null,
-      recipients: recipients.map(maskEmail),
-    });
-    return payload;
-  }
-
-  // Fallback to Resend if SMTP is not configured.
   const controller = new AbortController();
   const timeoutId = setTimeout(
     () => controller.abort(),
@@ -1410,9 +1409,24 @@ async function notifyStudentsAboutAssignment({
   baseUrl,
   mode,
 }) {
-  if (!canSendNotificationEmails() || !assignment?.class_id) return;
+  if (!canSendNotificationEmails() || !assignment?.class_id) {
+    console.info('[EMAIL DIAG] Assignment notification skipped', {
+      emailEnabled: canSendNotificationEmails(),
+      assignmentId: assignment?.id || null,
+      classId: assignment?.class_id || null,
+      reason: !canSendNotificationEmails() ? 'email configuration missing' : 'assignment class missing',
+    });
+    return;
+  }
   const recipients = await getClassStudentRecipients(assignment.class_id);
-  if (!recipients.length) return;
+  if (!recipients.length) {
+    console.info('[EMAIL DIAG] Assignment notification skipped', {
+      assignmentId: assignment.id || null,
+      classId: assignment.class_id,
+      reason: 'no enrolled students with email addresses',
+    });
+    return;
+  }
 
   const safeTitle = escapeHtmlEmail(assignment.title || 'New assignment');
   const subjectTitle = String(assignment.title || 'Assignment')
@@ -4478,6 +4492,18 @@ app.post('/api/classes/:classId/assignments', async (req, res) => {
       console.info(`Assignment created with ${label} after teacher ownership verification.`);
     }
     await saveAssignmentRevision(data, user.id, 'created');
+    if (data?.status === 'published') {
+      await enqueueDomainEvent({
+        eventType: 'assignment_published',
+        aggregateType: 'assignment',
+        aggregateId: data.id,
+        idempotencyKey: `assignment-published:${data.id}:${data.version}`,
+        payload: { assignmentId: data.id, classId: data.class_id, version: data.version },
+      });
+      processNotificationOutbox().catch((notifyError) => {
+        console.error('Assignment publish outbox processing failed:', notifyError);
+      });
+    }
     const responseBody = { assignment: data };
     await saveIdempotentResponse({
       userId: user.id,
