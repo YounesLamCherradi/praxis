@@ -159,7 +159,9 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
         { criterionId: "criterion_1", criterionName: "Thesis", score: 3, bandId: "good", bandLabel: "Good" },
         { criterionId: "criterion_2", criterionName: "Evidence", score: 3, bandId: "good", bandLabel: "Good" },
       ],
-      finalScore: 6,
+      // Deliberately inconsistent: criterion rows total 6. The UI and Apply
+      // action must both use that rubric-derived total, never this stale 19.
+      finalScore: 19,
   };
   await page.route("**/api/ai-jobs", (route) => route.fulfill({
     status: 202,
@@ -211,6 +213,8 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
 
   await page.getByRole("button", { name: "Run AI check" }).click();
   await expect(page.getByText("Clear argument with relevant support.", { exact: true })).toBeVisible();
+  await expect(page.getByText("6/8", { exact: true })).toBeVisible();
+  await expect(page.getByText("19/8", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Apply rubric scores" }).click();
   await expect(page.getByText("AI suggestion applied", { exact: true })).toBeVisible();
   await expect(page.getByRole("spinbutton")).toHaveValue("3");

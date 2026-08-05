@@ -10,7 +10,7 @@ const moduleUrl = pathToFileURL(
   )
 ).href;
 
-test("continuous keystrokes become one readable timeline activity", async () => {
+test("continuous keystrokes stay in replay but are omitted from the activity timeline", async () => {
   const { buildReplayTimeline } = await import(moduleUrl);
   const events = Array.from({ length: 70 }, (_, index) => ({
     id: `event-${index}`,
@@ -22,13 +22,10 @@ test("continuous keystrokes become one readable timeline activity", async () => 
 
   const timeline = buildReplayTimeline(events);
 
-  assert.equal(timeline.length, 1);
-  assert.equal(timeline[0].timelineLabel, "Continuous writing session");
-  assert.match(timeline[0].timelinePreview, /70 characters typed/);
-  assert.match(timeline[0].timelinePreview, /70 edits/);
+  assert.deepEqual(timeline, []);
 });
 
-test("deletion is summarized with its editing session and paste stays atomic", async () => {
+test("only paste events appear in the activity timeline", async () => {
   const { buildReplayTimeline } = await import(moduleUrl);
   const events = [
     {
@@ -63,14 +60,9 @@ test("deletion is summarized with its editing session and paste stays atomic", a
 
   const timeline = buildReplayTimeline(events);
 
-  assert.equal(timeline.length, 2);
-  assert.equal(timeline[0].timelineLabel, "Writing and revision session");
-  assert.match(timeline[0].timelinePreview, /1 deleted/);
-  assert.deepEqual(timeline[0].timelineEventKeys, [
-    "insert",
-    "delete",
-    "rewrite",
-  ]);
-  assert.equal(timeline[1].timelineKind, "paste");
-  assert.equal(timeline[1].timelineEvents.length, 1);
+  assert.equal(timeline.length, 1);
+  assert.equal(timeline[0].timelineKind, "paste");
+  assert.equal(timeline[0].timelineLabel, "Text pasted");
+  assert.equal(timeline[0].timelineEvents.length, 1);
+  assert.deepEqual(timeline[0].timelineEventKeys, ["paste"]);
 });

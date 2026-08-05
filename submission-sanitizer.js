@@ -108,6 +108,37 @@ function sanitizeStudentSubmissionPayload(payload = {}) {
   return sanitizePayload(payload, STUDENT_SUBMISSION_ALLOWED_FIELDS);
 }
 
+function getProcessEventKey(event) {
+  if (event && typeof event === 'object' && event.id) return `id:${event.id}`;
+  return `value:${JSON.stringify(event)}`;
+}
+
+// Process-history arrays are append-only evidence. Workflow remounts can hold
+// only one portion of the history, so merge rather than replacing the durable
+// sequence. Replay sorts writing events by timestamp after loading them.
+function mergeAppendOnlyProcessHistory(payload = {}, existingSubmission = {}) {
+  const next = { ...payload };
+  for (const field of ['writing_events', 'keystroke_log']) {
+    const incoming = next[field];
+    const existing = existingSubmission[field];
+    if (!Array.isArray(incoming) || !Array.isArray(existing) || existing.length === 0) continue;
+    const merged = [];
+    const seen = new Set();
+    for (const event of existing.concat(incoming)) {
+      const key = getProcessEventKey(event);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(event);
+    }
+    next[field] = merged;
+  }
+  return next;
+}
+
+function preserveProcessHistoryOnSubmit(payload = {}, existingSubmission = {}) {
+  return mergeAppendOnlyProcessHistory(payload, existingSubmission);
+}
+
 function createOpenTeacherReview(review = {}) {
   return {
     ...review,
@@ -168,7 +199,9 @@ module.exports = {
   stripWritingEventsForArchive,
   createOpenTeacherReview,
   isOpenTeacherReview,
+  mergeAppendOnlyProcessHistory,
   normalizeStudentVisibleSubmission,
+  preserveProcessHistoryOnSubmit,
   sanitizeStudentSubmissionPayload,
   sanitizeTeacherSubmissionPayload,
   STUDENT_SUBMISSION_ALLOWED_FIELDS,

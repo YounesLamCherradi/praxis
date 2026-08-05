@@ -1094,11 +1094,40 @@ function normalizeAiSuggestion(rawData, rubricCriteria, rubricTotal) {
     });
   }
 
+  /*
+   * A rubric grade is defined by its criterion rows. AI providers sometimes
+   * return a top-level finalScore that disagrees with those rows. Canonicalize
+   * to one score per real rubric criterion and derive the displayed total from
+   * exactly the same rows that the Apply action will use.
+   */
+  if (rubricCriteria.length > 0) {
+    const scoreByCriterionId = new Map();
+    criteriaScores.forEach((item) => {
+      const criterion = rubricCriteria.find(
+        (entry) => String(entry.id) === String(item.criterionId)
+      );
+      if (!criterion) return;
+      scoreByCriterionId.set(String(criterion.id), {
+        ...item,
+        criterionId: criterion.id,
+        criterionName: criterion.name,
+        maxPoints: criterion.points,
+        score: clampScore(item.score, 0, criterion.points || rubricTotal || 100),
+      });
+    });
+    criteriaScores = rubricCriteria
+      .map((criterion) => scoreByCriterionId.get(String(criterion.id)))
+      .filter(Boolean);
+  }
+
+  const criterionTotal = criteriaScores.reduce(
+    (sum, item) => sum + Number(item.score || 0),
+    0
+  );
   const finalScore =
-    data.finalScore ??
-    data.score ??
-    data.suggestedScore ??
-    criteriaScores.reduce((sum, item) => sum + Number(item.score || 0), 0);
+    rubricCriteria.length > 0 && criteriaScores.length > 0
+      ? criterionTotal
+      : data.finalScore ?? data.score ?? data.suggestedScore ?? criterionTotal;
 
   return {
     summary,
@@ -1559,9 +1588,9 @@ These are instructor-only review signals and are not automatic grades.`;
       return;
     }
 
-    const nextRubricScores = {
-      ...rubricScores,
-    };
+    // Replace the prior draft rows. Keeping stale rows that the AI did not
+    // suggest would make the applied total differ from the displayed total.
+    const nextRubricScores = {};
 
     aiSuggestion.criteriaScores.forEach((item) => {
       if (!item.criterionId) return;
@@ -4885,14 +4914,14 @@ function WritingBehaviourWorkspace({
                         </h3>
 
                         <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                          Select any event, including paste events, to jump to its replay frame.
+                          Select a paste event to jump to its replay frame.
                         </p>
                       </div>
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
                       <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-mono font-bold text-slate-600">
-                        {replayTimeline.length} activities
+                        {replayTimeline.length} paste {replayTimeline.length === 1 ? "event" : "events"}
                       </span>
 
                       {timelineOpen ? (

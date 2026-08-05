@@ -145,6 +145,17 @@ function notifyPraxisDataChanged() {
   }
 }
 
+function refreshStudentSubmissionsAfterMutation() {
+  // The mutation response is authoritative. A follow-up cache refresh can fail
+  // independently (for example, while an expired session cookie is being
+  // refreshed) and must never turn a successful submit into a failure message.
+  return queryClient.invalidateQueries({
+    queryKey: queryKeys.studentSubmissions,
+  }).catch((error) => {
+    console.warn("Submission saved, but the submission cache could not refresh:", error);
+  });
+}
+
 function getCurrentStudentProfile() {
   const profile = AuthService.getProfile() || {};
   return {
@@ -1507,6 +1518,46 @@ function getDeadlineDate(
    PROVIDER
 ===================================================== */
 
+// Student workflow steps can remount while saves started by the previous step
+// are still in flight. Keep the coordinator at module scope so every provider
+// instance shares one ordered queue and one concurrency token per assignment.
+// Otherwise a newly mounted step can PATCH with an older `updated_at` while the
+// previous instance is finishing a save, producing a false "another tab" 409.
+const sharedPersistentSaveQueues = new Map();
+const sharedDurableSubmissionRefs = new Map();
+
+function getStudentPersistenceKey(assignmentId, submission = null) {
+  const profile = getCurrentStudentProfile();
+  const studentKey = submission?.studentId || profile.id || profile.email;
+  return `${studentKey}:${String(assignmentId)}`;
+}
+
+function rememberDurableSubmission(assignmentId, submission) {
+  if (!assignmentId || !submission?.id) return;
+  const key = getStudentPersistenceKey(assignmentId, submission);
+  const current = sharedDurableSubmissionRefs.get(key);
+  const currentVersion = Number(current?.version || 0);
+  const nextVersion = Number(submission.version || 0);
+  const currentUpdatedAt = Date.parse(current?.updatedAt || 0);
+  const nextUpdatedAt = Date.parse(submission.updatedAt || 0);
+
+  // A background workspace refresh may have started before the latest save.
+  // Never let that older response roll the optimistic-concurrency token back.
+  if (
+    current &&
+    (nextVersion < currentVersion ||
+      (nextVersion === currentVersion && nextUpdatedAt < currentUpdatedAt))
+  ) {
+    return;
+  }
+
+  sharedDurableSubmissionRefs.set(key, {
+    id: submission.id,
+    version: submission.version,
+    updatedAt: submission.updatedAt,
+  });
+}
+
 export function StudentWorkspaceProvider({
   children,
 }) {
@@ -1532,8 +1583,8 @@ export function StudentWorkspaceProvider({
     submissions,
     setSubmissions,
   ] = useState([]);
-  const persistentSaveQueues = useRef(new Map());
-  const durableSubmissionRefs = useRef(new Map());
+  const persistentSaveQueues = useRef(sharedPersistentSaveQueues);
+  const durableSubmissionRefs = useRef(sharedDurableSubmissionRefs);
   const syncWorkspaceRef = useRef(null);
   const [workspaceSyncState, setWorkspaceSyncState] = useState({
     status: "loading",
@@ -1805,11 +1856,7 @@ export function StudentWorkspaceProvider({
         });
         persistedSubmissions.forEach((submission) => {
           if (submission?.assignmentId && submission?.id) {
-            durableSubmissionRefs.current.set(String(submission.assignmentId), {
-              id: submission.id,
-              version: submission.version,
-              updatedAt: submission.updatedAt,
-            });
+            rememberDurableSubmission(submission.assignmentId, submission);
           }
         });
 
@@ -1821,7 +1868,7 @@ export function StudentWorkspaceProvider({
          */
         const latestData = getPraxisData();
         const mergedPersistedSubmissions = persistedSubmissions.map((incoming) => {
-          if (!persistentSaveQueues.current.has(String(incoming.assignmentId))) {
+          if (!persistentSaveQueues.current.has(getStudentPersistenceKey(incoming.assignmentId, incoming))) {
             return incoming;
           }
           const local = safeArray(latestData.submissions).find(
@@ -2211,7 +2258,7 @@ export function StudentWorkspaceProvider({
   ]);
 
   function queuePersistentDraftSave(assignmentId, record) {
-    const key = String(assignmentId);
+    const key = getStudentPersistenceKey(assignmentId, record);
     const previous = persistentSaveQueues.current.get(key) || Promise.resolve();
     const next = previous
       .catch(() => undefined)
@@ -2226,11 +2273,7 @@ export function StudentWorkspaceProvider({
           version: databaseSubmission.version,
           updatedAt: databaseSubmission.updatedAt,
         });
-        durableSubmissionRefs.current.set(key, {
-          id: saved.id,
-          version: saved.version,
-          updatedAt: saved.updatedAt,
-        });
+        rememberDurableSubmission(assignmentId, saved);
         return saved;
       })
       .catch((error) => {
@@ -3022,7 +3065,7 @@ export function StudentWorkspaceProvider({
 
       delete newSubmission.reopenSnapshot;
 
-      const pendingSave = persistentSaveQueues.current.get(String(assignmentId));
+      const pendingSave = persistentSaveQueues.current.get(getStudentPersistenceKey(assignmentId));
       if (pendingSave) {
         await Promise.race([
           pendingSave.catch(() => undefined),
@@ -3030,9 +3073,7 @@ export function StudentWorkspaceProvider({
         ]);
       }
       const persistedSubmission = await submitMyAssignment(assignmentId, newSubmission);
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.studentSubmissions,
-      });
+      void refreshStudentSubmissionsAfterMutation();
       newSubmission = {
         ...newSubmission,
         ...persistedSubmission,
@@ -3289,7 +3330,7 @@ export function StudentWorkspaceProvider({
 
     delete newSubmission.reopenSnapshot;
 
-    const pendingSave = persistentSaveQueues.current.get(String(assignmentId));
+    const pendingSave = persistentSaveQueues.current.get(getStudentPersistenceKey(assignmentId));
     if (pendingSave) {
       await Promise.race([
         pendingSave.catch(() => undefined),
@@ -3297,9 +3338,7 @@ export function StudentWorkspaceProvider({
       ]);
     }
     const persistedSubmission = await submitMyAssignment(assignmentId, newSubmission);
-    await queryClient.invalidateQueries({
-      queryKey: queryKeys.studentSubmissions,
-    });
+    void refreshStudentSubmissionsAfterMutation();
     newSubmission = {
       ...newSubmission,
       ...persistedSubmission,
@@ -3866,13 +3905,9 @@ export function StudentWorkspaceProvider({
 
     try {
       const persisted = await getOrCreateMySubmission(assignmentId);
-      durableSubmissionRefs.current.set(String(assignmentId), {
-        id: persisted.id,
-        version: persisted.version,
-        updatedAt: persisted.updatedAt,
-      });
+      rememberDurableSubmission(assignmentId, persisted);
       const preserveLocalWork =
-        persistentSaveQueues.current.has(String(assignmentId)) ||
+        persistentSaveQueues.current.has(getStudentPersistenceKey(assignmentId, submission)) ||
         Date.parse(submission?.updatedAt || 0) >
           Date.parse(persisted?.updatedAt || 0);
       submission = {

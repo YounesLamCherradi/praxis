@@ -3,9 +3,56 @@ const assert = require("node:assert/strict");
 
 const {
   buildDeidentifiedArchiveRow,
+  mergeAppendOnlyProcessHistory,
+  preserveProcessHistoryOnSubmit,
   stripKeystrokeLogForArchive,
   stripWritingEventsForArchive,
 } = require("../submission-sanitizer");
+
+test("submit preserves saved process history when a freshly mounted client sends empty arrays", () => {
+  const existingWritingEvents = [{ id: "event-1", type: "insert" }];
+  const existingKeystrokes = [{ at: 100, gap: 20 }];
+  const payload = preserveProcessHistoryOnSubmit(
+    { writing_events: [], keystroke_log: [], final_text: "Final essay" },
+    { writing_events: existingWritingEvents, keystroke_log: existingKeystrokes }
+  );
+
+  assert.deepEqual(payload.writing_events, existingWritingEvents);
+  assert.deepEqual(payload.keystroke_log, existingKeystrokes);
+  assert.equal(payload.final_text, "Final essay");
+});
+
+test("submit appends newer non-empty process history supplied by the client", () => {
+  const existing = { id: "event-1", type: "insert" };
+  const incoming = [{ id: "event-2", type: "delete" }];
+  const payload = preserveProcessHistoryOnSubmit(
+    { writing_events: incoming },
+    { writing_events: [existing] }
+  );
+
+  assert.deepEqual(payload.writing_events, [existing, ...incoming]);
+});
+
+test("autosave merges disjoint writing sessions instead of replacing earlier typing", () => {
+  const earlier = [{ id: "event-1", timestamp: "2026-08-05T10:00:00Z", insertedText: "A" }];
+  const later = [{ id: "event-2", timestamp: "2026-08-05T10:01:00Z", insertedText: "B" }];
+  const payload = mergeAppendOnlyProcessHistory(
+    { writing_events: later },
+    { writing_events: earlier }
+  );
+
+  assert.deepEqual(payload.writing_events, [...earlier, ...later]);
+});
+
+test("autosave de-duplicates writing events already stored on the server", () => {
+  const event = { id: "event-1", timestamp: "2026-08-05T10:00:00Z", insertedText: "A" };
+  const payload = mergeAppendOnlyProcessHistory(
+    { writing_events: [event] },
+    { writing_events: [event] }
+  );
+
+  assert.deepEqual(payload.writing_events, [event]);
+});
 
 test("stripWritingEventsForArchive removes every text payload but keeps process fields", () => {
   const events = [

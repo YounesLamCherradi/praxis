@@ -155,4 +155,108 @@ test.describe("Teacher assignment modal lifecycle", () => {
     await expect(page.locator("h1").filter({ hasText: "Newly created modal audit" })).toBeVisible();
     expect(pageErrors).toEqual([]);
   });
+
+  test("one Publish click sends one update and changes the assignment status", async ({ page }) => {
+    let publishRequests = 0;
+    await page.addInitScript(() => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.assignments[0] = {
+        ...data.assignments[0],
+        status: "draft",
+        assignmentType: "Essay",
+        languageLevel: "B2",
+      };
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+    });
+    await page.route("**/api/assignments/existing_assignment", async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      publishRequests += 1;
+      const payload = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assignment: {
+            id: "existing_assignment",
+            class_id: "teacher_class",
+            ...payload,
+            version: 2,
+            updated_at: new Date().toISOString(),
+          },
+        }),
+      });
+    });
+
+    await page.goto("/teacher");
+    await page.getByRole("button", { name: /^Assignments/ }).click();
+    await page.getByLabel("1. Select Course").selectOption("teacher_class");
+    await page.getByLabel("2. Select Assignment").selectOption("existing_assignment");
+
+    const publish = page.getByRole("button", { name: "Publish", exact: true });
+    await expect(publish).toBeEnabled();
+    await publish.click();
+
+    await expect(page.getByRole("button", { name: "Unpublish", exact: true })).toBeVisible();
+    expect(publishRequests).toBe(1);
+  });
+
+  test("one Publish click refreshes and retries a stale assignment version", async ({ page }) => {
+    let publishRequests = 0;
+    const draft = {
+      ...teacherFixture().assignments[0],
+      status: "draft",
+      assignmentType: "Essay",
+      languageLevel: "B2",
+      version: 1,
+    };
+    await page.addInitScript((assignment) => {
+      const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
+      data.assignments[0] = assignment;
+      localStorage.setItem("praxis_mock_data", JSON.stringify(data));
+    }, draft);
+    await page.route("**/api/classes/teacher_class/assignments", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ assignments: [{ ...draft, version: 2 }] }),
+      });
+    });
+    await page.route("**/api/assignments/existing_assignment", async (route) => {
+      if (route.request().method() !== "PATCH") return route.fallback();
+      publishRequests += 1;
+      const payload = route.request().postDataJSON();
+      if (publishRequests === 1) {
+        await route.fulfill({
+          status: 409,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Assignment was modified elsewhere.", conflict: true }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          assignment: {
+            id: "existing_assignment",
+            class_id: "teacher_class",
+            ...payload,
+            version: 3,
+            updated_at: new Date().toISOString(),
+          },
+        }),
+      });
+    });
+
+    await page.goto("/teacher");
+    await page.getByRole("button", { name: /^Assignments/ }).click();
+    await page.getByLabel("1. Select Course").selectOption("teacher_class");
+    await page.getByLabel("2. Select Assignment").selectOption("existing_assignment");
+    await page.getByRole("button", { name: "Publish", exact: true }).click();
+
+    await expect(page.getByRole("button", { name: "Unpublish", exact: true })).toBeVisible();
+    await expect(page.getByRole("status")).toHaveText("Assignment published.");
+    expect(publishRequests).toBe(2);
+  });
 });

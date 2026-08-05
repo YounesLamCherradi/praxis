@@ -1,5 +1,6 @@
 import React, {
   useEffect,
+  useRef,
   useState,
 } from "react";
 import { TeacherWorkspaceContext } from "./TeacherWorkspaceContextBase";
@@ -1191,6 +1192,7 @@ export function TeacherWorkspaceProvider({ children }) {
 
   const [rubrics, setRubrics] = useState([]);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
+  const assignmentStatusRequestsRef = useRef(new Map());
 
   useEffect(() => {
     let active = true;
@@ -1736,39 +1738,87 @@ export function TeacherWorkspaceProvider({ children }) {
   }
 
   async function toggleAssignmentStatus(id) {
-    const now = nowIso();
-    const current = assignments.find(
-      (assignment) => String(assignment.id) === String(id)
-    );
-    if (!current) return null;
-    const isPublished =
-      String(current.status || "").toLowerCase() === "published";
-    if (!isPublished && !isAssignmentComplete(current)) return null;
+    const requestKey = String(id);
+    const pendingRequest = assignmentStatusRequestsRef.current.get(requestKey);
+    if (pendingRequest) return pendingRequest;
 
-    const requested = {
-      ...current,
-      status: isPublished ? "Draft" : "Published",
-      publishedAt: isPublished ? null : now,
-      updatedAt: now,
-    };
-    const persisted = await updatePersistedAssignment(id, requested);
-    const next = {
-      ...requested,
-      ...persisted,
-      classId: current.classId,
-      backendClassId: current.backendClassId,
-      classCode: current.classCode,
-      className: current.className,
-    };
-    setAssignments((prev) =>
-      prev.map((assignment) =>
-        String(assignment.id) === String(id) ? next : assignment
-      )
-    );
-    setSelectedAssignment((prev) =>
-      prev && String(prev.id) === String(id) ? next : prev
-    );
-    return next;
+    const request = (async () => {
+      const original = assignments.find(
+        (assignment) => String(assignment.id) === requestKey
+      );
+      if (!original) throw new Error("Assignment not found. Refresh and try again.");
+
+      const wasPublished =
+        String(original.status || "").toLowerCase() === "published";
+      if (!wasPublished && !isAssignmentComplete(original)) {
+        throw new Error("Complete all required assignment fields before publishing.");
+      }
+
+      const desiredStatus = wasPublished ? "Draft" : "Published";
+      const persistStatus = async (source) => {
+        const now = nowIso();
+        const requested = {
+          ...source,
+          status: desiredStatus,
+          publishedAt: desiredStatus === "Published" ? now : null,
+          updatedAt: now,
+        };
+        const persisted = await updatePersistedAssignment(id, requested);
+        return {
+          ...requested,
+          ...persisted,
+          classId: source.classId,
+          backendClassId: source.backendClassId,
+          classCode: source.classCode,
+          className: source.className,
+        };
+      };
+
+      let next;
+      try {
+        next = await persistStatus(original);
+      } catch (error) {
+        if (!error?.conflict) throw error;
+
+        const owningClass = resolveAssignmentClass(classes, original);
+        const backendClassId =
+          original.backendClassId || owningClass?.backendId || owningClass?.id;
+        if (!backendClassId) throw error;
+
+        const refreshed = await getAssignmentsForClass(backendClassId);
+        const latest = refreshed.find(
+          (assignment) => String(assignment.id) === requestKey
+        );
+        if (!latest) throw error;
+
+        const refreshedSource = {
+          ...original,
+          ...latest,
+          classId: original.classId,
+          backendClassId,
+          classCode: original.classCode,
+          className: original.className,
+        };
+        next = await persistStatus(refreshedSource);
+      }
+
+      setAssignments((prev) =>
+        prev.map((assignment) =>
+          String(assignment.id) === requestKey ? next : assignment
+        )
+      );
+      setSelectedAssignment((prev) =>
+        prev && String(prev.id) === requestKey ? next : prev
+      );
+      return next;
+    })();
+
+    assignmentStatusRequestsRef.current.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      assignmentStatusRequestsRef.current.delete(requestKey);
+    }
   }
 
   function attachRubricToAssignment(assignmentId, rubricData) {

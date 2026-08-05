@@ -21,10 +21,13 @@ const {
 const {
   buildDeidentifiedArchiveRow,
   createOpenTeacherReview,
+  mergeAppendOnlyProcessHistory,
   normalizeStudentVisibleSubmission,
+  preserveProcessHistoryOnSubmit,
   sanitizeStudentSubmissionPayload,
   sanitizeTeacherSubmissionPayload,
 } = require('./submission-sanitizer');
+const { buildSubmissionAttemptList } = require('./submission-attempts');
 const {
   getCanonicalRedirectTarget,
   getConfiguredBaseUrl,
@@ -2158,7 +2161,7 @@ async function ensureStudentCanModifyAssignment(assignmentId, studentId, client 
 async function getSubmissionRecord(submissionId, client = supabase) {
   const { data, error } = await client
     .from('submissions')
-    .select('id, assignment_id, student_id, status, teacher_review, version, updated_at')
+    .select('id, assignment_id, student_id, status, teacher_review, version, updated_at, writing_events, keystroke_log')
     .eq('id', submissionId)
     .maybeSingle();
   if (error) throw error;
@@ -2195,9 +2198,12 @@ async function applyAppendDeltas(reqBody, submissionId, client, payload) {
   return { ok: true };
 }
 
-async function buildStudentPatchPayload(reqBody, submissionId, readClient) {
-  const payload = { ...sanitizeStudentSubmissionPayload(reqBody), updated_at: new Date().toISOString() };
-  const appended = await applyAppendDeltas(reqBody, submissionId, readClient, payload);
+async function buildStudentPatchPayload(reqBody, submission, readClient) {
+  let payload = { ...sanitizeStudentSubmissionPayload(reqBody), updated_at: new Date().toISOString() };
+  const appended = await applyAppendDeltas(reqBody, submission.id, readClient, payload);
+  if (!appended.conflict) {
+    payload = mergeAppendOnlyProcessHistory(payload, submission);
+  }
   return { conflict: appended.conflict === true, payload };
 }
 
@@ -5005,12 +5011,27 @@ async function querySubmissionsForAssignments(assignmentIds, client = supabase) 
       'profiles(id, name, email)',
     ].join(','))
     .in('assignment_id', assignmentIds);
+  if (error) return { data: [], error };
+
+  const submissionIds = (data || []).map((submission) => submission.id).filter(Boolean);
+  let revisions = [];
+  if (submissionIds.length) {
+    const { data: revisionRows, error: revisionError } = await supabase
+      .from('submission_revisions')
+      .select('submission_id, revision_number, snapshot, change_type, created_at')
+      .in('submission_id', submissionIds)
+      .order('revision_number', { ascending: true });
+    if (revisionError) return { data: [], error: revisionError };
+    revisions = revisionRows || [];
+  }
+
+  const attempts = buildSubmissionAttemptList(data || [], revisions);
   return {
-    data: (data || []).map((submission) => ({
+    data: attempts.map((submission) => ({
       ...submission,
-      detail_loaded: false,
+      detail_loaded: submission.detail_loaded === true,
     })),
-    error,
+    error: null,
   };
 }
 
@@ -5193,7 +5214,20 @@ app.get('/api/student/submissions', async (req, res) => {
       .in('assignment_id', assignmentIds);
     if (error) return res.status(400).json({ error: error.message });
 
-    res.json({ submissions: (data || []).map(normalizeStudentVisibleSubmission) });
+    const submissionIds = (data || []).map((submission) => submission.id).filter(Boolean);
+    let revisions = [];
+    if (submissionIds.length) {
+      const { data: revisionRows, error: revisionError } = await supabase
+        .from('submission_revisions')
+        .select('submission_id, revision_number, snapshot, change_type, created_at')
+        .in('submission_id', submissionIds)
+        .order('revision_number', { ascending: true });
+      if (revisionError) return res.status(400).json({ error: revisionError.message });
+      revisions = revisionRows || [];
+    }
+
+    const attempts = buildSubmissionAttemptList(data || [], revisions);
+    res.json({ submissions: attempts.map(normalizeStudentVisibleSubmission) });
   } catch (error) {
     console.error('Unexpected student submissions failure:', safeLogError(error));
     res.status(500).json({ error: 'Could not load your submissions right now. Please refresh and try again.' });
@@ -5357,7 +5391,7 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
 
     const payload = sanitizeStudentSubmissionPayload(req.body);
     const submittedAt = new Date().toISOString();
-    const nextPayload = {
+    let nextPayload = {
       ...payload,
       status: 'submitted',
       submitted_at: submittedAt,
@@ -5368,20 +5402,15 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
     const submissionClient = readClient;
     const { data: existing, error: existingError } = await submissionClient
       .from('submissions')
-      .select('id')
+      .select('id, version, writing_events, keystroke_log')
       .eq('assignment_id', req.params.assignmentId)
       .eq('student_id', user.id)
       .maybeSingle();
     if (existingError) return res.status(isRlsDenial(existingError) ? 403 : 400).json({ error: existingError.message });
 
     if (existing?.id) {
-      const { data: existingRow, error: existingRowError } = await submissionClient
-        .from('submissions')
-        .select('version')
-        .eq('id', existing.id)
-        .single();
-      if (existingRowError) return res.status(400).json({ error: existingRowError.message });
-      nextPayload.version = Number(existingRow.version || 1) + 1;
+      nextPayload = preserveProcessHistoryOnSubmit(nextPayload, existing);
+      nextPayload.version = Number(existing.version || 1) + 1;
       const { data, error } = await submissionWriteWithFallback(req, (client) => client
         .from('submissions')
         .update(nextPayload)
@@ -5600,7 +5629,7 @@ app.patch('/api/submissions/:id', async (req, res) => {
     }
     let payload;
     if (isStudentOwner) {
-      const built = await buildStudentPatchPayload(req.body, req.params.id, readClient);
+      const built = await buildStudentPatchPayload(req.body, submission, readClient);
       if (built.conflict) {
         return res.status(409).json({
           error: 'Submission was modified by someone else. Please refresh and try again.',

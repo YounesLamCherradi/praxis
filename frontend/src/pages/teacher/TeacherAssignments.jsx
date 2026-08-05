@@ -320,7 +320,29 @@ export default function TeacherAssignments({
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissionStatusFilter, setSubmissionStatusFilter] = useState("All");
+  const [statusChangeAssignmentId, setStatusChangeAssignmentId] = useState("");
+  const [statusChangeMessage, setStatusChangeMessage] = useState("");
   const appliedWorkspaceRequestRef = useRef(0);
+
+  async function handleToggleAssignmentStatus(assignment) {
+    if (!assignment?.id || statusChangeAssignmentId) return;
+    setStatusChangeAssignmentId(String(assignment.id));
+    setStatusChangeMessage("");
+    try {
+      const updated = await toggleAssignmentStatus(assignment.id);
+      setStatusChangeMessage(
+        normalizeAssignmentStatus(updated) === "Published"
+          ? "Assignment published."
+          : "Assignment moved back to draft."
+      );
+    } catch (error) {
+      setStatusChangeMessage(
+        error?.message || "Assignment status could not be changed. Please try again."
+      );
+    } finally {
+      setStatusChangeAssignmentId("");
+    }
+  }
 
   const activeClasses = useMemo(
     () => classes.filter((course) => course?.archived !== true),
@@ -898,8 +920,8 @@ export default function TeacherAssignments({
 
                 <button
                   type="button"
-                  onClick={() => toggleAssignmentStatus(activeAssignment.id)}
-                  disabled={shouldLockDraftActions}
+                  onClick={() => handleToggleAssignmentStatus(activeAssignment)}
+                  disabled={shouldLockDraftActions || Boolean(statusChangeAssignmentId)}
                   title={shouldLockDraftActions ? "Complete assignment setup first, then Publish will unlock." : activeAssignmentStatus === "Published" ? "Unpublish assignment" : "Publish assignment"}
                   className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
                     shouldLockDraftActions
@@ -910,7 +932,9 @@ export default function TeacherAssignments({
                   }`}
                 >
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  {activeAssignmentStatus === "Published" ? "Unpublish" : "Publish"}
+                  {String(statusChangeAssignmentId) === String(activeAssignment.id)
+                    ? "Saving..."
+                    : activeAssignmentStatus === "Published" ? "Unpublish" : "Publish"}
                 </button>
 
                 <button
@@ -931,6 +955,18 @@ export default function TeacherAssignments({
                   Delete
                 </button>
               </div>
+              {statusChangeMessage && (
+                <p
+                  role="status"
+                  className={`text-xs font-semibold ${
+                    /could not|complete all|required|refresh/i.test(statusChangeMessage)
+                      ? "text-red-700"
+                      : "text-emerald-700"
+                  }`}
+                >
+                  {statusChangeMessage}
+                </p>
+              )}
             </div>
 
             {/* Pass current active assignment to eliminate duplicate controls */}

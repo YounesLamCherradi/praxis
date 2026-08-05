@@ -1725,7 +1725,7 @@ export default function Step4FinalSummary({
       console.error("Self-assessment persistence failed:", error);
       setSelfGradeMessage(
         error?.conflict
-          ? "Your assignment changed in another tab. Refresh before saving the rubric again."
+          ? "A newer autosave finished first. Your selections are still here; please save the rubric again."
           : "The rubric could not reach the database. Your selections remain here; please try again."
       );
     } finally {
@@ -1847,7 +1847,7 @@ export default function Step4FinalSummary({
       console.error("Submission persistence failed:", error);
       setSubmitMessage(
         error?.conflict
-          ? "Your submission changed in another tab. Refresh and review it before submitting."
+          ? "A newer autosave finished first. Your work is still here; please submit again."
           : "Submission could not reach the database. Your local draft is still saved; please try again."
       );
       submitLockRef.current = false;
