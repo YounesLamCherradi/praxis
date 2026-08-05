@@ -1981,7 +1981,7 @@ export default function Step4FinalSummary({
           </div>
         )}
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 items-start gap-3 overflow-hidden xl:grid-cols-[minmax(0,1.55fr)_340px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 items-start gap-3 overflow-hidden xl:grid-cols-[minmax(0,1.55fr)_360px] 2xl:grid-cols-[minmax(0,1.55fr)_390px]">
           <FinalDraftPreview
             finalText={finalText}
             wordCount={wordCount}
@@ -2023,7 +2023,7 @@ export default function Step4FinalSummary({
             submitMessage={submitMessage}
             handleSubmit={handleSubmit}
             onBack={() => {
-              goToStudentStep(3);
+              goToStudentStep(2);
             }}
           />
         </div>
@@ -2310,7 +2310,7 @@ function FinalCheckPanel({
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-3">
+      <div className="border-b border-slate-100 px-4 py-2.5">
         <div className="flex items-start gap-3">
           <div className="flex items-start gap-2">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
@@ -2329,12 +2329,12 @@ function FinalCheckPanel({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
         {selfGradeRequired && (
           <button
             type="button"
             onClick={onOpenSelfGrade}
-            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-3 text-left transition-all ${
+            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${
               selfGradeComplete
                 ? "border-emerald-200 bg-emerald-50"
                 : "border-blue-100 bg-blue-50 hover:bg-blue-100"
@@ -2381,7 +2381,13 @@ function FinalCheckPanel({
         <div className="overflow-hidden rounded-xl border border-slate-200 bg-[#F8FAFC]">
           <SubmissionReadinessRow
             label="Draft"
-            value={`${wordCount} words`}
+            value={
+              aboveMaxWords
+                ? `${wordCount} / ${maxWords} max`
+                : belowMinWords
+                  ? `${wordCount} / ${minWords} min`
+                  : `${wordCount} words · ready`
+            }
             ready={wordCountReady}
           />
           <SubmissionReadinessRow
@@ -2403,7 +2409,7 @@ function FinalCheckPanel({
           type="button"
           onClick={() => setAttested(!attested)}
           aria-pressed={attested}
-          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-all ${
+          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${
             attested
               ? "border-emerald-200 bg-emerald-50"
               : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
@@ -2441,19 +2447,20 @@ function FinalCheckPanel({
           </p>
         )}
 
-        <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-2 bg-white px-1 pt-2">
+        <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-2 border-t border-slate-100 bg-white px-1 pt-2">
           <button
             type="button"
             onClick={onBack}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
           >
             <ArrowLeft className="h-4 w-4" />
-            Back
+            {wordCountReady ? "Back" : "Edit Draft"}
           </button>
 
           <button
             type="button"
             disabled={!canSubmit}
+            title={submitDisabledReason || "Submit assignment"}
             onClick={handleSubmit}
             className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-bold transition-all ${
               canSubmit
@@ -2483,9 +2490,9 @@ function FinalCheckPanel({
 
 function SubmissionReadinessRow({ label, value, ready, optional = false }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-3 py-2.5 last:border-b-0">
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 last:border-b-0">
       <span className="text-[11px] font-bold text-slate-700">{label}</span>
-      <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold ${
+      <span className={`inline-flex min-w-0 items-center justify-end gap-1.5 text-right text-[10px] font-bold ${
         ready ? "text-emerald-700" : "text-amber-700"
       }`}>
         {ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}

@@ -38,13 +38,9 @@ function normalizeStoredMessage(row = {}) {
     status:
       row.status === "draft"
         ? "Draft"
-        : row.status === "queued" || row.status === "sending"
-          ? "Queued"
-          : row.status === "partially_sent"
-            ? "Partially Sent"
-            : row.status === "failed"
-              ? "Failed"
-              : "Sent",
+        : row.status === "failed"
+          ? "Email Could Not Be Sent"
+          : "Email Sent",
     channel: row.recipient_mode === "individual" ? "Direct Email" : "Course Email",
     courseId: row.class_id,
     courseCode: row.classes?.invite_code || "",
@@ -393,11 +389,10 @@ export default function TeacherCommunication() {
         id: delivery.message?.id || `comm_${requestId}`,
         type: "email",
         channel: isIndividualRecipient ? "Direct Email" : "Course Email",
-        status: delivery.queued
-          ? "Queued"
-          : delivery.failedCount > 0
-            ? "Partially Sent"
-            : "Sent",
+        status:
+          delivery.failedCount > 0 && delivery.deliveredCount === 0
+            ? "Email Could Not Be Sent"
+            : "Email Sent",
         frontendOnly: false,
 
         courseId: selectedCourse.id,
@@ -427,13 +422,13 @@ export default function TeacherCommunication() {
 
       persistCommunicationMessage(
         message,
-        delivery.queued
-          ? `Email queued for ${delivery.recipientCount} student${delivery.recipientCount === 1 ? "" : "s"}. You can continue working while it is delivered.`
+        delivery.failedCount > 0 && delivery.deliveredCount === 0
+          ? "Email could not be sent. Please try again."
           : delivery.failedCount > 0
-          ? `Email delivered to ${delivery.deliveredCount} of ${delivery.recipientCount} students.`
+          ? `Email sent to ${delivery.deliveredCount} of ${delivery.recipientCount} students.`
           : isIndividualRecipient
           ? `Email sent to ${selectedStudent?.studentName || "the selected student"}.`
-          : `Email sent successfully to ${delivery.deliveredCount} students.`,
+          : `Email sent to ${delivery.recipientCount} student${delivery.recipientCount === 1 ? "" : "s"}.`,
         editingDraftId
       );
 
@@ -939,6 +934,8 @@ export default function TeacherCommunication() {
                         className={`text-[9px] font-mono font-bold uppercase tracking-wider border px-2 py-0.5 rounded ${
                           message.status === "Draft"
                             ? "bg-slate-100 text-slate-500 border-slate-200"
+                            : message.status === "Email Could Not Be Sent"
+                              ? "bg-red-50 text-red-700 border-red-100"
                             : "bg-blue-50 text-blue-700 border-blue-100"
                         }`}
                       >
@@ -1056,11 +1053,15 @@ export default function TeacherCommunication() {
                 />
                 <MessageDetail label="Sent" value={formatDateTime(detailMessage.createdAt)} />
                 <MessageDetail
-                  label="Delivery"
+                  label="Email status"
                   value={
-                    detailMessage.deliveredCount !== undefined
-                      ? `${detailMessage.deliveredCount} delivered${detailMessage.failedCount ? `, ${detailMessage.failedCount} failed` : ""}`
-                      : detailMessage.status
+                    detailMessage.status === "Draft"
+                      ? "Draft"
+                      : detailMessage.status === "Email Could Not Be Sent"
+                        ? "Email could not be sent"
+                        : detailMessage.failedCount > 0
+                          ? `Email sent to ${detailMessage.deliveredCount} of ${detailMessage.recipientCount} recipients`
+                          : "Email sent"
                   }
                 />
               </div>

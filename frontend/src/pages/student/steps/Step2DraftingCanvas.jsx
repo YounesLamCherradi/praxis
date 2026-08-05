@@ -1440,7 +1440,7 @@ export default function Step2DraftingCanvas() {
       <div
         className={`grid min-h-[300px] w-full flex-1 gap-3 ${
           showChatOutline
-            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] 2xl:grid-cols-[minmax(0,1fr)_420px]"
+            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_520px]"
             : "grid-cols-1"
         }`}
       >
@@ -1576,12 +1576,12 @@ function ChatOutlinePanel({
           <div className="flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-blue-700" />
             <h2 className="text-xs font-black uppercase tracking-wider text-slate-900">
-              Outline  -  short notes only
+              Planning Outline
             </h2>
           </div>
 
           <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-            This is a planning outline, not your essay. Edit the notes before you write.
+            Edit and expand your notes before drafting.
           </p>
         </div>
 
@@ -1602,8 +1602,9 @@ function ChatOutlinePanel({
         </button>
       </div>
 
-      <p
-        className={`mt-3 min-h-[1rem] text-[11px] ${
+      {status && (
+        <p
+        className={`mt-2 text-[11px] ${
           busy
             ? "font-semibold text-blue-700"
             : "text-slate-500"
@@ -1611,18 +1612,15 @@ function ChatOutlinePanel({
       >
         {status}
       </p>
+      )}
 
       <textarea
         aria-label="Editable planning outline"
         value={value}
         onChange={onChange}
-        placeholder="Short bullet notes only. Write your full essay in the Draft Editor."
-        className="mt-2 min-h-0 w-full flex-1 resize-none overflow-y-auto rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-sm leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+        placeholder="Add headings, bullet points, examples, and supporting details."
+        className="mt-2 min-h-[240px] w-full flex-1 resize-y overflow-y-auto rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-4 text-sm leading-7 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 xl:min-h-0 xl:resize-none"
       />
-
-      <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-        Keep this to short notes and bullets. Write the full assignment in the Draft Editor on the left.
-      </p>
     </section>
   );
 }
