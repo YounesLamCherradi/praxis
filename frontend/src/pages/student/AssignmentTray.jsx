@@ -326,7 +326,15 @@ export default function AssignmentTray() {
               <div className="pt-5 border-t border-slate-100 mt-4">
                 <button
                   type="button"
-                  onClick={() => openStudentAssignment(assignment.id)}
+                  onClick={() => {
+                    // Start downloading the workflow while the first durable
+                    // submission record is created. Navigation happens only
+                    // when both the assignment data and UI are ready.
+                    const workspaceReady = import("./ActiveAssignmentWorkflow.jsx");
+                    void openStudentAssignment(assignment.id, {
+                      workspaceReady,
+                    });
+                  }}
                   onPointerEnter={() => {
                     void import("./ActiveAssignmentWorkflow.jsx");
                   }}

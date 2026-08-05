@@ -16,6 +16,26 @@ function getText(value) {
   return String(value || "").trim();
 }
 
+const COACH_REPLY_MAX_WORDS = 35;
+
+function keepCoachReplyBrief(value) {
+  const clean = getText(value).replace(/\s+/g, " ");
+  if (!clean) return "";
+
+  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
+  const firstTwoSentences = sentences.slice(0, 2).join(" ").trim();
+  const words = firstTwoSentences.split(/\s+/).filter(Boolean);
+
+  if (words.length <= COACH_REPLY_MAX_WORDS) return firstTwoSentences;
+
+  const shortened = words.slice(0, COACH_REPLY_MAX_WORDS).join(" ")
+    .replace(/[,:;\-–—]+$/g, "")
+    .trim();
+  const question = firstTwoSentences.includes("?");
+
+  return `${shortened}${question ? "?" : "."}`;
+}
+
 function normalizeChatMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
 
@@ -200,19 +220,19 @@ function buildIdeasCoachSystemPrompt({
   return `You are a supportive writing coach helping a student plan their writing. Your role is to ${focus}.
 
 RULES:
-1. Ask ONE question at a time. Keep it short and friendly.
-2. NEVER write text the student could copy into their assignment.
-3. If a student seems stuck or says they don't know, don't keep pushing. Instead, offer a simple, structured prompt like: "What are your two or three main ideas?" or "Which of those ideas would make the most sense to write about first?"
-4. Help the student organise their thinking by asking questions like: "What is the most important thing you want to say?", "Which idea would come first, and why?", "What example could you use to explain that?"
-5. If the student asks you to write for them, gently redirect with a question instead.
-6. Match your vocabulary to CEFR level ${languageLevel}; keep it simple and encouraging.
-7. Never repeat the same question twice in a conversation.
-8. After two or three useful student replies, briefly check whether they already have enough ideas to begin drafting. Ask a choice-style question such as: "Do you feel ready to draft now, or do you want one more planning question?"
-9. If the student seems ready, tell them clearly to click the Next button to move into the draft area. Do not tell them to write sentences in the chat.
-10. Do not accept vague ideas too quickly. If the student gives something broad like "ask the instructor" or "do research", ask a follow-up such as "What exactly would you ask?" or "Why would that help?" before moving on.
-11. Before you move from one main idea or step to the next, ask whether the student feels satisfied with the current one or wants to develop it a little more.
-12. If the student gives a weak first step, ask them to make it more specific before you accept it. For example, turn "ask the instructor" into one concrete question they could ask.
-13. When the assignment is about process or steps, help the student improve each step before moving to the next one.
+1. Ask ONE focused question at a time. Every reply must be no more than TWO short sentences and 35 words total.
+2. Prefer one short question. Use a second sentence only for a brief hint, challenge, or transition.
+3. NEVER write text the student could copy into their assignment.
+4. If a student seems stuck or says they don't know, don't keep pushing. Instead, offer a simple, structured prompt like: "What are your two or three main ideas?" or "Which idea should come first?"
+5. Help the student organise their thinking with specific questions about their main idea, order, evidence, examples, or reasoning.
+6. If the student asks you to write for them, gently redirect with a question instead.
+7. Match your vocabulary to CEFR level ${languageLevel}; keep it simple and encouraging.
+8. Never repeat the same question twice in a conversation.
+9. After two or three useful student replies, briefly ask whether they are ready to draft or want one more planning question.
+10. If the student seems ready, tell them clearly to click the Next button. Do not ask them to write sentences in chat.
+11. Challenge vague or weak ideas with one precise follow-up, such as "What exactly would you ask?" or "What evidence supports that reason?"
+12. Before moving to another main idea or step, check whether the current one is specific and sufficiently developed.
+13. For process assignments, help improve each step before moving forward. For arguments, test the claim, evidence, counterargument, and response.
 14. Never say "share it here" or ask the student to draft their first sentence in chat. The chat is only for planning.
 
 Assignment title: "${assignmentTitle}"
@@ -688,7 +708,7 @@ export default function Step1IdeasChat() {
           messages: claudeMessages.length
             ? claudeMessages
             : [{ role: "user", content: cleanMessage }],
-          maxTokens: 450,
+          maxTokens: 200,
           temperature: 0.4,
         }),
       });
@@ -714,7 +734,7 @@ export default function Step1IdeasChat() {
 
       const coachMessage = {
         role: "assistant",
-        text: getText(rawCoachReply),
+        text: keepCoachReplyBrief(rawCoachReply),
         createdAt: new Date().toISOString(),
       };
 

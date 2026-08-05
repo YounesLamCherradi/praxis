@@ -3814,7 +3814,7 @@ export function StudentWorkspaceProvider({
     return true;
   }
 
-  async function openStudentAssignment(assignmentId) {
+  async function openStudentAssignment(assignmentId, options = {}) {
     const assignment = assignments.find(
       (item) =>
         String(item.id) === String(assignmentId)
@@ -3839,18 +3839,21 @@ export function StudentWorkspaceProvider({
           ? 1
           : Number(studentStepOverrides[String(assignmentId)] || 1);
 
-    // Display cached work immediately. Only a genuinely new assignment waits
-    // for its durable row to be created.
+    // Existing work can open immediately. For a first attempt, keep the tray
+    // visible until its durable row exists so the workspace never mounts as a
+    // temporary loading card and then swaps to the Coach.
     setOpeningAssignmentId(submission?.id ? null : assignmentId);
     clearStudentWorkflowNotice();
-    saveActiveStudentAssignmentId(assignmentId);
-    setSelectedAssignmentId(assignmentId);
-    setStudentStep(provisionalStep);
-    setTypedText(
-      provisionalStep >= 3
-        ? getFinalText(submission) || getDraftText(submission)
-        : getDraftText(submission)
-    );
+    if (submission?.id) {
+      saveActiveStudentAssignmentId(assignmentId);
+      setSelectedAssignmentId(assignmentId);
+      setStudentStep(provisionalStep);
+      setTypedText(
+        provisionalStep >= 3
+          ? getFinalText(submission) || getDraftText(submission)
+          : getDraftText(submission)
+      );
+    }
 
     try {
       const persisted = await getOrCreateMySubmission(assignmentId);
@@ -3907,6 +3910,10 @@ export function StudentWorkspaceProvider({
         );
         return [...withoutCurrent, submission];
       });
+
+      if (!hadCachedSubmission && options.workspaceReady) {
+        await Promise.resolve(options.workspaceReady).catch(() => undefined);
+      }
     } catch (error) {
       console.error("Could not open the durable submission:", error);
       showStudentWorkflowNotice({
