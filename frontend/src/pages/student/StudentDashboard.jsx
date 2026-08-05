@@ -1939,7 +1939,7 @@ export default function StudentDashboard() {
                 : "max-w-7xl"
             }`}
           >
-            {!selectedAssignmentId && (
+            {!selectedAssignmentId && hasJoinedCourses && (
               <div className="bg-gradient-to-r from-blue-50 to-white border border-blue-100/80 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in-up">
                 <div className="space-y-1">
                   <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
@@ -1977,8 +1977,8 @@ export default function StudentDashboard() {
               {selectedAssignmentId ? (
                 <ActiveAssignmentWorkflow />
               ) : (
+                hasJoinedCourses ? (
                 <div className="space-y-8">
-                {hasJoinedCourses && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
                   <StudentMetricCard
                     cardType="draft"
@@ -2008,7 +2008,6 @@ export default function StudentDashboard() {
                     tone="sky"
                   />
                 </div>
-                )}
 
                 <div className="space-y-2 animate-fade-in-up [animation-delay:150ms]">
                   <div className="space-y-1">
@@ -2025,6 +2024,37 @@ export default function StudentDashboard() {
                     <AssignmentTray />
                   </div>
                 </div>
+                ) : (
+                  <section className="flex min-h-[58vh] items-center justify-center animate-fade-in-up">
+                    <button
+                      type="button"
+                      onClick={openEnrollModal}
+                      className="group flex w-full max-w-2xl flex-col items-center justify-center rounded-3xl border border-blue-200 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 px-6 py-12 text-center text-white shadow-xl shadow-blue-950/10 transition-all hover:-translate-y-0.5 hover:shadow-2xl sm:px-10 sm:py-14"
+                    >
+                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-inner transition-transform group-hover:scale-105">
+                        <Plus className="h-7 w-7" />
+                      </div>
+
+                      <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">
+                        Step 1 · Start here
+                      </p>
+
+                      <h2 className="mt-1 font-serif text-2xl font-black sm:text-3xl">
+                        Join your first course
+                      </h2>
+
+                      <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-300">
+                        Enter the course code provided by your instructor to
+                        access assignments and start your writing workspace.
+                      </p>
+
+                      <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-950/30 transition-colors group-hover:bg-blue-500">
+                        <Plus className="h-4 w-4" />
+                        Join Course
+                      </span>
+                    </button>
+                  </section>
+                )
               )}
             </Suspense>
           </div>
