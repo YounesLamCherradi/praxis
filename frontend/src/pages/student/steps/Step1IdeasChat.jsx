@@ -566,6 +566,11 @@ export default function Step1IdeasChat() {
         })
       );
 
+      // Never leave a new student staring at an empty Coach panel while the
+      // personalized question is generated. Show the safe local opening now,
+      // then replace it when the short AI response arrives.
+      setMessages([fallbackMessage]);
+
       const generateOpeningQuestion = async () => {
         let openingMessage = fallbackMessage;
 
@@ -589,6 +594,8 @@ export default function Step1IdeasChat() {
                   content: "Ask the opening planning question now.",
                 },
               ],
+              maxTokens: 220,
+              temperature: 0.3,
             }),
           });
           const contentType = response.headers.get("content-type") || "";
@@ -765,6 +772,8 @@ export default function Step1IdeasChat() {
           messages: claudeMessages.length
             ? claudeMessages
             : [{ role: "user", content: cleanMessage }],
+          maxTokens: 450,
+          temperature: 0.4,
         }),
       });
 

@@ -2689,7 +2689,7 @@ function SelfGradeDrawer({
   if (!open) return null;
 
   return (
-      <section className="flex w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-3">
           <div>
             <div className="flex items-center gap-2">
@@ -2720,7 +2720,7 @@ function SelfGradeDrawer({
           </button>
         </header>
 
-        <div className="bg-[#F8FAFC] p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC] p-3">
           {rubricCriteria.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
               <Info className="mx-auto h-7 w-7 text-slate-300" />
@@ -2774,7 +2774,7 @@ function SelfGradeDrawer({
             </p>
           )}
 
-          <div className="grid flex-1 grid-cols-2 gap-2 xl:max-w-[720px]">
+          <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:max-w-[720px]">
             <button
               type="button"
               onClick={onClose}

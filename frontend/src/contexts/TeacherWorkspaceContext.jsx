@@ -1203,44 +1203,50 @@ export function TeacherWorkspaceProvider({ children }) {
         });
         const displayedCourses = backendCourses;
 
-        const assignmentGroups = await Promise.all(
-          displayedCourses.map(async (course) => {
-            const backendClassId = course.backendId || course.id;
-            const rows = await queryClient.fetchQuery({
-              queryKey: queryKeys.classAssignments(backendClassId),
-              queryFn: () => getAssignmentsForClass(backendClassId),
-            });
-            return rows.map((assignment) => ({
-              ...assignment,
-              classId: course.id,
-              backendClassId,
-              classCode: course.code || "",
-              className: course.name || "",
-            }));
-          })
-        );
-        const submissionGroups = await Promise.all(
-          displayedCourses.map(async (course) => {
-            const backendClassId = course.backendId || course.id;
-            const rows = await queryClient.fetchQuery({
-              queryKey: queryKeys.teacherSubmissions(backendClassId),
-              queryFn: () => getTeacherSubmissionsForClass(backendClassId),
-            });
-            return rows.map((submission) => {
-              const assignment = assignmentGroups
-                .flat()
-                .find((entry) => String(entry.id) === String(submission.assignmentId));
-              return {
-                ...submission,
-                assignment,
-                assignmentDetails: assignment,
-                assignmentTitle: assignment?.title || "",
+        const [assignmentGroups, rawSubmissionGroups] = await Promise.all([
+          Promise.all(
+            displayedCourses.map(async (course) => {
+              const backendClassId = course.backendId || course.id;
+              const rows = await queryClient.fetchQuery({
+                queryKey: queryKeys.classAssignments(backendClassId),
+                queryFn: () => getAssignmentsForClass(backendClassId),
+              });
+              return rows.map((assignment) => ({
+                ...assignment,
                 classId: course.id,
+                backendClassId,
                 classCode: course.code || "",
                 className: course.name || "",
-                isCurrent: true,
-              };
-            });
+              }));
+            })
+          ),
+          Promise.all(
+            displayedCourses.map(async (course) => {
+              const backendClassId = course.backendId || course.id;
+              const rows = await queryClient.fetchQuery({
+                queryKey: queryKeys.teacherSubmissions(backendClassId),
+                queryFn: () => getTeacherSubmissionsForClass(backendClassId),
+              });
+              return { course, rows };
+            })
+          ),
+        ]);
+        const flattenedAssignments = assignmentGroups.flat();
+        const submissionGroups = rawSubmissionGroups.map(({ course, rows }) =>
+          rows.map((submission) => {
+            const assignment = flattenedAssignments.find(
+              (entry) => String(entry.id) === String(submission.assignmentId)
+            );
+            return {
+              ...submission,
+              assignment,
+              assignmentDetails: assignment,
+              assignmentTitle: assignment?.title || "",
+              classId: course.id,
+              classCode: course.code || "",
+              className: course.name || "",
+              isCurrent: true,
+            };
           })
         );
 

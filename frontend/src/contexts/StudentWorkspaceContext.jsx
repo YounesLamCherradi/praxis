@@ -1544,6 +1544,7 @@ export function StudentWorkspaceProvider({
     selectedAssignmentId,
     setSelectedAssignmentId,
   ] = useState(() => loadActiveStudentAssignmentId());
+  const [openingAssignmentId, setOpeningAssignmentId] = useState(null);
 
   const [
     studentStep,
@@ -1708,7 +1709,7 @@ export function StudentWorkspaceProvider({
         const { classes: backendClasses } = await queryClient.fetchQuery({
           queryKey: queryKeys.studentCourses,
           queryFn: getStudentCourses,
-          staleTime: 0,
+          staleTime: 30_000,
         });
         if (!active) return;
 
@@ -1760,28 +1761,29 @@ export function StudentWorkspaceProvider({
           }
         });
 
-        const assignmentGroups = await Promise.all(
-          backendClasses.map(async (course) => {
-            const rows = await queryClient.fetchQuery({
-              queryKey: queryKeys.classAssignments(course.id),
-              queryFn: () => getStudentAssignments(course.id),
-              staleTime: 0,
-            });
-            return rows.map((assignment) => ({
-              ...assignment,
-              classId: course.id,
-              classCode: course.code || "",
-              className: course.name || "",
-            }));
-          })
-        );
+        const [assignmentGroups, backendSubmissions] = await Promise.all([
+          Promise.all(
+            backendClasses.map(async (course) => {
+              const rows = await queryClient.fetchQuery({
+                queryKey: queryKeys.classAssignments(course.id),
+                queryFn: () => getStudentAssignments(course.id),
+                staleTime: 30_000,
+              });
+              return rows.map((assignment) => ({
+                ...assignment,
+                classId: course.id,
+                classCode: course.code || "",
+                className: course.name || "",
+              }));
+            })
+          ),
+          queryClient.fetchQuery({
+            queryKey: [...queryKeys.studentSubmissions, "all"],
+            queryFn: () => getStudentSubmissions([]),
+            staleTime: 30_000,
+          }),
+        ]);
         const backendAssignments = assignmentGroups.flat();
-        const assignmentIds = backendAssignments.map((assignment) => assignment.id);
-        const backendSubmissions = await queryClient.fetchQuery({
-          queryKey: [...queryKeys.studentSubmissions, assignmentIds.join(",")],
-          queryFn: () => getStudentSubmissions(assignmentIds),
-          staleTime: 0,
-        });
         const persistedSubmissions = backendSubmissions.map((submission) => {
           const assignment = backendAssignments.find(
             (entry) => String(entry.id) === String(submission.assignmentId)
@@ -3770,6 +3772,29 @@ export function StudentWorkspaceProvider({
         assignmentId
       );
 
+    const provisionalStatus = normalizeStudentStatus(submission?.status);
+    const provisionalStep =
+      provisionalStatus === "submitted" ||
+      provisionalStatus === "graded" ||
+      (provisionalStatus === "late" && isStudentSubmissionLocked(submission))
+        ? 4
+        : provisionalStatus === "reopened"
+          ? 1
+          : Number(studentStepOverrides[String(assignmentId)] || 1);
+
+    // Acknowledge the click immediately. The workflow displays a lightweight
+    // loading state while the durable submission is hydrated in the background.
+    setOpeningAssignmentId(assignmentId);
+    clearStudentWorkflowNotice();
+    saveActiveStudentAssignmentId(assignmentId);
+    setSelectedAssignmentId(assignmentId);
+    setStudentStep(provisionalStep);
+    setTypedText(
+      provisionalStep >= 3
+        ? getFinalText(submission) || getDraftText(submission)
+        : getDraftText(submission)
+    );
+
     try {
       const persisted = await getOrCreateMySubmission(assignmentId);
       submission = {
@@ -3802,7 +3827,11 @@ export function StudentWorkspaceProvider({
         title: "Assignment could not be opened",
         message: "Your connection to the database failed. Please try again before writing.",
       });
+      saveActiveStudentAssignmentId(null);
+      setSelectedAssignmentId(null);
       return false;
+    } finally {
+      setOpeningAssignmentId(null);
     }
 
     const status = normalizeStudentStatus(
@@ -3884,6 +3913,7 @@ export function StudentWorkspaceProvider({
 
         selectedAssignmentId,
         setSelectedAssignmentId,
+        openingAssignmentId,
 
         studentStep,
         setStudentStep,

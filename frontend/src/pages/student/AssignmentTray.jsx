@@ -111,6 +111,7 @@ export default function AssignmentTray() {
     submissions = [],
     currentClassId = "__all__",
     openStudentAssignment,
+    openingAssignmentId,
   } = useStudentWorkspace();
 
   const filteredAssignments = assignments.filter((assignment) => {
@@ -326,9 +327,20 @@ export default function AssignmentTray() {
                 <button
                   type="button"
                   onClick={() => openStudentAssignment(assignment.id)}
+                  onPointerEnter={() => {
+                    void import("./ActiveAssignmentWorkflow.jsx");
+                  }}
+                  onFocus={() => {
+                    void import("./ActiveAssignmentWorkflow.jsx");
+                  }}
+                  disabled={Boolean(openingAssignmentId)}
                   className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100 rounded-xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all group cursor-pointer"
                 >
-                  <span>{statusConfig.buttonText}</span>
+                  <span>
+                    {String(openingAssignmentId) === String(assignment.id)
+                      ? "Opening…"
+                      : statusConfig.buttonText}
+                  </span>
                   <ArrowRight className="w-4 h-4 text-blue-500 group-hover:text-white transition-colors" />
                 </button>
               </div>

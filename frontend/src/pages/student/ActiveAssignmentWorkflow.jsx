@@ -15,6 +15,7 @@ import {
   FileText,
   Info,
   Lock,
+  Loader2,
   MessageSquare,
   PenTool,
   X,
@@ -126,6 +127,7 @@ export default function ActiveAssignmentWorkflow() {
   const {
     activeAssignment,
     activeSubmission,
+    openingAssignmentId,
     studentStep,
     goToStudentStep,
     studentWorkflowNotice,
@@ -209,7 +211,7 @@ export default function ActiveAssignmentWorkflow() {
   }, [rubricCriteria.length, finalStageView]);
 
   useEffect(() => {
-    if (!activeAssignment) {
+    if (!activeAssignment || openingAssignmentId) {
       return;
     }
 
@@ -236,6 +238,7 @@ export default function ActiveAssignmentWorkflow() {
     }
   }, [
     activeAssignment,
+    openingAssignmentId,
     aiIdeasCoach,
     aiDraftFeedback,
     assignmentLocked,
@@ -245,6 +248,24 @@ export default function ActiveAssignmentWorkflow() {
 
   if (!activeAssignment) {
     return null;
+  }
+
+  if (openingAssignmentId) {
+    return (
+      <div className="flex min-h-[420px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="text-center" role="status" aria-live="polite">
+          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-700">
+            <Loader2 className="h-5 w-5 animate-spin" />
+          </span>
+          <h2 className="mt-4 font-serif text-lg font-bold text-slate-950">
+            Opening assignment…
+          </h2>
+          <p className="mt-1 text-xs text-slate-500">
+            Loading your latest saved work.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   const steps = [
@@ -533,7 +554,7 @@ export default function ActiveAssignmentWorkflow() {
           />
         )}
 
-        <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1">
+        <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:overflow-hidden">
           {renderActiveStepComponent()}
         </div>
       </div>
