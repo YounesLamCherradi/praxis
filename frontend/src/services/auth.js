@@ -127,13 +127,43 @@ async function refreshSessionRequest() {
 }
 
 async function authenticatedResponse(path, options = {}) {
+  const headers = { ...authHeaders() };
+  const suppliedHeaderEntries =
+    typeof Headers !== "undefined" && options.headers instanceof Headers
+      ? Array.from(options.headers.entries())
+      : Array.isArray(options.headers)
+        ? options.headers
+        : Object.entries(options.headers || {});
+
+  suppliedHeaderEntries.forEach(([name, value]) => {
+    Object.keys(headers).forEach((existingName) => {
+      if (existingName.toLowerCase() === String(name).toLowerCase()) {
+        delete headers[existingName];
+      }
+    });
+    headers[name] = value;
+  });
+
+  /*
+   * The browser must generate a multipart boundary for FormData bodies.
+   * Supplying our JSON default here makes Express try to parse the uploaded
+   * file as JSON before Multer can read it, which results in a bare HTML 400.
+   */
+  if (
+    typeof FormData !== "undefined" &&
+    options.body instanceof FormData
+  ) {
+    Object.keys(headers).forEach((name) => {
+      if (name.toLowerCase() === "content-type") {
+        delete headers[name];
+      }
+    });
+  }
+
   const requestOptions = {
     ...options,
     credentials: "include",
-    headers: {
-      ...authHeaders(),
-      ...(options.headers || {}),
-    },
+    headers,
   };
   let response = await fetchWithPolicy(path, requestOptions);
 

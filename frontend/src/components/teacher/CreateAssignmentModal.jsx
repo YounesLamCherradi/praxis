@@ -1038,9 +1038,20 @@ export default function CreateAssignmentModal({
 
       const contentType = response.headers.get("content-type") || "";
 
-      const data = contentType.includes("application/json")
-        ? await response.json()
-        : { error: await response.text() };
+      let data;
+
+      if (contentType.includes("application/json")) {
+        data = await response.json();
+      } else {
+        const responseText = await response.text();
+        const isHtmlError = /<!doctype\s+html|<html[\s>]/i.test(responseText);
+
+        data = {
+          error: isHtmlError
+            ? `The rubric upload was rejected by the server (${response.status}). Please try again or choose a smaller PDF or Word file.`
+            : responseText,
+        };
+      }
 
       if (!response.ok || data?.success === false) {
         throw new Error(

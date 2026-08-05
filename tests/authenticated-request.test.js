@@ -108,3 +108,90 @@ test("request errors preserve retryable metadata from temporary backend failures
       error.message === "AI is busy right now."
   );
 });
+
+test("authenticated FormData uploads let fetch generate the multipart boundary", async (t) => {
+  const originalFetch = global.fetch;
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  let capturedOptions = null;
+  global.fetch = async (_url, options) => {
+    capturedOptions = options;
+    return response(200, { success: true });
+  };
+
+  const { authenticatedFetch } = await import(`${authUrl}?formdata=${Date.now()}`);
+  const formData = new FormData();
+  formData.append("rubric", "rubric contents");
+
+  await authenticatedFetch("/api/rubric/parse", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: formData,
+  });
+
+  assert.equal(capturedOptions.body, formData);
+  assert.equal(capturedOptions.credentials, "include");
+  assert.equal(new Headers(capturedOptions.headers).has("Content-Type"), false);
+});
+
+test("authenticated JSON requests retain their application/json content type", async (t) => {
+  const originalFetch = global.fetch;
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  let capturedOptions = null;
+  global.fetch = async (_url, options) => {
+    capturedOptions = options;
+    return response(200, { success: true });
+  };
+
+  const { authenticatedFetch } = await import(`${authUrl}?json=${Date.now()}`);
+  await authenticatedFetch("/api/example", {
+    method: "POST",
+    body: JSON.stringify({ value: true }),
+  });
+
+  assert.equal(
+    new Headers(capturedOptions.headers).get("Content-Type"),
+    "application/json"
+  );
+});
+
+test("FormData upload retry after session refresh still omits Content-Type", async (t) => {
+  const originalFetch = global.fetch;
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const uploadHeaders = [];
+  let uploadAttempts = 0;
+  global.fetch = async (url, options) => {
+    if (url === "/api/auth/refresh") {
+      return response(200, { ok: true });
+    }
+
+    uploadAttempts += 1;
+    uploadHeaders.push(new Headers(options.headers));
+    return uploadAttempts === 1
+      ? response(401, { error: "Expired" })
+      : response(200, { success: true });
+  };
+
+  const { authenticatedFetch } = await import(`${authUrl}?formdataRetry=${Date.now()}`);
+  const formData = new FormData();
+  formData.append("rubric", "rubric contents");
+
+  const result = await authenticatedFetch("/api/rubric/parse", {
+    method: "POST",
+    body: formData,
+  });
+
+  assert.equal(result.status, 200);
+  assert.equal(uploadHeaders.length, 2);
+  assert.equal(uploadHeaders.every((headers) => !headers.has("Content-Type")), true);
+});
