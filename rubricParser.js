@@ -2,6 +2,11 @@ const fs = require("node:fs");
 const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 
+const RUBRIC_AI_TIMEOUT_MS = Math.max(
+  15_000,
+  Number(process.env.RUBRIC_AI_TIMEOUT_MS || 90_000)
+);
+
 const SYSTEM_PROMPT = `
 You are an expert academic rubric parser.
 
@@ -297,29 +302,50 @@ async function parseWithClaude(rawText, fileName = "Uploaded rubric") {
     throw new Error("ANTHROPIC_API_KEY is required to parse uploaded rubrics.");
   }
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": process.env.ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: `File name: ${fileName}
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    RUBRIC_AI_TIMEOUT_MS
+  );
+  let response;
+
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: `File name: ${fileName}
 
 Parse the following rubric text into the required JSON schema.
 
 ${rawText}`,
-        },
-      ],
-    }),
-  });
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(
+        "Rubric parsing timed out while waiting for the AI service. Please try again."
+      );
+      timeoutError.code = "RUBRIC_PARSE_TIMEOUT";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   const data = await response.json();
 

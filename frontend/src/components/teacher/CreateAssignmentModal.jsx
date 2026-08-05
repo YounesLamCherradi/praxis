@@ -49,6 +49,7 @@ import ReviewStep from "./create-assignment/steps/ReviewStep";
 // direct cross-origin Render request cannot use the cookie set on Netlify.
 const AI_ENDPOINT = "/api/generate";
 const RUBRIC_PARSE_ENDPOINT = "/api/rubric/parse";
+const RUBRIC_PARSE_TIMEOUT_MS = 120_000;
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     String(value || "").trim()
@@ -1034,6 +1035,8 @@ export default function CreateAssignmentModal({
           ...buildAuthHeaders(),
         },
         body: formData,
+        timeoutMs: RUBRIC_PARSE_TIMEOUT_MS,
+        retryDelaysMs: [],
       });
 
       const contentType = response.headers.get("content-type") || "";
@@ -1100,8 +1103,10 @@ export default function CreateAssignmentModal({
       setExpandedCriterionId("");
 
       setRubricParseError(
-        error?.message ||
-          "The rubric could not be parsed. Use a text-based PDF, Word file, or paste the rubric text."
+        error?.name === "AbortError"
+          ? "Rubric parsing took too long. Please try again; if the service was waking up, the next attempt should be faster."
+          : error?.message ||
+              "The rubric could not be parsed. Use a text-based PDF, Word file, or paste the rubric text."
       );
     } finally {
       setIsParsingRubric(false);

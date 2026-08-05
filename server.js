@@ -2587,7 +2587,9 @@ function uploadRubricSingle(req, res, next) {
 // A rubric the parser can't read (scanned/image PDF, empty, corrupt, or
 // password-protected file) is a client-side problem, not a server fault.
 function rubricParseErrorStatus(error) {
-  return error?.code === "RUBRIC_UNREADABLE" ? 422 : 500;
+  if (error?.code === "RUBRIC_UNREADABLE") return 422;
+  if (error?.code === "RUBRIC_PARSE_TIMEOUT") return 504;
+  return 500;
 }
 
 async function handleRubricFileParse(req, res, { legacyShape = false } = {}) {
