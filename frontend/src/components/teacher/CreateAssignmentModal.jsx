@@ -238,7 +238,7 @@ export default function CreateAssignmentModal({
 
   const modalScrollRef = useRef(null);
 
-  const [creationMode, setCreationMode] = useState("");
+  const [creationMode, setCreationMode] = useState("ai");
   const [draftAssignmentId, setDraftAssignmentId] = useState("");
 
   const [title, setTitle] = useState("");
@@ -508,7 +508,7 @@ export default function CreateAssignmentModal({
       setDraftAssignmentId(
         isUuid(parsed.draftAssignmentId) ? String(parsed.draftAssignmentId) : ""
       );
-      setCreationMode(parsed.creationMode === "manual" ? "manual" : parsed.creationMode === "ai" ? "ai" : "");
+      setCreationMode(parsed.creationMode === "manual" ? "manual" : "ai");
       setTitle(String(parsed.title || ""));
       setDescription(String(parsed.description || ""));
       setCourse(String(parsed.course || ""));
@@ -621,7 +621,7 @@ export default function CreateAssignmentModal({
       instructions: cleanDescription,
       prompt: cleanDescription,
 
-      creationMode: creationMode || "manual",
+      creationMode: creationMode || "ai",
 
       teacherRequest: aiBrief.trim(),
       aiTopic: aiTopic.trim(),
