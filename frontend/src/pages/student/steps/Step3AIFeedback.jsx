@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
-import { requestJson } from "../../../services/auth";
+import { runAiJob } from "../../../services/aiJobs";
 import {
   AlertTriangle,
   ArrowRight,
@@ -10,8 +10,6 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-
-const AI_ENDPOINT = "/api/generate";
 
 const REVIEW_PROGRESS_MESSAGES = [
   "Reading your draft carefully...",
@@ -40,16 +38,7 @@ async function requestDraftFeedback(payload) {
     attempt += 1
   ) {
     try {
-      return await requestJson(
-        AI_ENDPOINT,
-        {
-          method: "POST",
-          body: JSON.stringify(payload),
-        },
-        {
-          errorPrefix: "Draft review failed",
-        }
-      );
+      return await runAiJob("generate", payload);
     } catch (error) {
       lastError = error;
 

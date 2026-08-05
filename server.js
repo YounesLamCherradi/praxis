@@ -2991,6 +2991,120 @@ const AI_TIMEOUT_MS = clampNumber(process.env.AI_TIMEOUT_MS, {
 });
 const AI_UPSTREAM_RETRY_DELAYS_MS = [350, 900];
 
+// Netlify external proxy rewrites have a fixed request-duration ceiling. Keep
+// slow AI work on Render and let the browser poll with short authenticated
+// requests instead of holding one proxy connection open.
+const AI_JOB_TTL_MS = 10 * 60 * 1000;
+const AI_JOB_TARGETS = new Map([
+  ["generate", "/api/generate"],
+  ["teacher-review", "/api/teacher/ai-review-submission"],
+]);
+const aiJobs = new Map();
+
+function pruneAiJobs() {
+  const oldestAllowed = Date.now() - AI_JOB_TTL_MS;
+  for (const [jobId, job] of aiJobs.entries()) {
+    if (Number(job?.createdAt || 0) < oldestAllowed) aiJobs.delete(jobId);
+  }
+}
+
+async function executeAiJob({ jobId, targetPath, payload, cookie, localPort }) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    Math.min(185_000, AI_TIMEOUT_MS + 5_000)
+  );
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${localPort}${targetPath}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: JSON.stringify(payload || {}),
+      signal: controller.signal,
+    });
+    const result = await response.json().catch(() => ({}));
+    const job = aiJobs.get(jobId);
+    if (!job) return;
+    aiJobs.set(jobId, response.ok && !result.error
+      ? { ...job, status: "complete", result }
+      : {
+          ...job,
+          status: "failed",
+          httpStatus: response.status,
+          retryable: result.retryable === true,
+          error: result.error || `AI request failed (${response.status}).`,
+        });
+  } catch (error) {
+    const job = aiJobs.get(jobId);
+    if (!job) return;
+    aiJobs.set(jobId, {
+      ...job,
+      status: "failed",
+      httpStatus: error?.name === "AbortError" ? 504 : 503,
+      retryable: error?.name !== "AbortError",
+      error: error?.name === "AbortError"
+        ? "AI request timed out. Please try again."
+        : "The AI connection was interrupted. Please try again.",
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+app.post("/api/ai-jobs", async (req, res) => {
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  const target = String(req.body?.target || "");
+  const targetPath = AI_JOB_TARGETS.get(target);
+  if (!targetPath) return res.status(400).json({ error: "Unsupported AI job target." });
+
+  pruneAiJobs();
+  const jobId = crypto.randomUUID();
+  aiJobs.set(jobId, {
+    createdAt: Date.now(),
+    ownerId: user.id,
+    status: "processing",
+  });
+
+  void executeAiJob({
+    jobId,
+    targetPath,
+    payload: req.body?.payload || {},
+    cookie: String(req.headers.cookie || ""),
+    localPort: req.socket.localPort,
+  });
+
+  return res.status(202).json({ jobId, status: "processing" });
+});
+
+app.get("/api/ai-jobs/:jobId", async (req, res) => {
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+  pruneAiJobs();
+  const jobId = String(req.params.jobId || "");
+  const job = aiJobs.get(jobId);
+  if (!job || job.ownerId !== user.id) {
+    return res.status(404).json({ error: "AI job was not found. Please try again." });
+  }
+  if (job.status === "processing") {
+    return res.status(202).json({ status: "processing" });
+  }
+
+  aiJobs.delete(jobId);
+  if (job.status === "failed") {
+    return res.status(job.httpStatus || 500).json({
+      error: job.error || "AI request failed.",
+      retryable: job.retryable === true,
+    });
+  }
+  return res.json({ status: "complete", result: job.result || {} });
+});
+
 function waitForAiRetry(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

@@ -150,10 +150,7 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
     }));
   }, fixture);
 
-  await page.route("**/api/teacher/ai-review-submission", (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify({
+  const aiReviewResult = {
       summary: "Clear argument with relevant support.",
       feedback: "Explain how the evidence proves the thesis.",
       strengths: ["Clear thesis"],
@@ -163,7 +160,16 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
         { criterionId: "criterion_2", criterionName: "Evidence", score: 3, bandId: "good", bandLabel: "Good" },
       ],
       finalScore: 6,
-    }),
+  };
+  await page.route("**/api/ai-jobs", (route) => route.fulfill({
+    status: 202,
+    contentType: "application/json",
+    body: JSON.stringify({ jobId: "ai-review-job", status: "processing" }),
+  }));
+  await page.route("**/api/ai-jobs/ai-review-job", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({ status: "complete", result: aiReviewResult }),
   }));
   await page.route("**/api/submissions/submission_e2e", async (route) => {
     const payload = route.request().postDataJSON() || {};

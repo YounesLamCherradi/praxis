@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
-import { authenticatedFetch } from "../../../services/auth";
+import { runAiJob } from "../../../services/aiJobs";
 import {
   Send,
   ArrowRight,
@@ -9,8 +9,6 @@ import {
   Loader2,
   ShieldAlert,
 } from "lucide-react";
-
-const AI_ENDPOINT = "/api/generate";
 
 function getText(value) {
   return String(value || "").trim();
@@ -693,12 +691,7 @@ export default function Step1IdeasChat() {
     try {
       const claudeMessages = buildClaudeMessages(nextMessages);
 
-      const response = await authenticatedFetch(AI_ENDPOINT, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+      const data = await runAiJob("generate", {
           system: buildIdeasCoachSystemPrompt({
             assignmentTitle,
             assignmentPrompt,
@@ -710,21 +703,7 @@ export default function Step1IdeasChat() {
             : [{ role: "user", content: cleanMessage }],
           maxTokens: 200,
           temperature: 0.4,
-        }),
       });
-
-      const contentType = response.headers.get("content-type") || "";
-
-      const data = contentType.includes("application/json")
-        ? await response.json()
-        : { error: await response.text() };
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            `Coach request failed with status ${response.status}.`
-        );
-      }
 
       const rawCoachReply =
         data.response ||

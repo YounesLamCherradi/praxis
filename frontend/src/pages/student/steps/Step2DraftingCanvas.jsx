@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
-import { authenticatedFetch } from "../../../services/auth";
+import { runAiJob } from "../../../services/aiJobs";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -12,8 +12,6 @@ import {
   ShieldAlert,
   Sparkles,
 } from "lucide-react";
-
-const AI_ENDPOINT = "/api/generate";
 
 function countWords(text) {
   const clean = String(text || "").trim();
@@ -550,53 +548,19 @@ export default function Step2DraftingCanvas() {
 
   async function requestOutlineGeneration(
     payload,
-    { retries = 1, timeoutMs = 22000 } = {}
+    { retries = 1, timeoutMs = 125000 } = {}
   ) {
     let lastError = null;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(
-        () => controller.abort(),
-        timeoutMs
-      );
-
       try {
-        const response = await authenticatedFetch(AI_ENDPOINT, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-
-        const contentType =
-          response.headers.get("content-type") || "";
-
-        const data = contentType.includes("application/json")
-          ? await response.json()
-          : { error: await response.text() };
-
-        if (!response.ok) {
-          throw new Error(
-            data?.error ||
-              `Outline request failed with status ${response.status}.`
-          );
-        }
-
-        return data;
+        return await runAiJob("generate", payload, { timeoutMs });
       } catch (error) {
-        lastError =
-          error?.name === "AbortError"
-            ? new Error("Outline request timed out.")
-            : error;
+        lastError = error;
 
         if (attempt >= retries) {
           throw lastError;
         }
-      } finally {
-        window.clearTimeout(timeoutId);
       }
     }
 

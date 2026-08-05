@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../../hooks/useTeacherWorkspace";
-import { authenticatedFetch } from "../../../services/auth";
+import { runAiJob } from "../../../services/aiJobs";
 import { buildReplayTimeline } from "../../../utils/replayTimeline";
 
 const ANNOTATION_CODES = [
@@ -1509,14 +1509,7 @@ These are instructor-only review signals and are not automatic grades.`;
     setAiSuggestion(null);
 
     try {
-      const response = await authenticatedFetch(
-        "/api/teacher/ai-review-submission",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
+      const rawData = await runAiJob("teacher-review", {
             submissionId: submission.id,
             assignmentId: submission.assignmentId,
             assignmentTitle: submission.assignmentTitle,
@@ -1533,15 +1526,7 @@ These are instructor-only review signals and are not automatic grades.`;
               aiFlagCount,
               feedbackChecksUsed,
             },
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`AI review failed with status ${response.status}`);
-      }
-
-      const rawData = await response.json();
+      });
       const normalizedSuggestion = normalizeAiSuggestion(
         rawData,
         rubricCriteria,

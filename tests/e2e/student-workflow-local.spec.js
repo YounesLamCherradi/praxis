@@ -221,7 +221,7 @@ test.describe("Local student assignment workflow", () => {
 
   test("Coach opens immediately with one stable assignment-aware question", async ({ page }) => {
     let generateRequests = 0;
-    await page.route("**/api/generate", (route) => {
+    await page.route("**/api/ai-jobs", (route) => {
       generateRequests += 1;
       return route.fulfill({
         status: 200,
@@ -256,7 +256,7 @@ test.describe("Local student assignment workflow", () => {
 
   test("saved Coach conversation survives Draft to Coach navigation", async ({ page }) => {
     let generateRequests = 0;
-    await page.route("**/api/generate", (route) => {
+    await page.route("**/api/ai-jobs", (route) => {
       generateRequests += 1;
       return route.fulfill({
         status: 200,

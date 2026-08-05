@@ -9,6 +9,7 @@ import {
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 import { authenticatedFetch } from "../../services/auth";
+import { runAiJob } from "../../services/aiJobs";
 import {
   clearAssignmentBuilderDraft,
   getAssignmentBuilderDraft,
@@ -47,7 +48,6 @@ import ReviewStep from "./create-assignment/steps/ReviewStep";
 // Keep authenticated browser requests on the frontend origin. In production,
 // Netlify proxies /api to Render and preserves the secure session cookie. A
 // direct cross-origin Render request cannot use the cookie set on Netlify.
-const AI_ENDPOINT = "/api/generate";
 const RUBRIC_PARSE_ENDPOINT = "/api/rubric/parse-jobs";
 const RUBRIC_PARSE_TIMEOUT_MS = 120_000;
 const RUBRIC_PARSE_POLL_INTERVAL_MS = 1_200;
@@ -1181,14 +1181,7 @@ export default function CreateAssignmentModal({
     setIsGeneratingRubric(true);
 
     try {
-      const response = await authenticatedFetch(AI_ENDPOINT, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAuthHeaders(),
-        },
-        body: JSON.stringify({
+      const data = await runAiJob("generate", {
           system:
             "You create practical classroom writing rubrics. Return only valid JSON with no markdown.",
           messages: [
@@ -1257,20 +1250,7 @@ export default function CreateAssignmentModal({
           ],
           maxTokens: 1800,
           temperature: 0.25,
-        }),
       });
-
-      const contentType = response.headers.get("content-type") || "";
-      const data = contentType.includes("application/json")
-        ? await response.json()
-        : { error: await response.text() };
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            `Rubric generation failed with status ${response.status}.`
-        );
-      }
 
       const generatedRubric = normalizeGeneratedRubricResponse(data);
       const generatedCriteria = safeArray(generatedRubric.criteria);
@@ -1491,14 +1471,7 @@ export default function CreateAssignmentModal({
     setGeneratedDraft(null);
 
     try {
-      const response = await authenticatedFetch(AI_ENDPOINT, {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildAuthHeaders(),
-        },
-        body: JSON.stringify({
+      const data = await runAiJob("generate", {
           system: buildAssignmentGenerationSystemPrompt(),
           messages: [
             {
@@ -1516,21 +1489,7 @@ export default function CreateAssignmentModal({
           ],
           maxTokens: 1500,
           temperature: 0.25,
-        }),
       });
-
-      const contentType = response.headers.get("content-type") || "";
-
-      const data = contentType.includes("application/json")
-        ? await response.json()
-        : { error: await response.text() };
-
-      if (!response.ok) {
-        throw new Error(
-          data?.error ||
-            `Assignment generation failed with status ${response.status}.`
-        );
-      }
 
       const generated = normalizeGeneratedAssignment(data);
 
