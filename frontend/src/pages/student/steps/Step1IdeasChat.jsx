@@ -221,33 +221,6 @@ Task: "${assignmentPrompt}"
 Start by asking the student what topic or idea they are thinking about. If they struggle to answer, suggest they think about two or three possible ideas and pick the one they feel most confident about.`;
 }
 
-function buildOpeningCoachPrompt({
-  assignmentTitle,
-  assignmentPrompt,
-  assignmentType,
-  languageLevel,
-  assignmentGuidelines,
-  studentFocus,
-  rubricText,
-}) {
-  return `Read this assignment and ask ONE short, specific planning question that challenges the student to make an important decision before drafting.
-
-Rules:
-- Ask only one question, with no greeting or explanation.
-- Make it specific to this assignment. Never ask "What is your first idea?"
-- Do not provide an answer, thesis, or wording the student could copy.
-- For an argument, probe a position, counterargument, evidence choice, or consequence.
-- For another task, probe its most important choice, detail, comparison, sequence, or interpretation.
-- Use CEFR ${languageLevel} vocabulary and no more than 35 words.
-
-Title: ${assignmentTitle}
-Type: ${assignmentType}
-Task: ${assignmentPrompt}
-${assignmentGuidelines ? `Requirements: ${assignmentGuidelines}` : ""}
-${studentFocus ? `Student focus:\n${studentFocus}` : ""}
-${rubricText ? `Rubric:\n${rubricText}` : ""}`;
-}
-
 function buildOpeningCoachMessage({
   assignmentTitle,
   assignmentPrompt,
@@ -555,10 +528,9 @@ export default function Step1IdeasChat() {
       if (openingRequestKeyRef.current === requestKey) return;
 
       openingRequestKeyRef.current = requestKey;
-      setIsThinking(true);
       setCoachError("");
 
-      const fallbackMessage = normalizeChatMessage(
+      const openingMessage = normalizeChatMessage(
         buildOpeningCoachMessage({
           assignmentTitle,
           assignmentPrompt,
@@ -566,77 +538,21 @@ export default function Step1IdeasChat() {
         })
       );
 
-      // Never leave a new student staring at an empty Coach panel while the
-      // personalized question is generated. Show the safe local opening now,
-      // then replace it when the short AI response arrives.
-      setMessages([fallbackMessage]);
-
-      const generateOpeningQuestion = async () => {
-        let openingMessage = fallbackMessage;
-
-        try {
-          const response = await authenticatedFetch(AI_ENDPOINT, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              system: buildOpeningCoachPrompt({
-                assignmentTitle,
-                assignmentPrompt,
-                assignmentType,
-                languageLevel,
-                assignmentGuidelines,
-                studentFocus,
-                rubricText,
-              }),
-              messages: [
-                {
-                  role: "user",
-                  content: "Ask the opening planning question now.",
-                },
-              ],
-              maxTokens: 220,
-              temperature: 0.3,
-            }),
-          });
-          const contentType = response.headers.get("content-type") || "";
-          const data = contentType.includes("application/json")
-            ? await response.json()
-            : { error: await response.text() };
-
-          if (!response.ok) {
-            throw new Error(data?.error || "Opening Coach request failed.");
-          }
-
-          const generatedText = getText(
-            data.response || data.reply || data.message
-          );
-
-          if (generatedText) {
-            openingMessage = normalizeChatMessage({
-              role: "assistant",
-              text: generatedText,
-              createdAt: new Date().toISOString(),
-            });
-          }
-        } catch (error) {
-          console.error("AI Coach opening question error:", error);
-        } finally {
-          setMessages([openingMessage]);
-          setIsThinking(false);
-
-          if (assignmentId && typeof saveDraftProgress === "function") {
-            saveDraftProgress(assignmentId, {
-              chatHistory: [openingMessage],
-              planningChatMessages: [openingMessage],
-              planningCoachHistory: [openingMessage],
-              planningChatUpdatedAt: new Date().toISOString(),
-              coachOpeningGeneratedFromAssignment: true,
-            });
-          }
-        }
-      };
-
-      generateOpeningQuestion();
+      // The first question is deterministic and assignment-aware, so it can be
+      // rendered immediately and remain stable. AI is reserved for replies.
+      setMessages([openingMessage]);
+      setIsThinking(false);
+      if (assignmentId && typeof saveDraftProgress === "function") {
+        Promise.resolve(
+          saveDraftProgress(assignmentId, {
+            chatHistory: [openingMessage],
+            planningChatMessages: [openingMessage],
+            planningCoachHistory: [openingMessage],
+            planningChatUpdatedAt: new Date().toISOString(),
+            coachOpeningGeneratedFromAssignment: true,
+          })
+        ).catch(() => undefined);
+      }
     } else {
       setMessages([]);
     }
@@ -939,6 +855,20 @@ export default function Step1IdeasChat() {
     });
   }
 
+  const visibleMessages =
+    messages.length > 0
+      ? messages
+      : aiAllowed
+        ? [
+            normalizeChatMessage(
+              buildOpeningCoachMessage({
+                assignmentTitle,
+                assignmentPrompt,
+                assignmentType,
+              })
+            ),
+          ]
+        : [];
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
@@ -993,9 +923,9 @@ export default function Step1IdeasChat() {
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-4">
-            {messages.length > 0 ? (
+            {visibleMessages.length > 0 ? (
               <div className="space-y-4">
-                {messages.map((msg, idx) => {
+                {visibleMessages.map((msg, idx) => {
                   const isUser =
                     msg.role === "user";
                   const isError =

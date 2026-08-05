@@ -1533,6 +1533,7 @@ export function StudentWorkspaceProvider({
     setSubmissions,
   ] = useState([]);
   const persistentSaveQueues = useRef(new Map());
+  const durableSubmissionRefs = useRef(new Map());
   const syncWorkspaceRef = useRef(null);
   const [workspaceSyncState, setWorkspaceSyncState] = useState({
     status: "loading",
@@ -1802,6 +1803,15 @@ export function StudentWorkspaceProvider({
             isCurrent: true,
           };
         });
+        persistedSubmissions.forEach((submission) => {
+          if (submission?.assignmentId && submission?.id) {
+            durableSubmissionRefs.current.set(String(submission.assignmentId), {
+              id: submission.id,
+              version: submission.version,
+              updatedAt: submission.updatedAt,
+            });
+          }
+        });
 
         /*
          * Commit one complete backend snapshot. Previously courses were saved
@@ -1810,6 +1820,41 @@ export function StudentWorkspaceProvider({
          * and submitted state appear only after several refreshes.
          */
         const latestData = getPraxisData();
+        const mergedPersistedSubmissions = persistedSubmissions.map((incoming) => {
+          if (!persistentSaveQueues.current.has(String(incoming.assignmentId))) {
+            return incoming;
+          }
+          const local = safeArray(latestData.submissions).find(
+            (entry) =>
+              String(entry.assignmentId) === String(incoming.assignmentId) &&
+              entry.isCurrent !== false
+          );
+          if (!local) return incoming;
+          return {
+            ...incoming,
+            draftText: local.draftText ?? incoming.draftText,
+            content: local.content ?? incoming.content,
+            finalText: local.finalText ?? incoming.finalText,
+            text: local.text ?? incoming.text,
+            chatHistory: local.chatHistory ?? incoming.chatHistory,
+            planningChatMessages:
+              local.planningChatMessages ?? incoming.planningChatMessages,
+            planningCoachHistory:
+              local.planningCoachHistory ?? incoming.planningCoachHistory,
+            outline: local.outline ?? incoming.outline,
+            feedbackHistory: local.feedbackHistory ?? incoming.feedbackHistory,
+            selfAssessment: local.selfAssessment ?? incoming.selfAssessment,
+            selfRubricScores:
+              local.selfRubricScores ?? incoming.selfRubricScores,
+            selfRubricTotal: local.selfRubricTotal ?? incoming.selfRubricTotal,
+            selfRubricMax: local.selfRubricMax ?? incoming.selfRubricMax,
+            selfRubricPercentage:
+              local.selfRubricPercentage ?? incoming.selfRubricPercentage,
+            selfAssessedAt: local.selfAssessedAt ?? incoming.selfAssessedAt,
+            writingEvents: local.writingEvents ?? incoming.writingEvents,
+            keystrokeLog: local.keystrokeLog ?? incoming.keystrokeLog,
+          };
+        });
         const backendClassIds = new Set(
           backendClasses.map((course) => String(course.id))
         );
@@ -1830,7 +1875,7 @@ export function StudentWorkspaceProvider({
           classes: nextClasses,
           enrollments: nextEnrollments,
           assignments: [...preservedAssignments, ...backendAssignments],
-          submissions: [...preservedSubmissions, ...persistedSubmissions],
+          submissions: [...preservedSubmissions, ...mergedPersistedSubmissions],
         });
         if (active) {
           loadStudentWorkspace();
@@ -1960,7 +2005,7 @@ export function StudentWorkspaceProvider({
           queryKey: queryKeys.studentSubmissions,
         });
         const backendRows = await queryClient.fetchQuery({
-          queryKey: queryKeys.studentSubmissions,
+          queryKey: [...queryKeys.studentSubmissions, "all"],
           queryFn: () => getStudentSubmissions([]),
           staleTime: 0,
         });
@@ -2012,7 +2057,7 @@ export function StudentWorkspaceProvider({
     // Grades are not latency-critical enough to justify a request every two
     // seconds. Focus/reconnect refreshes remain immediate; this interval is a
     // low-cost fallback until the review channel moves to realtime events.
-    const intervalId = window.setInterval(refreshReviewStatus, 15000);
+    const intervalId = window.setInterval(refreshReviewStatus, 60000);
     window.addEventListener("focus", refreshReviewStatus);
 
     return () => {
@@ -2171,13 +2216,22 @@ export function StudentWorkspaceProvider({
     const next = previous
       .catch(() => undefined)
       .then(async () => {
-        const databaseSubmission = await getOrCreateMySubmission(assignmentId);
-        return saveMySubmission({
+        let databaseSubmission = durableSubmissionRefs.current.get(key);
+        if (!databaseSubmission?.id) {
+          databaseSubmission = await getOrCreateMySubmission(assignmentId);
+        }
+        const saved = await saveMySubmission({
           ...record,
           id: databaseSubmission.id,
           version: databaseSubmission.version,
           updatedAt: databaseSubmission.updatedAt,
         });
+        durableSubmissionRefs.current.set(key, {
+          id: saved.id,
+          version: saved.version,
+          updatedAt: saved.updatedAt,
+        });
+        return saved;
       })
       .catch((error) => {
         console.error("Supabase draft autosave failed; local recovery copy retained:", error);
@@ -2617,9 +2671,11 @@ export function StudentWorkspaceProvider({
 
     notifyPraxisDataChanged();
     loadStudentWorkspace();
-    queuePersistentDraftSave(assignmentId, nextRecord).catch(() => undefined);
-
-    return true;
+    const persistence = queuePersistentDraftSave(assignmentId, nextRecord);
+    // Most editor autosaves are intentionally fire-and-forget, while explicit
+    // actions such as rubric save await the same promise for confirmation.
+    persistence.catch(() => undefined);
+    return persistence;
   }
 
   async function submitAssignment(
@@ -3771,6 +3827,7 @@ export function StudentWorkspaceProvider({
         submissions,
         assignmentId
       );
+    const hadCachedSubmission = Boolean(submission?.id);
 
     const provisionalStatus = normalizeStudentStatus(submission?.status);
     const provisionalStep =
@@ -3782,9 +3839,9 @@ export function StudentWorkspaceProvider({
           ? 1
           : Number(studentStepOverrides[String(assignmentId)] || 1);
 
-    // Acknowledge the click immediately. The workflow displays a lightweight
-    // loading state while the durable submission is hydrated in the background.
-    setOpeningAssignmentId(assignmentId);
+    // Display cached work immediately. Only a genuinely new assignment waits
+    // for its durable row to be created.
+    setOpeningAssignmentId(submission?.id ? null : assignmentId);
     clearStudentWorkflowNotice();
     saveActiveStudentAssignmentId(assignmentId);
     setSelectedAssignmentId(assignmentId);
@@ -3797,12 +3854,42 @@ export function StudentWorkspaceProvider({
 
     try {
       const persisted = await getOrCreateMySubmission(assignmentId);
+      durableSubmissionRefs.current.set(String(assignmentId), {
+        id: persisted.id,
+        version: persisted.version,
+        updatedAt: persisted.updatedAt,
+      });
+      const preserveLocalWork =
+        persistentSaveQueues.current.has(String(assignmentId)) ||
+        Date.parse(submission?.updatedAt || 0) >
+          Date.parse(persisted?.updatedAt || 0);
       submission = {
-        ...persisted,
-        // The local record is an emergency recovery buffer. If it contains
-        // unsent edits, keep those fields and attach the durable row identity
-        // so the next queued autosave writes them to Supabase.
         ...submission,
+        ...persisted,
+        // Preserve recoverable student work, while server-owned status,
+        // review, version, and timestamps always come from the durable row.
+        draftText: preserveLocalWork
+          ? getDraftText(submission) || getDraftText(persisted)
+          : getDraftText(persisted) || getDraftText(submission),
+        finalText: preserveLocalWork
+          ? getFinalText(submission) || getFinalText(persisted)
+          : getFinalText(persisted) || getFinalText(submission),
+        chatHistory:
+          preserveLocalWork && safeArray(submission?.chatHistory).length > 0
+            ? submission.chatHistory
+            : persisted.chatHistory,
+        planningChatMessages:
+          preserveLocalWork && safeArray(submission?.planningChatMessages).length > 0
+            ? submission.planningChatMessages
+            : persisted.planningChatMessages,
+        planningCoachHistory:
+          preserveLocalWork && safeArray(submission?.planningCoachHistory).length > 0
+            ? submission.planningCoachHistory
+            : persisted.planningCoachHistory,
+        selfRubricScores:
+          preserveLocalWork && Object.keys(submission?.selfRubricScores || {}).length > 0
+            ? submission.selfRubricScores
+            : persisted.selfRubricScores,
         id: persisted.id,
         version: persisted.version,
         updatedAt: persisted.updatedAt,
@@ -3823,10 +3910,17 @@ export function StudentWorkspaceProvider({
     } catch (error) {
       console.error("Could not open the durable submission:", error);
       showStudentWorkflowNotice({
-        tone: "red",
-        title: "Assignment could not be opened",
-        message: "Your connection to the database failed. Please try again before writing.",
+        tone: hadCachedSubmission ? "amber" : "red",
+        title: hadCachedSubmission
+          ? "Showing your saved offline copy"
+          : "Assignment could not be opened",
+        message: hadCachedSubmission
+          ? "Praxis could not confirm the latest database version. Your cached work is visible, but reconnect before submitting."
+          : "Your connection to the database failed. Please try again before writing.",
       });
+      if (hadCachedSubmission) {
+        return true;
+      }
       saveActiveStudentAssignmentId(null);
       setSelectedAssignmentId(null);
       return false;

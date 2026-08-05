@@ -96,6 +96,33 @@ export async function removeAssignment(assignmentId) {
 
 export function normalizeSubmission(row = {}) {
   const value = snakeToCamel(row);
+  const selfAssessment =
+    value.selfAssessment && typeof value.selfAssessment === "object"
+      ? value.selfAssessment
+      : {};
+  const selfAssessmentRows = Array.isArray(selfAssessment.rowScores)
+    ? selfAssessment.rowScores
+    : [];
+  const selfRubricScores =
+    selfAssessment.rubricScores &&
+    typeof selfAssessment.rubricScores === "object"
+      ? selfAssessment.rubricScores
+      : Object.fromEntries(
+          selfAssessmentRows
+            .filter((entry) => entry?.criterionId)
+            .map((entry) => [
+              entry.criterionId,
+              {
+                criterionId: entry.criterionId,
+                criterionName: entry.criterionName || entry.label || "",
+                maxPoints: Number(entry.maxPoints || 0),
+                bandId: entry.bandId || entry.levelId || "",
+                bandLabel: entry.bandLabel || entry.levelLabel || "",
+                score: Number(entry.score ?? entry.points ?? 0),
+                comment: entry.comment || "",
+              },
+            ])
+        );
   const teacherReview =
     value.teacherReview && typeof value.teacherReview === "object"
       ? snakeToCamel(value.teacherReview)
@@ -147,6 +174,25 @@ export function normalizeSubmission(row = {}) {
 
   return {
     ...value,
+    selfAssessment,
+    selfRubricScores,
+    selfRubricTotal:
+      value.selfRubricTotal ??
+      selfAssessment.score ??
+      selfAssessment.total ??
+      Object.values(selfRubricScores).reduce(
+        (sum, entry) => sum + Number(entry?.score || 0),
+        0
+      ),
+    selfRubricMax:
+      value.selfRubricMax ??
+      selfAssessment.maxScore ??
+      selfAssessment.max ??
+      null,
+    selfRubricPercentage:
+      value.selfRubricPercentage ?? selfAssessment.percentage ?? null,
+    selfAssessedAt:
+      value.selfAssessedAt ?? selfAssessment.assessedAt ?? null,
     teacherReview,
     score,
     feedback,
@@ -180,7 +226,46 @@ export function normalizeSubmission(row = {}) {
   };
 }
 
-function submissionPayload(submission = {}) {
+export function submissionPayload(submission = {}) {
+  const existingSelfAssessment =
+    submission.selfAssessment && typeof submission.selfAssessment === "object"
+      ? submission.selfAssessment
+      : {};
+  const selfRubricScores =
+    submission.selfRubricScores && typeof submission.selfRubricScores === "object"
+      ? submission.selfRubricScores
+      : existingSelfAssessment.rubricScores || {};
+  const selfAssessment = {
+    ...existingSelfAssessment,
+    completed: Boolean(
+      submission.selfRubricAssessment ??
+        submission.selfAssessmentComplete ??
+        existingSelfAssessment.completed
+    ),
+    rubricScores: selfRubricScores,
+    rowScores: Object.values(selfRubricScores).map((entry) => ({
+      criterionId: entry.criterionId,
+      criterionName: entry.criterionName || "",
+      maxPoints: Number(entry.maxPoints || 0),
+      bandId: entry.bandId || "",
+      bandLabel: entry.bandLabel || "",
+      score: Number(entry.score || 0),
+      points: Number(entry.score || 0),
+      comment: entry.comment || "",
+    })),
+    score: Number(
+      submission.selfRubricTotal ?? existingSelfAssessment.score ?? 0
+    ),
+    maxScore: Number(
+      submission.selfRubricMax ?? existingSelfAssessment.maxScore ?? 0
+    ),
+    percentage: Number(
+      submission.selfRubricPercentage ?? existingSelfAssessment.percentage ?? 0
+    ),
+    assessedAt:
+      submission.selfAssessedAt || existingSelfAssessment.assessedAt || null,
+  };
+
   return {
     idea_responses: submission.ideaResponses || [],
     draft_text: submission.draftText ?? submission.content ?? "",
@@ -191,7 +276,7 @@ function submissionPayload(submission = {}) {
     writing_events: submission.writingEvents || [],
     feedback_history: submission.feedbackHistory || [],
     focus_annotations: submission.focusAnnotations || submission.annotations || [],
-    self_assessment: submission.selfAssessment || {},
+    self_assessment: selfAssessment,
     chat_started_at: submission.chatStartedAt || null,
     chat_skipped_at: submission.chatSkippedAt || null,
     chat_expired_at: submission.chatExpiredAt || null,

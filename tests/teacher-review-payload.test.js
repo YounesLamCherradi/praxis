@@ -111,3 +111,45 @@ test("legacy graded rows recover their displayed score from saved rubric scores"
   assert.equal(submission.score, 84.5);
   assert.equal(Object.keys(submission.rubricScores).length, 4);
 });
+
+test("student rubric self-assessment round-trips through the API payload", async () => {
+  const {
+    normalizeSubmission,
+    submissionPayload,
+  } = await import(`${teacherApiUrl}?self-assessment=${Date.now()}`);
+
+  const payload = submissionPayload({
+    selfRubricAssessment: true,
+    selfRubricScores: {
+      clarity: {
+        criterionId: "clarity",
+        criterionName: "Clarity",
+        maxPoints: 5,
+        bandId: "good",
+        bandLabel: "Good",
+        score: 4,
+      },
+    },
+    selfRubricTotal: 4,
+    selfRubricMax: 5,
+    selfRubricPercentage: 80,
+    selfAssessedAt: "2026-08-05T18:00:00.000Z",
+  });
+
+  assert.equal(typeof payload.self_assessment, "object");
+  assert.equal(payload.self_assessment.completed, true);
+  assert.equal(payload.self_assessment.rowScores[0].criterionId, "clarity");
+  assert.equal(payload.self_assessment.rowScores[0].points, 4);
+
+  const normalized = normalizeSubmission({
+    id: "submission-self-assessment",
+    assignment_id: "assignment-1",
+    self_assessment: payload.self_assessment,
+  });
+
+  assert.equal(normalized.selfRubricScores.clarity.bandId, "good");
+  assert.equal(normalized.selfRubricTotal, 4);
+  assert.equal(normalized.selfRubricMax, 5);
+  assert.equal(normalized.selfRubricPercentage, 80);
+  assert.equal(normalized.selfAssessedAt, "2026-08-05T18:00:00.000Z");
+});

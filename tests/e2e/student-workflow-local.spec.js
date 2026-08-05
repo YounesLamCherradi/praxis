@@ -219,16 +219,16 @@ test.describe("Local student assignment workflow", () => {
     await expect(page.getByText("Submit Assignment", { exact: true })).toBeVisible();
   });
 
-  test("Coach opens an untouched conversation with the first-idea question", async ({ page }) => {
-    const generatedQuestion =
-      "Before choosing your position, which consequence of the death penalty deserves the strongest evidence, and why?";
-    await page.route("**/api/generate", (route) =>
-      route.fulfill({
+  test("Coach opens immediately with one stable assignment-aware question", async ({ page }) => {
+    let generateRequests = 0;
+    await page.route("**/api/generate", (route) => {
+      generateRequests += 1;
+      return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ response: generatedQuestion }),
-      })
-    );
+        body: JSON.stringify({ response: "This opening should not be requested." }),
+      });
+    });
 
     await page.addInitScript(() => {
       const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
@@ -241,14 +241,17 @@ test.describe("Local student assignment workflow", () => {
     await page.goto("/student");
     await page.getByRole("button", { name: /Continue Assignment/ }).click();
 
-    const openingQuestion = page.getByText(generatedQuestion, { exact: true });
+    const openingQuestionText =
+      "What is the strongest reason someone might disagree with your position on “Student workflow audit,” and what evidence could help you answer them?";
+    const openingQuestion = page.getByText(openingQuestionText, { exact: true });
     await expect(openingQuestion).toBeVisible();
 
     const savedOpening = await page.evaluate(() => {
       const data = JSON.parse(localStorage.getItem("praxis_mock_data"));
       return data.submissions[0].chatHistory?.[0]?.text || "";
     });
-    expect(savedOpening).toBe(generatedQuestion);
+    expect(savedOpening).toBe(openingQuestionText);
+    expect(generateRequests).toBe(0);
   });
 
   test("saved Coach conversation survives Draft to Coach navigation", async ({ page }) => {

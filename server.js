@@ -5053,7 +5053,28 @@ app.get('/api/student/submissions', async (req, res) => {
 
     const { data, error } = await readClient
       .from('submissions')
-      .select('*')
+      .select([
+        'id',
+        'assignment_id',
+        'student_id',
+        'status',
+        'draft_text',
+        'final_text',
+        'outline',
+        'chat_history',
+        'feedback_history',
+        'self_assessment',
+        'teacher_review',
+        'chat_started_at',
+        'chat_skipped_at',
+        'chat_expired_at',
+        'chat_elapsed_ms',
+        'started_at',
+        'submitted_at',
+        'created_at',
+        'updated_at',
+        'version',
+      ].join(','))
       .eq('student_id', user.id)
       .in('assignment_id', assignmentIds);
     if (error) return res.status(400).json({ error: error.message });

@@ -1191,6 +1191,7 @@ export default function Step4FinalSummary({
     );
   const [selfGradeMessage, setSelfGradeMessage] =
     useState("");
+  const [isSavingSelfGrade, setIsSavingSelfGrade] = useState(false);
 
   useEffect(() => {
     setSelfRubricScores(
@@ -1679,7 +1680,7 @@ export default function Step4FinalSummary({
     setSelfGradeMessage("");
   }
 
-  function saveSelfAssessment() {
+  async function saveSelfAssessment() {
     if (
       !currentRubric ||
       rubricCriteria.length === 0
@@ -1700,31 +1701,36 @@ export default function Step4FinalSummary({
     const selfAssessedAt =
       new Date().toISOString();
 
-    if (
-      activeAssignment?.id &&
-      typeof saveDraftProgress === "function"
-    ) {
-      saveDraftProgress(activeAssignment.id, {
+    if (!activeAssignment?.id || typeof saveDraftProgress !== "function") {
+      setSelfGradeMessage("This rubric could not be connected to the assignment.");
+      return;
+    }
+
+    setIsSavingSelfGrade(true);
+    setSelfGradeMessage("Saving self-assessment…");
+    try {
+      await saveDraftProgress(activeAssignment.id, {
         selfRubricAssessment: true,
-        selfAssessment: true,
+        selfAssessmentComplete: true,
         selfRubricScores,
         selfRubricTotal,
         selfRubricMax: rubricTotal,
         selfRubricPercentage,
         selfAssessedAt,
       });
+      setSelfGradeMessage("Self-assessment saved.");
+      setShowSelfGrade(false);
+      onRubricSaved?.();
+    } catch (error) {
+      console.error("Self-assessment persistence failed:", error);
+      setSelfGradeMessage(
+        error?.conflict
+          ? "Your assignment changed in another tab. Refresh before saving the rubric again."
+          : "The rubric could not reach the database. Your selections remain here; please try again."
+      );
+    } finally {
+      setIsSavingSelfGrade(false);
     }
-
-    setSelfGradeMessage(
-      "Self-assessment saved."
-    );
-
-    onRubricSaved?.();
-
-    window.setTimeout(
-      () => setShowSelfGrade(false),
-      500
-    );
   }
 
   function saveFinalProgress() {
@@ -1743,7 +1749,7 @@ export default function Step4FinalSummary({
       fluencySummary: calculateFluencySummary(activeSubmission),
       selfRubricAssessment:
         selfGradeComplete,
-      selfAssessment: selfGradeComplete,
+      selfAssessmentComplete: selfGradeComplete,
       selfRubricScores,
       selfRubricTotal,
       selfRubricMax: rubricTotal,
@@ -2054,6 +2060,7 @@ export default function Step4FinalSummary({
             selfGradeMessage
           }
           onSave={saveSelfAssessment}
+          isSaving={isSavingSelfGrade}
           backLabel={
             rubricBackStep === 2
               ? "Back to Draft"
@@ -2291,6 +2298,15 @@ function FinalCheckPanel({
 }) {
   const wordCountReady =
     !belowMinWords && !aboveMaxWords;
+  const submitDisabledReason = belowMinWords
+    ? `Add ${Number(minWords) - wordCount} more words before submitting.`
+    : aboveMaxWords
+      ? `Remove ${wordCount - Number(maxWords)} words before submitting.`
+      : selfGradeRequired && !selfGradeComplete
+        ? "Complete and save every rubric criterion before submitting."
+        : !attested
+          ? "Confirm that this is your own work to unlock Submit."
+          : "";
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -2417,6 +2433,12 @@ function FinalCheckPanel({
           >
             {submitMessage}
           </div>
+        )}
+
+        {!canSubmit && submitDisabledReason && (
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-semibold leading-relaxed text-amber-800">
+            {submitDisabledReason}
+          </p>
         )}
 
         <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-2 bg-white px-1 pt-2">
@@ -2618,6 +2640,7 @@ function SelfGradeDrawer({
   selfRubricPercentage,
   selfGradeMessage,
   onSave,
+  isSaving,
   backLabel,
 }) {
   const [openCriterionKey, setOpenCriterionKey] =
@@ -2789,13 +2812,18 @@ function SelfGradeDrawer({
               type="button"
               onClick={onSave}
               disabled={
+                isSaving ||
                 completedSelfCriteria !==
                 rubricCriteria.length
               }
               className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
             >
-              <CheckCircle2 className="h-4 w-4" />
-              Save & Continue to Submit
+              {isSaving ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-4 w-4" />
+              )}
+              {isSaving ? "Saving…" : "Save & Continue to Submit"}
             </button>
           </div>
           </div>
