@@ -249,6 +249,8 @@ export default function TeacherRubrics() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
   const [previewRecord, setPreviewRecord] = useState(null);
+  const [isSavingRubric, setIsSavingRubric] = useState(false);
+  const [rubricSaveError, setRubricSaveError] = useState("");
 
   const records = useMemo(() => {
     const builtRecords = [];
@@ -376,11 +378,13 @@ export default function TeacherRubrics() {
 
   function openCreateModal() {
     setEditingRecord(null);
+    setRubricSaveError("");
     setIsModalOpen(true);
   }
 
   function openEditModal(record) {
     setEditingRecord(record);
+    setRubricSaveError("");
     setIsModalOpen(true);
   }
 
@@ -388,56 +392,70 @@ export default function TeacherRubrics() {
     setPreviewRecord(record);
   }
 
-  function handleSaveRubric(rubricData, attachAssignmentId = "") {
+  async function handleSaveRubric(rubricData, attachAssignmentId = "") {
+    if (isSavingRubric) return;
+
+    setIsSavingRubric(true);
+    setRubricSaveError("");
+
     const selectedAssignment = assignments.find(
       (assignment) => String(assignment.id) === String(attachAssignmentId)
     );
 
-    if (editingRecord?.type === "assignment") {
-      const targetAssignmentId =
-        attachAssignmentId || editingRecord.assignment?.id;
+    try {
+      if (editingRecord?.type === "assignment") {
+        const targetAssignmentId =
+          attachAssignmentId || editingRecord.assignment?.id;
 
-      attachRubricToAssignment(targetAssignmentId, {
-        ...rubricData,
-        id: editingRecord.rubric.id,
-        assignmentId: targetAssignmentId,
-        assignmentTitle:
-          selectedAssignment?.title ||
-          editingRecord.assignment?.title ||
-          rubricData.assignmentTitle,
-        status: "Active",
-      });
-    } else if (editingRecord?.type === "library") {
-      const updatedRubric = updateRubric(editingRecord.rubric.id, {
-        ...rubricData,
-        id: editingRecord.rubric.id,
-      });
-
-      if (attachAssignmentId && updatedRubric) {
-        attachRubricToAssignment(attachAssignmentId, {
-          ...updatedRubric,
-          id: createId("rubric"),
-          source: "saved",
+        await attachRubricToAssignment(targetAssignmentId, {
+          ...rubricData,
+          id: editingRecord.rubric.id,
+          assignmentId: targetAssignmentId,
+          assignmentTitle:
+            selectedAssignment?.title ||
+            editingRecord.assignment?.title ||
+            rubricData.assignmentTitle,
           status: "Active",
         });
-      }
-    } else if (attachAssignmentId) {
-      attachRubricToAssignment(attachAssignmentId, {
-        ...rubricData,
-        id: createId("rubric"),
-        status: "Active",
-      });
-    } else {
-      addRubric({
-        ...rubricData,
-        id: createId("rubric"),
-        assignmentId: null,
-        assignmentTitle: "",
-      });
-    }
+      } else if (editingRecord?.type === "library") {
+        const updatedRubric = await updateRubric(editingRecord.rubric.id, {
+          ...rubricData,
+          id: editingRecord.rubric.id,
+        });
 
-    setIsModalOpen(false);
-    setEditingRecord(null);
+        if (attachAssignmentId && updatedRubric) {
+          await attachRubricToAssignment(attachAssignmentId, {
+            ...updatedRubric,
+            id: createId("rubric"),
+            source: "saved",
+            status: "Active",
+          });
+        }
+      } else if (attachAssignmentId) {
+        await attachRubricToAssignment(attachAssignmentId, {
+          ...rubricData,
+          id: createId("rubric"),
+          status: "Active",
+        });
+      } else {
+        await addRubric({
+          ...rubricData,
+          id: createId("rubric"),
+          assignmentId: null,
+          assignmentTitle: "",
+        });
+      }
+
+      setIsModalOpen(false);
+      setEditingRecord(null);
+    } catch (error) {
+      console.error("Could not save rubric:", error);
+      setRubricSaveError(
+        error?.message || "The rubric could not be saved. Please try again."
+      );
+    } finally {
+      setIsSavingRubric(false);
+    }
   }
 
   function handleDuplicate(record) {
@@ -582,9 +600,13 @@ export default function TeacherRubrics() {
         <RubricModal
           record={editingRecord}
           assignments={assignments}
+          isSaving={isSavingRubric}
+          saveError={rubricSaveError}
           onClose={() => {
+            if (isSavingRubric) return;
             setIsModalOpen(false);
             setEditingRecord(null);
+            setRubricSaveError("");
           }}
           onSave={handleSaveRubric}
         />
@@ -740,7 +762,7 @@ function RubricRecordRow({
   );
 }
 
-function RubricModal({ record, assignments, onClose, onSave }) {
+function RubricModal({ record, assignments, isSaving, saveError, onClose, onSave }) {
   const rubric = record?.rubric || null;
   const assignment = record?.assignment || null;
 
@@ -971,7 +993,7 @@ function RubricModal({ record, assignments, onClose, onSave }) {
       totalPoints: calculateTotal(cleanedCriteria),
     };
 
-    onSave(rubricPayload, selectedAssignment?.id || "");
+    void onSave(rubricPayload, selectedAssignment?.id || "");
   }
 
   return createPortal(
@@ -1190,9 +1212,19 @@ function RubricModal({ record, assignments, onClose, onSave }) {
           </div>
 
           <div className="sticky bottom-0 z-20 flex shrink-0 justify-end gap-3 border-t border-slate-200 bg-white px-5 py-4 text-xs font-bold sm:px-6">
+            {saveError && (
+              <p
+                role="alert"
+                className="mr-auto self-center text-xs font-semibold text-red-700"
+              >
+                {saveError}
+              </p>
+            )}
+
             <button
               type="button"
               onClick={onClose}
+              disabled={isSaving}
               className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-500 hover:bg-[#F8FAFC] transition-all"
             >
               Cancel
@@ -1200,10 +1232,17 @@ function RubricModal({ record, assignments, onClose, onSave }) {
 
             <button
               type="submit"
-              className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-5 py-2.5 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm shadow-blue-600/20"
+              disabled={isSaving}
+              className="bg-blue-600 hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60 text-white text-xs px-5 py-2.5 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm shadow-blue-600/20"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>{record ? "Save Changes" : "Create Rubric"}</span>
+              <span>
+                {isSaving
+                  ? "Saving..."
+                  : record
+                  ? "Save Changes"
+                  : "Create Rubric"}
+              </span>
             </button>
           </div>
         </form>
