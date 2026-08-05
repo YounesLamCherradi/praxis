@@ -2310,7 +2310,7 @@ function FinalCheckPanel({
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-2.5">
+      <div className="border-b border-slate-100 px-3 py-2">
         <div className="flex items-start gap-3">
           <div className="flex items-start gap-2">
             <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
@@ -2320,8 +2320,8 @@ function FinalCheckPanel({
                 Submit Assignment
               </h3>
 
-              <p className="mt-0.5 text-[11px] text-slate-500">
-                Review the automatic summary, confirm your work, and submit.
+              <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+                Review, confirm, and submit your work.
               </p>
             </div>
           </div>
@@ -2329,12 +2329,12 @@ function FinalCheckPanel({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
         {selfGradeRequired && (
           <button
             type="button"
             onClick={onOpenSelfGrade}
-            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${
+            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-all ${
               selfGradeComplete
                 ? "border-emerald-200 bg-emerald-50"
                 : "border-blue-100 bg-blue-50 hover:bg-blue-100"
@@ -2409,7 +2409,7 @@ function FinalCheckPanel({
           type="button"
           onClick={() => setAttested(!attested)}
           aria-pressed={attested}
-          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-all ${
+          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition-all ${
             attested
               ? "border-emerald-200 bg-emerald-50"
               : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
@@ -2420,7 +2420,7 @@ function FinalCheckPanel({
             <p className="text-xs font-bold text-slate-900">
               {attested ? "Academic honor confirmed" : "Confirm this is your own work"}
             </p>
-            <p className="mt-1 text-[10px] leading-relaxed text-slate-600">
+            <p className="mt-0.5 text-[10px] leading-snug text-slate-600">
               I reviewed the final draft and am ready to submit it to my instructor.
             </p>
           </div>
@@ -2429,7 +2429,7 @@ function FinalCheckPanel({
 
         {submitMessage && (
           <div
-            className={`rounded-xl border px-3 py-2 text-[11px] font-semibold ${
+            className={`rounded-xl border px-3 py-1.5 text-[11px] font-semibold ${
               submitMessage.includes(
                 "successfully"
               )
@@ -2442,7 +2442,7 @@ function FinalCheckPanel({
         )}
 
         {!canSubmit && submitDisabledReason && (
-          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[10px] font-semibold leading-relaxed text-amber-800">
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-1.5 text-[10px] font-semibold leading-snug text-amber-800">
             {submitDisabledReason}
           </p>
         )}
@@ -2451,7 +2451,7 @@ function FinalCheckPanel({
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
           >
             <ArrowLeft className="h-4 w-4" />
             {wordCountReady ? "Back" : "Edit Draft"}
@@ -2462,7 +2462,7 @@ function FinalCheckPanel({
             disabled={!canSubmit}
             title={submitDisabledReason || "Submit assignment"}
             onClick={handleSubmit}
-            className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-bold transition-all ${
+            className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition-all ${
               canSubmit
                 ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
                 : "cursor-not-allowed bg-slate-100 text-slate-400"
@@ -2490,12 +2490,12 @@ function FinalCheckPanel({
 
 function SubmissionReadinessRow({ label, value, ready, optional = false }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 px-3 py-2 last:border-b-0">
-      <span className="text-[11px] font-bold text-slate-700">{label}</span>
-      <span className={`inline-flex min-w-0 items-center justify-end gap-1.5 text-right text-[10px] font-bold ${
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 px-3 py-1.5 last:border-b-0">
+      <span className="shrink-0 text-[11px] font-bold text-slate-700">{label}</span>
+      <span className={`inline-flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap text-right text-[10px] font-bold ${
         ready ? "text-emerald-700" : "text-amber-700"
       }`}>
-        {ready ? <CheckCircle2 className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+        {ready ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
         {value}{optional ? " · optional" : ""}
       </span>
     </div>

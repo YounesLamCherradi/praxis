@@ -3828,6 +3828,9 @@ export function StudentWorkspaceProvider({
         assignmentId
       );
     const hadCachedSubmission = Boolean(submission?.id);
+    const workspaceReady = options.workspaceReady
+      ? Promise.resolve(options.workspaceReady).catch(() => undefined)
+      : null;
 
     const provisionalStatus = normalizeStudentStatus(submission?.status);
     const provisionalStep =
@@ -3839,12 +3842,18 @@ export function StudentWorkspaceProvider({
           ? 1
           : Number(studentStepOverrides[String(assignmentId)] || 1);
 
-    // Existing work can open immediately. For a first attempt, keep the tray
-    // visible until its durable row exists so the workspace never mounts as a
-    // temporary loading card and then swaps to the Coach.
-    setOpeningAssignmentId(submission?.id ? null : assignmentId);
+    // Keep the tray visible while a cold workflow bundle loads. A first
+    // attempt also waits for its durable row, so neither path mounts an empty
+    // workspace before replacing it with the finished Coach.
+    setOpeningAssignmentId(
+      !submission?.id || workspaceReady ? assignmentId : null
+    );
     clearStudentWorkflowNotice();
     if (submission?.id) {
+      if (workspaceReady) {
+        await workspaceReady;
+        setOpeningAssignmentId(null);
+      }
       saveActiveStudentAssignmentId(assignmentId);
       setSelectedAssignmentId(assignmentId);
       setStudentStep(provisionalStep);
@@ -3911,8 +3920,8 @@ export function StudentWorkspaceProvider({
         return [...withoutCurrent, submission];
       });
 
-      if (!hadCachedSubmission && options.workspaceReady) {
-        await Promise.resolve(options.workspaceReady).catch(() => undefined);
+      if (!hadCachedSubmission && workspaceReady) {
+        await workspaceReady;
       }
     } catch (error) {
       console.error("Could not open the durable submission:", error);
