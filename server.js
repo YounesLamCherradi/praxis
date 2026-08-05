@@ -2669,6 +2669,115 @@ app.post("/api/rubric/parse", uploadRubricSingle, async (req, res) => {
   return handleRubricFileParse(req, res);
 });
 
+const RUBRIC_PARSE_JOB_TTL_MS = 10 * 60 * 1000;
+const rubricParseJobs = new Map();
+
+function pruneRubricParseJobs() {
+  const oldestAllowed = Date.now() - RUBRIC_PARSE_JOB_TTL_MS;
+  for (const [jobId, job] of rubricParseJobs.entries()) {
+    if (Number(job?.createdAt || 0) < oldestAllowed) {
+      rubricParseJobs.delete(jobId);
+    }
+  }
+}
+
+// Netlify external proxy rewrites time out after 26 seconds. Start parsing in
+// the Render process and return immediately so the browser can poll using
+// short requests instead of holding one long proxy connection open.
+app.post("/api/rubric/parse-jobs", uploadRubricSingle, async (req, res) => {
+  try {
+    const { user, error, status } = await requireRubricTeacherProfile(req);
+    if (error) {
+      return res.status(status).json({ success: false, error });
+    }
+    if (!checkRubricQuota(user.id)) {
+      return res.status(429).json({
+        success: false,
+        error: "Daily rubric parsing limit reached. Please try again tomorrow.",
+      });
+    }
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: "No file uploaded.",
+      });
+    }
+
+    pruneRubricParseJobs();
+    const jobId = crypto.randomUUID();
+    rubricParseJobs.set(jobId, {
+      createdAt: Date.now(),
+      ownerId: user.id,
+      status: "processing",
+    });
+
+    void parseRubricBuffer(
+      req.file.buffer,
+      req.file.mimetype,
+      req.file.originalname
+    ).then((result) => {
+      const job = rubricParseJobs.get(jobId);
+      if (!job) return;
+      rubricParseJobs.set(jobId, {
+        ...job,
+        status: "complete",
+        result,
+      });
+    }).catch((parseError) => {
+      const job = rubricParseJobs.get(jobId);
+      if (!job) return;
+      rubricParseJobs.set(jobId, {
+        ...job,
+        status: "failed",
+        error: parseError?.message || "The rubric could not be parsed.",
+      });
+    });
+
+    return res.status(202).json({
+      success: true,
+      jobId,
+      status: "processing",
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/api/rubric/parse-jobs/:jobId", async (req, res) => {
+  try {
+    const { user, error, status } = await requireRubricTeacherProfile(req);
+    if (error) {
+      return res.status(status).json({ success: false, error });
+    }
+
+    pruneRubricParseJobs();
+    const jobId = String(req.params.jobId || "");
+    const job = rubricParseJobs.get(jobId);
+    if (!job || job.ownerId !== user.id) {
+      return res.status(404).json({
+        success: false,
+        error: "Rubric parsing job was not found. Please upload the file again.",
+      });
+    }
+    if (job.status === "processing") {
+      return res.status(202).json({ success: true, status: "processing" });
+    }
+
+    rubricParseJobs.delete(jobId);
+    if (job.status === "failed") {
+      return res.status(422).json({ success: false, error: job.error });
+    }
+
+    return res.json({
+      success: true,
+      status: "complete",
+      ...job.result,
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Alias for the new React frontend naming.
 app.get('/api/rubrics', async (req, res) => {
   try {

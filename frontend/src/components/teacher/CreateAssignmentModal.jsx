@@ -48,8 +48,65 @@ import ReviewStep from "./create-assignment/steps/ReviewStep";
 // Netlify proxies /api to Render and preserves the secure session cookie. A
 // direct cross-origin Render request cannot use the cookie set on Netlify.
 const AI_ENDPOINT = "/api/generate";
-const RUBRIC_PARSE_ENDPOINT = "/api/rubric/parse";
+const RUBRIC_PARSE_ENDPOINT = "/api/rubric/parse-jobs";
 const RUBRIC_PARSE_TIMEOUT_MS = 120_000;
+const RUBRIC_PARSE_POLL_INTERVAL_MS = 1_200;
+
+function waitForRubricPoll() {
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, RUBRIC_PARSE_POLL_INTERVAL_MS);
+  });
+}
+
+async function readRubricResponse(response) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+
+  const responseText = await response.text();
+  const isHtmlError = /<!doctype\s+html|<html[\s>]/i.test(responseText);
+
+  return {
+    error: isHtmlError
+      ? `The rubric service returned an unexpected response (${response.status}). Please try again.`
+      : responseText,
+  };
+}
+
+async function waitForRubricParseJob(jobId) {
+  const deadline = Date.now() + RUBRIC_PARSE_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const response = await authenticatedFetch(
+      `${RUBRIC_PARSE_ENDPOINT}/${encodeURIComponent(jobId)}`,
+      {
+        method: "GET",
+        timeoutMs: 20_000,
+        retryDelaysMs: [500, 1_200],
+      }
+    );
+    const data = await readRubricResponse(response);
+
+    if (response.status === 202 && data?.status === "processing") {
+      await waitForRubricPoll();
+      continue;
+    }
+
+    if (!response.ok || data?.success === false) {
+      throw new Error(
+        data?.error || `Rubric parsing failed with status ${response.status}.`
+      );
+    }
+
+    return data;
+  }
+
+  throw new Error(
+    "Rubric parsing is taking longer than expected. Please try again."
+  );
+}
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     String(value || "").trim()
@@ -1035,33 +1092,21 @@ export default function CreateAssignmentModal({
           ...buildAuthHeaders(),
         },
         body: formData,
-        timeoutMs: RUBRIC_PARSE_TIMEOUT_MS,
+        timeoutMs: 20_000,
         retryDelaysMs: [],
       });
+      const initialData = await readRubricResponse(response);
 
-      const contentType = response.headers.get("content-type") || "";
-
-      let data;
-
-      if (contentType.includes("application/json")) {
-        data = await response.json();
-      } else {
-        const responseText = await response.text();
-        const isHtmlError = /<!doctype\s+html|<html[\s>]/i.test(responseText);
-
-        data = {
-          error: isHtmlError
-            ? `The rubric upload was rejected by the server (${response.status}). Please try again or choose a smaller PDF or Word file.`
-            : responseText,
-        };
-      }
-
-      if (!response.ok || data?.success === false) {
+      if (!response.ok || initialData?.success === false) {
         throw new Error(
-          data?.error ||
+          initialData?.error ||
             `Rubric parsing failed with status ${response.status}.`
         );
       }
+
+      const data = initialData?.jobId
+        ? await waitForRubricParseJob(initialData.jobId)
+        : initialData;
 
       const parsedSchema = data.schema || {};
       const parsedCriteria = safeArray(parsedSchema.criteria);
