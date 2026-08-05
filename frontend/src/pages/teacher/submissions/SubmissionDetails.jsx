@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../../hooks/useTeacherWorkspace";
+import { authenticatedFetch } from "../../../services/auth";
 import { buildReplayTimeline } from "../../../utils/replayTimeline";
 
 const ANNOTATION_CODES = [
@@ -1508,10 +1509,8 @@ These are instructor-only review signals and are not automatic grades.`;
     setAiSuggestion(null);
 
     try {
-      const apiBase = import.meta.env.VITE_API_BASE_URL || "";
-
-      const response = await fetch(
-        `${apiBase}/api/teacher/ai-review-submission`,
+      const response = await authenticatedFetch(
+        "/api/teacher/ai-review-submission",
         {
           method: "POST",
           headers: {
@@ -1557,7 +1556,7 @@ These are instructor-only review signals and are not automatic grades.`;
       console.error("AI review error:", error);
 
       setAiReviewError(
-        "AI Check could not run. Confirm backend route POST /api/teacher/ai-review-submission is running and VITE_API_BASE_URL points to the backend."
+        error?.message || "AI Check could not run. Please try again."
       );
     } finally {
       setAiReviewLoading(false);

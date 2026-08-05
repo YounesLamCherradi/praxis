@@ -67,3 +67,51 @@
   opacity: 1;
   transform: translateY(0) rotateX(0deg) scale(1);
 }
+
+/* Assignment creation is used by instructors with a wide range of visual
+   needs. Preserve the compact layout while preventing instructional text,
+   form labels, and actions from dropping to hard-to-read display sizes. */
+.assignment-builder-readable .text-\[9px\],
+.assignment-builder-readable .text-\[10px\],
+.assignment-builder-readable .text-\[11px\] {
+  font-size: 0.8125rem !important;
+  line-height: 1.4 !important;
+}
+
+.assignment-builder-readable .text-xs {
+  font-size: 0.875rem !important;
+  line-height: 1.45 !important;
+}
+
+/* Platform-wide readability baseline. The typefaces remain unchanged; these
+   rules only prevent dense utility text from becoming too small to scan. */
+.text-\[9px\] {
+  font-size: 0.75rem !important;
+  line-height: 1.35 !important;
+}
+
+.text-\[10px\] {
+  font-size: 0.78125rem !important;
+  line-height: 1.4 !important;
+}
+
+.text-\[11px\] {
+  font-size: 0.8125rem !important;
+  line-height: 1.4 !important;
+}
+
+.text-xs {
+  font-size: 0.875rem !important;
+  line-height: 1.45 !important;
+}
+
+.text-sm {
+  font-size: 0.96875rem !important;
+  line-height: 1.5 !important;
+}
+
+/* Slate 400 was frequently used for explanatory copy on white panels. This
+   value remains suitable on dark navigation while improving light contrast. */
+.text-slate-400 {
+  color: #718096 !important;
+}

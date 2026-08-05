@@ -6,6 +6,7 @@ import React, {
 } from "react";
 
 import AuthService from "../services/auth";
+import { queryClient } from "../queryClient";
 
 const AuthContext = createContext(null);
 
@@ -46,6 +47,9 @@ export function AuthProvider({ children }) {
   }, []);
 
   async function signIn(email, password, stayLoggedIn = true) {
+    // Query keys are shared by route, so remove the previous account's
+    // authenticated data before establishing a different session.
+    queryClient.clear();
     const profile = await AuthService.signIn(
       email,
       password,
@@ -58,6 +62,7 @@ export function AuthProvider({ children }) {
   }
 
   async function signUp(name, email, password, role, otpCode = "") {
+    queryClient.clear();
     const profile = otpCode
       ? await AuthService.signUpWithCode(
           name,
@@ -80,6 +85,7 @@ export function AuthProvider({ children }) {
 
   async function signOut() {
     await AuthService.signOut();
+    queryClient.clear();
     setUser(null);
   }
 

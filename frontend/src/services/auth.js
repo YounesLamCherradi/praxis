@@ -4,7 +4,9 @@ let profile = null;
 let refreshPromise = null;
 const API_TIMEOUT_MS = 20_000;
 const API_RETRY_DELAYS_MS = [300, 900];
-const SESSION_RESTORE_TIMEOUT_MS = 5_000;
+// Production API instances may need time to wake from an idle state. A
+// five-second cutoff could incorrectly discard an otherwise valid session.
+const SESSION_RESTORE_TIMEOUT_MS = 20_000;
 
 function wait(milliseconds) {
   return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
@@ -143,6 +145,13 @@ async function authenticatedResponse(path, options = {}) {
   }
 
   return response;
+}
+
+// Use this for authenticated requests that need the raw Response (uploads,
+// streaming-style handlers, or callers with custom response parsing). It keeps
+// cookies attached and retries once after refreshing an expired session.
+export async function authenticatedFetch(path, options = {}) {
+  return authenticatedResponse(path, options);
 }
 
 /* ===========================
@@ -409,6 +418,7 @@ const AuthService = {
   authHeaders,
   apiFetch,
   requestJson,
+  authenticatedFetch,
   signIn,
   signUp,
   signUpWithCode,

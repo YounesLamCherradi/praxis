@@ -40,7 +40,6 @@ export async function createTeacherCourse(course = {}) {
       description: course.description,
       semester: course.semester,
       isPublished: course.isPublished !== false,
-      inviteCode: course.code || course.inviteCode || "",
     }),
   });
   return normalizeCourse(data.class);
@@ -50,6 +49,28 @@ export async function deleteTeacherCourse(courseId) {
   return request(`/api/classes/${encodeURIComponent(courseId)}`, {
     method: "DELETE",
   });
+}
+
+export async function updateTeacherCourse(courseId, patch = {}) {
+  const data = await request(`/api/classes/${encodeURIComponent(courseId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return normalizeCourse(data.class);
+}
+
+export async function addStudentToCourse(courseId, studentEmail) {
+  return request(`/api/classes/${encodeURIComponent(courseId)}/members`, {
+    method: "POST",
+    body: JSON.stringify({ studentEmail }),
+  });
+}
+
+export async function removeStudentFromCourse(courseId, studentId) {
+  return request(
+    `/api/classes/${encodeURIComponent(courseId)}/members/${encodeURIComponent(studentId)}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function joinCourseByCode(code) {

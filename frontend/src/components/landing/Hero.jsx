@@ -72,8 +72,11 @@ export default function Hero() {
               </div>
 
               <span className="text-lg font-bold leading-none tracking-tight">
-                <span className="text-blue-600">p</span>
-                <span className="text-slate-900">raxis</span>
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-600">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-600">i</span>
+                <span className="text-slate-900">s</span>
               </span>
 
               <span className="hidden rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-blue-700 sm:inline-flex">

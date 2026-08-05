@@ -52,6 +52,7 @@ import {
   savePraxisData,
 } from "../../services/praxisMockStore";
 import { createBugReport } from "../../services/reportApi";
+import { authenticatedFetch } from "../../services/auth";
 
 /* =========================================================
    CONSTANTS
@@ -2252,7 +2253,7 @@ export default function AdminDashboard() {
     setPasswordUiMessage("Updating password...");
 
     try {
-      const response = await fetch("/api/auth/update-password", {
+      const response = await authenticatedFetch("/api/auth/update-password", {
         method: "POST",
         credentials: "include",
         headers: {

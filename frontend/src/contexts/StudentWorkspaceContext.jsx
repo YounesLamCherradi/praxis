@@ -1613,21 +1613,6 @@ export function StudentWorkspaceProvider({
             String(profile.email || "").toLowerCase()
       );
 
-    if (
-      studentEnrollments.length ===
-      0
-    ) {
-      studentEnrollments =
-        allEnrollments.filter(
-          (enrollment) =>
-            String(
-              enrollment.studentEmail ||
-                ""
-            ).toLowerCase() ===
-            "student@aui.ma"
-        );
-    }
-
     const enrolledClassIds =
       studentEnrollments.map(
         (enrollment) =>
@@ -1690,31 +1675,6 @@ export function StudentWorkspaceProvider({
         .map(
           normalizeSubmissionForStudent
         );
-
-    if (
-      studentSubmissions.length ===
-        0 &&
-      String(
-        profile.email || ""
-      ).toLowerCase() !==
-        "student@aui.ma"
-    ) {
-      studentSubmissions =
-        safeArray(
-          data.submissions
-        )
-          .filter(
-            (submission) =>
-              String(
-                submission.studentEmail ||
-                  ""
-              ).toLowerCase() ===
-              "student@aui.ma"
-          )
-          .map(
-            normalizeSubmissionForStudent
-          );
-    }
 
     setClasses(
       studentClasses

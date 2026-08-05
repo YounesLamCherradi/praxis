@@ -9,7 +9,6 @@ import {
   savePraxisData,
 } from "../services/praxisMockStore";
 import {
-  createTeacherCourse,
   getTeacherCourses,
 } from "../services/courseApi";
 import {
@@ -1181,65 +1180,28 @@ export function TeacherWorkspaceProvider({ children }) {
      SHARED DATA FROM LOCAL STORE
   ===================================================== */
 
-  const [classes, setClasses] = useState(
-    () => getPraxisData().classes || []
-  );
+  // Authenticated teacher collections are backend-authoritative. Starting
+  // from the browser-wide recovery store can expose the previous account's
+  // workspace while the scoped API request is loading.
+  const [classes, setClasses] = useState([]);
 
-  const [assignments, setAssignments] = useState(
-    () => getPraxisData().assignments || []
-  );
+  const [assignments, setAssignments] = useState([]);
 
-  const [submissions, setSubmissions] = useState(
-    () =>
-      getRepairedPraxisData().submissions || []
-  );
+  const [submissions, setSubmissions] = useState([]);
 
-  const [rubrics, setRubrics] = useState(() => {
-    const savedRubrics = getPraxisData().rubrics || [];
-    return savedRubrics.map(normalizeRubricSchema);
-  });
+  const [rubrics, setRubrics] = useState([]);
+  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
 
     async function syncCoursesWithBackend() {
       try {
-        let backendCourses = await queryClient.fetchQuery({
+        const backendCourses = await queryClient.fetchQuery({
           queryKey: queryKeys.teacherCourses,
           queryFn: getTeacherCourses,
         });
-        const backendCodes = new Set(
-          backendCourses.map((course) => String(course.code || "").toUpperCase())
-        );
-
-        // Preserve courses created before backend persistence was introduced.
-        for (const localCourse of classes) {
-          const localCode = String(localCourse?.code || "").toUpperCase();
-          if (!localCode || backendCodes.has(localCode)) continue;
-
-          const migratedCourse = await createTeacherCourse(localCourse);
-          backendCourses = [...backendCourses, migratedCourse];
-          backendCodes.add(String(migratedCourse.code || "").toUpperCase());
-        }
-
-        const displayedCourses = backendCourses.map((backendCourse) => {
-          const localCourse = classes.find(
-            (course) =>
-              String(course?.code || "").toUpperCase() ===
-              String(backendCourse?.code || "").toUpperCase()
-          );
-
-          // Preserve legacy local IDs because existing local assignments still
-          // reference them; backendId carries the durable Supabase UUID.
-          return localCourse
-            ? {
-                ...backendCourse,
-                ...localCourse,
-                code: backendCourse.code,
-                backendId: backendCourse.id,
-              }
-            : backendCourse;
-        });
+        const displayedCourses = backendCourses;
 
         const assignmentGroups = await Promise.all(
           displayedCourses.map(async (course) => {
@@ -1300,6 +1262,8 @@ export function TeacherWorkspaceProvider({ children }) {
       } catch (error) {
         // Keep the local workspace usable when Supabase is temporarily unavailable.
         console.error("Could not synchronize courses with Supabase:", error);
+      } finally {
+        if (active) setIsWorkspaceLoading(false);
       }
     }
 
@@ -1307,8 +1271,6 @@ export function TeacherWorkspaceProvider({ children }) {
     return () => {
       active = false;
     };
-    // Run once for the authenticated teacher; subsequent edits update state directly.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /*
@@ -1396,56 +1358,6 @@ export function TeacherWorkspaceProvider({ children }) {
       submissions: safeArray(currentData.submissions),
     });
   }, [classes, assignments, rubrics]);
-
-  useEffect(() => {
-    function syncSubmissionsFromStore() {
-      const currentData =
-        getRepairedPraxisData();
-
-      setSubmissions((currentSubmissions) =>
-        mergeSubmissionCollections(
-          currentData.submissions || [],
-          currentSubmissions
-        )
-      );
-    }
-
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") {
-        syncSubmissionsFromStore();
-      }
-    }
-
-    window.addEventListener("storage", syncSubmissionsFromStore);
-    window.addEventListener(
-      "praxis-data-changed",
-      syncSubmissionsFromStore
-    );
-    window.addEventListener("focus", syncSubmissionsFromStore);
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibilityChange
-    );
-
-    return () => {
-      window.removeEventListener(
-        "storage",
-        syncSubmissionsFromStore
-      );
-      window.removeEventListener(
-        "praxis-data-changed",
-        syncSubmissionsFromStore
-      );
-      window.removeEventListener(
-        "focus",
-        syncSubmissionsFromStore
-      );
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibilityChange
-      );
-    };
-  }, []);
 
   /* =====================================================
      ASSIGNMENT ACTIONS
@@ -2616,22 +2528,9 @@ export function TeacherWorkspaceProvider({ children }) {
   }
 
   function refreshTeacherWorkspace() {
-    const data =
-      getRepairedPraxisData();
-
-    setClasses(data.classes || []);
-    setAssignments(data.assignments || []);
-
-    setSubmissions((currentSubmissions) =>
-      mergeSubmissionCollections(
-        data.submissions || [],
-        currentSubmissions
-      )
-    );
-
-    setRubrics(
-      (data.rubrics || []).map(normalizeRubricSchema)
-    );
+    // Never repopulate an authenticated workspace from the browser-wide mock
+    // store. The polling feed and scoped query invalidations refresh server data.
+    queryClient.invalidateQueries({ queryKey: ["teacher"] });
   }
 
   /* =====================================================
@@ -2646,6 +2545,7 @@ export function TeacherWorkspaceProvider({ children }) {
 
         classes,
         setClasses,
+        isWorkspaceLoading,
 
         assignments,
         setAssignments,

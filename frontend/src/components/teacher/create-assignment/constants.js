@@ -42,25 +42,25 @@ export const DEFAULT_CRITERIA = [
     id: "criterion_argument",
     name: "Assignment Focus",
     description: "The writing clearly responds to the assigned topic and task.",
-    points: 25,
+    points: 5,
   },
   {
     id: "criterion_development",
     name: "Development & Support",
     description: "The writing uses relevant examples, details, and explanation.",
-    points: 25,
+    points: 5,
   },
   {
     id: "criterion_organization",
     name: "Organization",
     description: "The writing has a clear structure, logical flow, and coherence.",
-    points: 25,
+    points: 5,
   },
   {
     id: "criterion_language",
     name: "Language & Style",
     description: "The writing uses appropriate grammar, vocabulary, and tone.",
-    points: 25,
+    points: 5,
   },
 ];
 

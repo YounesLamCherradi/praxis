@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
+import { authenticatedFetch } from "../../../services/auth";
 import {
   Send,
   ArrowRight,
@@ -9,8 +10,7 @@ import {
   ShieldAlert,
 } from "lucide-react";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
+const AI_ENDPOINT = "/api/generate";
 
 function getText(value) {
   return String(value || "").trim();
@@ -570,7 +570,7 @@ export default function Step1IdeasChat() {
         let openingMessage = fallbackMessage;
 
         try {
-          const response = await fetch(AI_ENDPOINT, {
+          const response = await authenticatedFetch(AI_ENDPOINT, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -750,7 +750,7 @@ export default function Step1IdeasChat() {
     try {
       const claudeMessages = buildClaudeMessages(nextMessages);
 
-      const response = await fetch(AI_ENDPOINT, {
+      const response = await authenticatedFetch(AI_ENDPOINT, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

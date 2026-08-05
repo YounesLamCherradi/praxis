@@ -9,6 +9,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
+  BookOpen,
   Calendar,
   CheckCircle2,
   ClipboardCheck,
@@ -313,6 +314,7 @@ export default function TeacherAssignments({
     selectedAssignment,
     setSelectedAssignment,
     setSubmissionFilterAssignment,
+    isWorkspaceLoading,
   } = useTeacherWorkspace();
 
   const [selectedClassId, setSelectedClassId] = useState("");
@@ -454,7 +456,16 @@ export default function TeacherAssignments({
     const mode = workspaceRequest.mode || "browse";
 
     if (mode === "create") {
-      setSelectedClassId("");
+      const requestedClass = activeClasses.find(
+        (cls) => String(cls.id) === String(workspaceRequest.courseId)
+      );
+      setSelectedClassId(
+        requestedClass
+          ? String(requestedClass.id)
+          : activeClasses.length === 1
+            ? String(activeClasses[0].id)
+            : ""
+      );
       setSelectedAssignmentId("");
       setSubmissionStatusFilter("All");
       setSelectedAssignment(null);
@@ -551,11 +562,20 @@ export default function TeacherAssignments({
     setView("list");
   }
 
+  if (isWorkspaceLoading) {
+    return <WorkspaceLoading />;
+  }
+
   if (view === "create") {
     return (
       <Suspense fallback={<WorkspaceLoading />}>
         <CreateAssignmentModal
           classes={classes}
+          defaultClassId={
+            selectedClassId ||
+            workspaceRequest?.courseId ||
+            (activeClasses.length === 1 ? activeClasses[0].id : "")
+          }
           onCreate={async (assignmentData) => {
             const createdAssignment = await addAssignment(assignmentData);
 
@@ -607,6 +627,62 @@ export default function TeacherAssignments({
           }}
         />
       </Suspense>
+    );
+  }
+
+  const isFirstAssignmentState =
+    activeClasses.length === 1 && activeAssignments.length === 0;
+
+  if (isFirstAssignmentState) {
+    const firstCourse = activeClasses[0];
+
+    return (
+      <div className="flex min-h-[65vh] items-center justify-center px-4">
+        <section className="w-full max-w-2xl overflow-hidden rounded-[2rem] border border-blue-200 bg-white text-center shadow-2xl shadow-blue-950/10">
+          <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 px-8 py-10 text-white sm:px-12 sm:py-12">
+            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-inner">
+              <BookOpen className="h-7 w-7" />
+            </div>
+            <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-blue-300">
+              Course ready · Next step
+            </p>
+            <h2 className="mt-2 font-serif text-3xl font-black sm:text-4xl">
+              Create your first assignment
+            </h2>
+            <p className="mx-auto mt-3 max-w-lg text-sm leading-relaxed text-slate-300">
+              Add the first piece of work for{" "}
+              <strong className="font-bold text-white">{firstCourse.name}</strong>.
+              The course is already selected for you.
+            </p>
+          </div>
+
+          <div className="flex flex-col items-center gap-4 px-8 py-7 sm:flex-row sm:justify-between sm:px-10">
+            <div className="text-center sm:text-left">
+              <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                Selected course
+              </p>
+              <p className="mt-1 text-sm font-bold text-slate-900">
+                {firstCourse.code ? `${firstCourse.code} · ` : ""}
+                {firstCourse.name}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedClassId(String(firstCourse.id));
+                setSelectedAssignmentId("");
+                setSelectedAssignment(null);
+                setSubmissionFilterAssignment(null);
+                setView("create");
+              }}
+              className="group inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-lg"
+            >
+              <Plus className="h-4 w-4 transition-transform group-hover:rotate-90" />
+              Create First Assignment
+            </button>
+          </div>
+        </section>
+      </div>
     );
   }
 

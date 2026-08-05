@@ -2,13 +2,13 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
-  BookOpen,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
+import { authenticatedFetch } from "../../services/auth";
 import {
   clearAssignmentBuilderDraft,
   getAssignmentBuilderDraft,
@@ -18,7 +18,6 @@ import {
 import {
   ASSIGNMENT_TYPES,
   DEFAULT_AI_SUPPORT_SETTINGS,
-  STEP_ITEMS,
 } from "./create-assignment/constants";
 
 import {
@@ -39,17 +38,17 @@ import {
   normalizeGeneratedAssignment,
 } from "./create-assignment/promptUtils";
 
-import StepPill from "./create-assignment/shared/StepPill";
-
 import ModeSelectionStep from "./create-assignment/steps/ModeSelectionStep";
 import RubricSetupStep from "./create-assignment/steps/RubricSetupStep";
 import AssignmentDetailsStep from "./create-assignment/steps/AssignmentDetailsStep";
 import SettingsStep from "./create-assignment/steps/SettingsStep";
 import ReviewStep from "./create-assignment/steps/ReviewStep";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
-const RUBRIC_PARSE_ENDPOINT = `${API_BASE_URL}/api/rubric/parse`;
+// Keep authenticated browser requests on the frontend origin. In production,
+// Netlify proxies /api to Render and preserves the secure session cookie. A
+// direct cross-origin Render request cannot use the cookie set on Netlify.
+const AI_ENDPOINT = "/api/generate";
+const RUBRIC_PARSE_ENDPOINT = "/api/rubric/parse";
 function isUuid(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     String(value || "").trim()
@@ -1028,8 +1027,9 @@ export default function CreateAssignmentModal({
       const formData = new FormData();
       formData.append("rubric", file);
 
-      const response = await fetch(RUBRIC_PARSE_ENDPOINT, {
+      const response = await authenticatedFetch(RUBRIC_PARSE_ENDPOINT, {
         method: "POST",
+        credentials: "include",
         headers: {
           ...buildAuthHeaders(),
         },
@@ -1120,8 +1120,9 @@ export default function CreateAssignmentModal({
     setIsGeneratingRubric(true);
 
     try {
-      const response = await fetch(AI_ENDPOINT, {
+      const response = await authenticatedFetch(AI_ENDPOINT, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...buildAuthHeaders(),
@@ -1152,26 +1153,26 @@ export default function CreateAssignmentModal({
                       {
                         name: "Criterion name",
                         description: "What the instructor evaluates",
-                        points: 25,
+                        points: 5,
                         bands: [
                           {
                             label: "Excellent",
-                            points: 25,
+                            points: 5,
                             description: "Clear performance description",
                           },
                           {
                             label: "Proficient",
-                            points: 19,
+                            points: 4,
                             description: "Clear performance description",
                           },
                           {
                             label: "Developing",
-                            points: 13,
+                            points: 3,
                             description: "Clear performance description",
                           },
                           {
                             label: "Beginning",
-                            points: 6,
+                            points: 2,
                             description: "Clear performance description",
                           },
                         ],
@@ -1284,7 +1285,7 @@ export default function CreateAssignmentModal({
             id: createId("criterion"),
             name: "",
             description: "",
-            points: 10,
+            points: 5,
           },
           prev.length
         ),
@@ -1429,8 +1430,9 @@ export default function CreateAssignmentModal({
     setGeneratedDraft(null);
 
     try {
-      const response = await fetch(AI_ENDPOINT, {
+      const response = await authenticatedFetch(AI_ENDPOINT, {
         method: "POST",
+        credentials: "include",
         headers: {
           "Content-Type": "application/json",
           ...buildAuthHeaders(),
@@ -1821,22 +1823,16 @@ export default function CreateAssignmentModal({
 
       <div
         ref={modalScrollRef}
-        className="relative z-10 bg-white border border-slate-200 rounded-3xl shadow-2xl w-[calc(100vw-2rem)] max-w-[1500px] p-5 sm:p-6 my-6 max-h-[92vh] overflow-y-auto animate-fade-in-up"
+        className="assignment-builder-readable relative z-10 bg-white border border-slate-200 rounded-3xl shadow-2xl w-[calc(100vw-2rem)] max-w-[1500px] p-5 sm:p-6 my-6 max-h-[92vh] overflow-y-auto animate-fade-in-up"
       >
         <div className="flex items-start justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
           <div className="space-y-1">
-            <span className="text-[9px] font-mono font-bold tracking-widest text-blue-700 uppercase bg-blue-50 px-2 py-0.5 rounded border border-blue-100 inline-flex items-center gap-1.5">
-              <BookOpen className="w-3 h-3" />
-              Assignment Builder
-            </span>
-
             <h2 className="text-2xl font-serif font-black text-slate-950">
               {editingAssignment ? "Edit Assignment" : "Create Assignment"}
             </h2>
 
-            <p className="text-xs text-slate-500 font-medium max-w-2xl leading-relaxed">
-              Choose the creation mode first, then configure rubric, details,
-              student support, and review the assignment before saving.
+            <p className="text-base text-slate-600 font-medium leading-relaxed lg:whitespace-nowrap">
+              Choose the creation mode first, then configure rubric, details, student support, and review the assignment before saving.
             </p>
           </div>
 
@@ -1847,17 +1843,6 @@ export default function CreateAssignmentModal({
           >
             <X className="w-4 h-4 stroke-[2.5]" />
           </button>
-        </div>
-
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 mb-6">
-          {STEP_ITEMS.map((item) => (
-            <StepPill
-              key={item.id}
-              step={item}
-              active={step === item.id}
-              completed={step > item.id}
-            />
-          ))}
         </div>
 
         <div

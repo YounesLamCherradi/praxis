@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../../hooks/useStudentWorkspace";
+import { authenticatedFetch } from "../../../services/auth";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -12,8 +13,7 @@ import {
   Sparkles,
 } from "lucide-react";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
+const AI_ENDPOINT = "/api/generate";
 
 function countWords(text) {
   const clean = String(text || "").trim();
@@ -562,7 +562,7 @@ export default function Step2DraftingCanvas() {
       );
 
       try {
-        const response = await fetch(AI_ENDPOINT, {
+        const response = await authenticatedFetch(AI_ENDPOINT, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

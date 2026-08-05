@@ -21,12 +21,28 @@ test("course invite message contains both direct link and manual fallback code",
   const { buildCourseInviteMessage } = await import(moduleUrl);
   const message = buildCourseInviteMessage(
     { name: "Academic Writing", semester: "Fall 2026", code: "write42" },
-    "https://praxis.example"
+    "https://praxis.example",
+    "Dr. Example"
   );
 
   assert.match(message, /https:\/\/praxis\.example\/join\?code=WRITE42/);
   assert.match(message, /Access code: WRITE42/);
-  assert.match(message, /create a student account/i);
+  assert.match(message, /Instructor: Dr\. Example/);
+  assert.match(message, /create an account/i);
+});
+
+test("course invites use the production join URL by default", async () => {
+  const { buildCourseInviteMessage } = await import(moduleUrl);
+  const message = buildCourseInviteMessage(
+    { name: "AWG1001Test", semester: "Fall 2027", code: "AWG4785" },
+    undefined,
+    "Professor Example"
+  );
+
+  assert.match(
+    message,
+    /Join link: https:\/\/praxisproject\.netlify\.app\/join\?code=AWG4785/
+  );
 });
 
 test("empty course codes never produce a misleading join link", async () => {

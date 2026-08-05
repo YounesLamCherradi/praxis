@@ -42,6 +42,7 @@ import {
 } from "../../services/praxisMockStore";
 import { joinCourseByCode } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
+import { authenticatedFetch } from "../../services/auth";
 import { queryClient, queryKeys } from "../../queryClient";
 
 const AssignmentTray = lazy(() => import("./AssignmentTray.jsx"));
@@ -311,6 +312,7 @@ export default function StudentDashboard() {
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState("");
   const [isJoiningCourse, setIsJoiningCourse] = useState(false);
+  const hasJoinedCourses = classes.length > 0;
 
   useEffect(() => {
     const assignmentId = String(searchParams.get("assignment") || "").trim();
@@ -1164,7 +1166,7 @@ export default function StudentDashboard() {
     setPasswordUiMessage("Updating password...");
 
     try {
-      const response = await fetch("/api/auth/update-password", {
+      const response = await authenticatedFetch("/api/auth/update-password", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -1534,8 +1536,11 @@ export default function StudentDashboard() {
 
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-none">
-                <span className="text-blue-400">p</span>
-                <span className="text-white">raxis</span>
+                <span className="text-white">pr</span>
+                <span className="text-blue-400">a</span>
+                <span className="text-white">x</span>
+                <span className="text-blue-400">i</span>
+                <span className="text-white">s</span>
               </h1>
 
               <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
@@ -1973,6 +1978,7 @@ export default function StudentDashboard() {
                 <ActiveAssignmentWorkflow />
               ) : (
                 <div className="space-y-8">
+                {hasJoinedCourses && (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
                   <StudentMetricCard
                     cardType="draft"
@@ -2002,6 +2008,7 @@ export default function StudentDashboard() {
                     tone="sky"
                   />
                 </div>
+                )}
 
                 <div className="space-y-2 animate-fade-in-up [animation-delay:150ms]">
                   <div className="space-y-1">

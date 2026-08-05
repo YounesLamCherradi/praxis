@@ -301,6 +301,12 @@ let deadlineReminderInFlight = false;
 let otpCleanupLastRanAt = 0;
 const signinRateLimiter = new Map();
 const signinIpRateLimiter = new Map();
+const joinCodeRateLimiter = new Map();
+const joinCodeIpRateLimiter = new Map();
+const JOIN_CODE_RATE_WINDOW_MS = 15 * 60 * 1000;
+const JOIN_CODE_RATE_MAX_FAILURES = 10;
+const JOIN_CODE_RATE_BLOCK_MS = 5 * 60 * 1000;
+const JOIN_CODE_IP_RATE_MAX_FAILURES = 100;
 const ACCOUNT_SETUP_INCOMPLETE_MESSAGE = "Your login worked, but your account setup is incomplete. Please ask your teacher (if you're a student) or contact support so we can finish setting up your account.";
 const SIGNUP_PROFILE_ERROR_MESSAGE = "We couldn't finish setting up your account. Please try creating your account again. If this keeps happening, ask your teacher (if you're a student) or contact support.";
 
@@ -2134,7 +2140,19 @@ async function ensureStudentCanAccessAssignment(assignmentId, studentId, client 
   if (!data) return null;
   if (data.status !== 'published') return null;
   const enrolledClass = await ensureStudentBelongsToClass(data.class_id, studentId, client);
-  return enrolledClass ? data : null;
+  if (!enrolledClass) return null;
+  const { data: classRecord, error: classError } = await client
+    .from('classes')
+    .select('archived')
+    .eq('id', data.class_id)
+    .maybeSingle();
+  if (classError) throw classError;
+  return { ...data, classArchived: classRecord?.archived === true };
+}
+
+async function ensureStudentCanModifyAssignment(assignmentId, studentId, client = supabase) {
+  const assignment = await ensureStudentCanAccessAssignment(assignmentId, studentId, client);
+  return assignment && assignment.classArchived !== true ? assignment : null;
 }
 
 async function getSubmissionRecord(submissionId, client = supabase) {
@@ -3675,20 +3693,18 @@ function normalizeClassInviteCode(value) {
     .replace(/[^A-Z0-9]/g, '');
 }
 
-function generateClassInviteCode(name = '') {
-  const letters = String(name || '')
-    .toUpperCase()
-    .replace(/[^A-Z]/g, '');
-  const prefix = `${letters}CRS`.slice(0, 3);
-  const suffix = crypto.randomInt(1000, 10000);
-  return `${prefix}${suffix}`;
+function generateClassInviteCode() {
+  // Avoid ambiguous characters while retaining about 40 bits of entropy.
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return Array.from(
+    { length: 8 },
+    () => alphabet[crypto.randomInt(0, alphabet.length)]
+  ).join('');
 }
 
-async function createClassWithUniqueInviteCode(client, classData, requestedCode = '') {
+async function createClassWithUniqueInviteCode(client, classData) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const inviteCode = attempt === 0 && normalizeClassInviteCode(requestedCode)
-      ? normalizeClassInviteCode(requestedCode)
-      : generateClassInviteCode(classData.name);
+    const inviteCode = generateClassInviteCode();
     const { data, error } = await client
       .from('classes')
       .insert({ ...classData, invite_code: inviteCode })
@@ -3741,8 +3757,7 @@ app.post('/api/classes', async (req, res) => {
       req,
       (client) => createClassWithUniqueInviteCode(
         client,
-        classData,
-        req.body?.inviteCode
+        classData
       )
     );
     if (error) return res.status(400).json({ error: error.message });
@@ -3762,6 +3777,30 @@ app.post('/api/classes/join-by-code', async (req, res) => {
       return res.status(403).json({ error: 'Only student accounts can join courses.' });
     }
 
+    const now = Date.now();
+    const ip = getClientIp(req);
+    const studentKey = `${ip}:${user.id}`;
+    cleanupRateBucket(joinCodeRateLimiter, now, JOIN_CODE_RATE_WINDOW_MS);
+    cleanupRateBucket(joinCodeIpRateLimiter, now, JOIN_CODE_RATE_WINDOW_MS);
+    const studentRate = evaluateRateBucket(joinCodeRateLimiter, studentKey, now, {
+      windowMs: JOIN_CODE_RATE_WINDOW_MS,
+      maxAttempts: JOIN_CODE_RATE_MAX_FAILURES,
+      blockMs: JOIN_CODE_RATE_BLOCK_MS,
+    });
+    const ipRate = evaluateRateBucket(joinCodeIpRateLimiter, ip, now, {
+      windowMs: JOIN_CODE_RATE_WINDOW_MS,
+      maxAttempts: JOIN_CODE_IP_RATE_MAX_FAILURES,
+      blockMs: JOIN_CODE_RATE_BLOCK_MS,
+    });
+    const joinRate = studentRate.blocked ? studentRate : ipRate;
+    if (joinRate.blocked) {
+      res.set('Retry-After', String(joinRate.retryAfterSeconds));
+      return res.status(429).json({
+        error: 'Too many incorrect course-code attempts. Please wait and try again.',
+        retryAfterSeconds: joinRate.retryAfterSeconds,
+      });
+    }
+
     const inviteCode = normalizeClassInviteCode(req.body?.code);
     if (!inviteCode) return res.status(400).json({ error: 'Please enter a valid course code.' });
 
@@ -3773,6 +3812,16 @@ app.post('/api/classes/join-by-code', async (req, res) => {
 
     if (classError) return res.status(400).json({ error: classError.message });
     if (!classRow) {
+      registerRateFailure(joinCodeRateLimiter, studentKey, now, {
+        windowMs: JOIN_CODE_RATE_WINDOW_MS,
+        maxAttempts: JOIN_CODE_RATE_MAX_FAILURES,
+        blockMs: JOIN_CODE_RATE_BLOCK_MS,
+      });
+      registerRateFailure(joinCodeIpRateLimiter, ip, now, {
+        windowMs: JOIN_CODE_RATE_WINDOW_MS,
+        maxAttempts: JOIN_CODE_IP_RATE_MAX_FAILURES,
+        blockMs: JOIN_CODE_RATE_BLOCK_MS,
+      });
       return res.status(404).json({ error: 'Invalid course code. Please check the code provided by your instructor.' });
     }
     if (classRow.archived || classRow.is_published === false) {
@@ -3792,7 +3841,57 @@ app.post('/api/classes/join-by-code', async (req, res) => {
     );
     if (membershipError) return res.status(400).json({ error: membershipError.message });
 
+    clearRateBucketEntry(joinCodeRateLimiter, studentKey);
     res.json({ ok: true, class: classRow, membership });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/classes/:classId', async (req, res) => {
+  try {
+    const { user, error: teacherError, status } = await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+    const readClient = getRequestScopedSupabase(req);
+    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
+    if (!ownedClass) {
+      return res.status(403).json({ error: 'You can only update your own classes.' });
+    }
+
+    const patch = {};
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
+      const name = String(req.body.name || '').trim();
+      if (!name) return res.status(400).json({ error: 'A course name is required.' });
+      patch.name = name;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'description')) {
+      patch.description = String(req.body.description || '').trim() || null;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'semester')) {
+      patch.semester = String(req.body.semester || '').trim() || null;
+    }
+    if (typeof req.body?.isPublished === 'boolean') {
+      patch.is_published = req.body.isPublished;
+    }
+    if (typeof req.body?.archived === 'boolean') {
+      patch.archived = req.body.archived;
+    }
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: 'No supported course changes were provided.' });
+    }
+
+    const { data, error } = await writeWithRequestScopedFallback(
+      req,
+      (client) => client
+        .from('classes')
+        .update(patch)
+        .eq('id', req.params.classId)
+        .eq('teacher_id', user.id)
+        .select()
+        .single()
+    );
+    if (error) return res.status(400).json({ error: error.message });
+    res.json({ class: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3851,10 +3950,47 @@ app.delete('/api/classes/:classId', async (req, res) => {
         reason: 'class_deleted',
         classId: req.params.classId,
       });
-      await supabase.from('submissions').delete().in('assignment_id', assignmentIds);
-      await supabase.from('assignments').delete().in('id', assignmentIds);
+      const submissionIds = (submissionsToArchive || [])
+        .map((submission) => submission.id)
+        .filter(Boolean);
+      if (submissionIds.length) {
+        const { error: submissionRevisionError } = await supabase
+          .from('submission_revisions')
+          .delete()
+          .in('submission_id', submissionIds);
+        if (submissionRevisionError) {
+          return res.status(400).json({ error: submissionRevisionError.message });
+        }
+      }
+      const { error: submissionDeleteError } = await supabase
+        .from('submissions')
+        .delete()
+        .in('assignment_id', assignmentIds);
+      if (submissionDeleteError) {
+        return res.status(400).json({ error: submissionDeleteError.message });
+      }
+      const { error: assignmentRevisionError } = await supabase
+        .from('assignment_revisions')
+        .delete()
+        .in('assignment_id', assignmentIds);
+      if (assignmentRevisionError) {
+        return res.status(400).json({ error: assignmentRevisionError.message });
+      }
+      const { error: assignmentDeleteError } = await supabase
+        .from('assignments')
+        .delete()
+        .in('id', assignmentIds);
+      if (assignmentDeleteError) {
+        return res.status(400).json({ error: assignmentDeleteError.message });
+      }
     }
-    await supabase.from('class_members').delete().eq('class_id', req.params.classId);
+    const { error: membershipDeleteError } = await supabase
+      .from('class_members')
+      .delete()
+      .eq('class_id', req.params.classId);
+    if (membershipDeleteError) {
+      return res.status(400).json({ error: membershipDeleteError.message });
+    }
     const { error } = await supabase.from('classes').delete().eq('id', req.params.classId);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ ok: true });
@@ -4836,6 +4972,11 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
       .eq('student_id', user.id)
       .single();
     if (error && error.code === 'PGRST116') {
+      if (accessibleAssignment.classArchived === true) {
+        return res.status(409).json({
+          error: 'This course is archived. Previous work remains available, but new work cannot be started.',
+        });
+      }
       // No submission yet - create one using the student's authenticated session when available.
       const { data: newData, error: createError } = await submissionWriteWithFallback(req, (client) => client
         .from('submissions')
@@ -4956,9 +5097,11 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
     const readClient = getRequestScopedSupabase(req);
-    const accessibleAssignment = await ensureStudentCanAccessAssignment(req.params.assignmentId, user.id, readClient);
+    const accessibleAssignment = await ensureStudentCanModifyAssignment(req.params.assignmentId, user.id, readClient);
     if (!accessibleAssignment) {
-      return res.status(403).json({ error: 'You do not have access to this assignment.' });
+      return res.status(409).json({
+        error: 'This assignment is unavailable for new work. The course may be archived.',
+      });
     }
     const idempotencyKey = getIdempotencyKey(req);
     const replay = await getIdempotentResponse(user.id, 'submit_assignment', idempotencyKey);
@@ -5197,6 +5340,18 @@ app.patch('/api/submissions/:id', async (req, res) => {
       });
     }
     const isStudentOwner = submission.student_id === user.id;
+    if (isStudentOwner) {
+      const editableAssignment = await ensureStudentCanModifyAssignment(
+        submission.assignment_id,
+        user.id,
+        readClient
+      );
+      if (!editableAssignment) {
+        return res.status(409).json({
+          error: 'This course is archived. Previous work is read-only.',
+        });
+      }
+    }
     let payload;
     if (isStudentOwner) {
       const built = await buildStudentPatchPayload(req.body, req.params.id, readClient);

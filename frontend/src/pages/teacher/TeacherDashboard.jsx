@@ -15,16 +15,50 @@ import {
   savePraxisData,
 } from "../../services/praxisMockStore";
 import {
+  addStudentToCourse,
   createTeacherCourse,
   deleteTeacherCourse,
   getTeacherCourses,
+  removeStudentFromCourse,
+  updateTeacherCourse,
 } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
+import { authenticatedFetch } from "../../services/auth";
 import { buildCourseInviteMessage } from "../../utils/courseInvite";
 import { queryClient, queryKeys } from "../../queryClient";
 
 const TeacherAssignments = lazy(() => import("./TeacherAssignments"));
 const TeacherCommunication = lazy(() => import("./TeacherCommunication"));
+
+const ACADEMIC_TERMS = ["Spring", "Summer", "Fall"];
+
+function getCurrentAcademicSemester(date = new Date()) {
+  const month = date.getMonth();
+  const term = month < 5 ? "Spring" : month < 8 ? "Summer" : "Fall";
+  return `${term} ${date.getFullYear()}`;
+}
+
+function buildAcademicSemesterOptions(date = new Date(), count = 4) {
+  const currentSemester = getCurrentAcademicSemester(date);
+  const [currentTerm, currentYearText] = currentSemester.split(" ");
+  let termIndex = ACADEMIC_TERMS.indexOf(currentTerm);
+  let year = Number(currentYearText);
+
+  return Array.from({ length: count }, () => {
+    const semester = `${ACADEMIC_TERMS[termIndex]} ${year}`;
+    termIndex += 1;
+
+    if (termIndex === ACADEMIC_TERMS.length) {
+      termIndex = 0;
+      year += 1;
+    }
+
+    return semester;
+  });
+}
+
+const CURRENT_ACADEMIC_SEMESTER = getCurrentAcademicSemester();
+const UPCOMING_ACADEMIC_SEMESTERS = buildAcademicSemesterOptions();
 
 import {
   Home,
@@ -209,6 +243,7 @@ export default function TeacherDashboard() {
     rubrics = [],
     setRubrics,
     setView,
+    isWorkspaceLoading,
   } = useTeacherWorkspace();
 
   const activeCourses = useMemo(
@@ -253,6 +288,7 @@ export default function TeacherDashboard() {
     () => new Set(activeAssignments.map((assignment) => String(assignment.id))),
     [activeAssignments]
   );
+  const hasActiveCourses = activeCourses.length > 0;
 
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = String(searchParams.get("tab") || "").trim();
@@ -320,7 +356,7 @@ export default function TeacherDashboard() {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [classNameInput, setClassNameInput] = useState("");
   const [descriptionInput, setDescriptionInput] = useState("");
-  const [semesterInput, setSemesterInput] = useState("Fall 2026");
+  const [semesterInput, setSemesterInput] = useState(CURRENT_ACADEMIC_SEMESTER);
 
   const [createError, setCreateError] = useState("");
   const [createSuccess, setCreateSuccess] = useState("");
@@ -332,7 +368,12 @@ export default function TeacherDashboard() {
   const [manageCourseForm, setManageCourseForm] = useState({
     name: "",
     description: "",
-    semester: "Fall 2026",
+    semester: CURRENT_ACADEMIC_SEMESTER,
+  });
+  const [manageCourseBaseline, setManageCourseBaseline] = useState({
+    name: "",
+    description: "",
+    semester: CURRENT_ACADEMIC_SEMESTER,
   });
 
   const [studentNameToAdd, setStudentNameToAdd] = useState("");
@@ -364,12 +405,15 @@ export default function TeacherDashboard() {
   const [isSubmittingBugReport, setIsSubmittingBugReport] = useState(false);
   const [bugFileInputKey, setBugFileInputKey] = useState(0);
 
-  function showManagerSuccess(message) {
+  function showManagerSuccess(message, { persistent = false } = {}) {
     if (managerSuccessTimerRef.current) {
       window.clearTimeout(managerSuccessTimerRef.current);
+      managerSuccessTimerRef.current = null;
     }
 
     setManagerSuccess(message);
+
+    if (persistent) return;
 
     managerSuccessTimerRef.current = window.setTimeout(() => {
       setManagerSuccess("");
@@ -395,29 +439,22 @@ export default function TeacherDashboard() {
           status: member.status,
         }))
       );
-      const backendKeys = new Set(
-        backendEnrollments.map(
-          (entry) =>
-            `${String(entry.classCode).toUpperCase()}::${String(
-              entry.studentId || entry.studentEmail || ""
-            ).toLowerCase()}`
-        )
+      const teacherCourseIds = new Set(
+        backendCourses.map((course) => String(course.id))
       );
-      const compatibleLocalEnrollments = localEnrollments.filter((entry) => {
-        const key = `${String(entry.classCode || "").toUpperCase()}::${String(
-          entry.studentId || entry.studentEmail || ""
-        ).toLowerCase()}`;
-        return !backendKeys.has(key);
-      });
-      const mergedEnrollments = [
-        ...compatibleLocalEnrollments,
-        ...backendEnrollments,
-      ];
+      const teacherCourseCodes = new Set(
+        backendCourses.map((course) => String(course.code || "").toUpperCase())
+      );
+      const unrelatedLocalEnrollments = localEnrollments.filter(
+        (entry) =>
+          !teacherCourseIds.has(String(entry.classId || "")) &&
+          !teacherCourseCodes.has(String(entry.classCode || "").toUpperCase())
+      );
 
-      setEnrollments(mergedEnrollments);
+      setEnrollments(backendEnrollments);
       savePraxisData({
         ...getPraxisData(),
-        enrollments: mergedEnrollments,
+        enrollments: [...unrelatedLocalEnrollments, ...backendEnrollments],
       });
     } catch (error) {
       console.error("Could not refresh course enrollments from Supabase:", error);
@@ -486,7 +523,7 @@ export default function TeacherDashboard() {
     setPasswordUiMessage("Updating password...");
 
     try {
-      const response = await fetch("/api/auth/update-password", {
+      const response = await authenticatedFetch("/api/auth/update-password", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -653,41 +690,6 @@ export default function TeacherDashboard() {
     }
   }
 
-  function buildCourseCodePrefix(courseName) {
-    const words =
-      String(courseName || "")
-        .toUpperCase()
-        .match(/[A-Z]+/g) || [];
-
-    if (words.length >= 3) {
-      return words
-        .slice(0, 3)
-        .map((word) => word[0])
-        .join("");
-    }
-
-    const combinedLetters = words.join("");
-    return `${combinedLetters}CRS`.slice(0, 3);
-  }
-
-  function generateUniqueCourseCode(courseName) {
-    const prefix = buildCourseCodePrefix(courseName);
-    const usedCodes = new Set(
-      classes.map((course) => String(course?.code || "").toUpperCase())
-    );
-
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      const numericPart = String(Math.floor(1000 + Math.random() * 9000));
-      const candidate = `${prefix}${numericPart}`;
-
-      if (!usedCodes.has(candidate)) {
-        return candidate;
-      }
-    }
-
-    return `${prefix}${String(Date.now()).slice(-5)}`;
-  }
-
   function computeCourseStatus(cls) {
     if (cls?.archived === true) {
       return {
@@ -723,11 +725,8 @@ export default function TeacherDashboard() {
     }
 
     try {
-      const code = generateUniqueCourseCode(cleanName);
-
       const courseDraft = {
         name: cleanName,
-        code,
         description:
           descriptionInput.trim() || "No course description specified.",
         semester: semesterInput,
@@ -743,15 +742,14 @@ export default function TeacherDashboard() {
         setClasses([...classes, newClass]);
       }
 
-      setCreateSuccess(`Course created. Access code: ${code}`);
+      setCreateSuccess(`Course created. Access code: ${newClass.code}`);
 
       setClassNameInput("");
       setDescriptionInput("");
+      setIsCreateOpen(false);
+      setCreateSuccess("");
 
-      window.setTimeout(() => {
-        setIsCreateOpen(false);
-        setCreateSuccess("");
-      }, 2500);
+      openCourseManager(newClass);
     } catch (err) {
       console.error("Failed to create course:", err);
       setCreateError("Failed to create course.");
@@ -880,6 +878,13 @@ export default function TeacherDashboard() {
 
     setAssignmentWorkspaceRequest(createWorkspaceRequest());
     setActiveTab("assignments");
+  }
+
+  function openCreateCourse() {
+    setIsSidebarOpen(false);
+    setCreateError("");
+    setCreateSuccess("");
+    setIsCreateOpen(true);
   }
 
   function openCreateAssignment() {
@@ -1018,17 +1023,47 @@ export default function TeacherDashboard() {
     setManagedClass(cls);
     setManagerMode("details");
 
-    setManageCourseForm({
+    const courseDetails = {
       name: cls.name || "",
       description: cls.description || "",
-      semester: cls.semester || "Fall 2026",
-    });
+      semester: cls.semester || CURRENT_ACADEMIC_SEMESTER,
+    };
+    setManageCourseForm(courseDetails);
+    setManageCourseBaseline(courseDetails);
 
     setStudentNameToAdd("");
     setStudentEmailToAdd("");
     setManagerError("");
     setManagerSuccess("");
     setIsRemoveCourseConfirmOpen(false);
+  }
+
+  function openFirstAssignmentForCourse(course) {
+    if (!course) return;
+
+    const hasUnsavedChanges =
+      manageCourseForm.name !== manageCourseBaseline.name ||
+      manageCourseForm.description !== manageCourseBaseline.description ||
+      manageCourseForm.semester !== manageCourseBaseline.semester;
+
+    if (hasUnsavedChanges) {
+      setManagerSuccess("");
+      setManagerError(
+        "Save your course changes before creating the assignment."
+      );
+      return;
+    }
+
+    closeCourseManager();
+
+    if (typeof setView === "function") {
+      setView("create");
+    }
+
+    setAssignmentWorkspaceRequest(
+      createWorkspaceRequest({ mode: "create", courseId: course.id })
+    );
+    setActiveTab("assignments");
   }
 
   function closeCourseManager() {
@@ -1082,15 +1117,19 @@ export default function TeacherDashboard() {
     }
 
     try {
-      await writeClipboardText(buildCourseInviteMessage(course));
-      showManagerSuccess("Invite link copied. It is ready to paste into email or Canvas.");
+      await writeClipboardText(
+        buildCourseInviteMessage(course, undefined, teacherIdentity.name)
+      );
+      showManagerSuccess("Copied to clipboard.");
+      return true;
     } catch (error) {
       console.error("Could not copy the course invite:", error);
       setManagerError("Could not copy the invite. Please try again.");
+      return false;
     }
   }
 
-  function toggleManagedCoursePublication() {
+  async function toggleManagedCoursePublication() {
     if (!managedClass) return;
 
     setManagerError("");
@@ -1101,9 +1140,22 @@ export default function TeacherDashboard() {
       return;
     }
 
+    const nextPublished = managedClass.isPublished === false;
+    let persistedClass;
+    try {
+      persistedClass = await updateTeacherCourse(
+        managedClass.backendId || managedClass.id,
+        { isPublished: nextPublished }
+      );
+    } catch (error) {
+      setManagerError(error?.message || "Could not change course publication.");
+      return;
+    }
     const updatedClass = {
       ...managedClass,
-      isPublished: managedClass.isPublished === false,
+      ...persistedClass,
+      id: managedClass.id,
+      backendId: managedClass.backendId || persistedClass.id,
     };
 
     const updatedClasses = classes.map((cls) =>
@@ -1130,22 +1182,28 @@ export default function TeacherDashboard() {
     );
   }
 
-  function toggleManagedCourseArchive() {
+  async function toggleManagedCourseArchive() {
     if (!managedClass) return;
 
     setManagerError("");
     setManagerSuccess("");
 
     const willArchive = managedClass.archived !== true;
-    const now = new Date().toISOString();
-
+    let persistedClass;
+    try {
+      persistedClass = await updateTeacherCourse(
+        managedClass.backendId || managedClass.id,
+        { archived: willArchive }
+      );
+    } catch (error) {
+      setManagerError(error?.message || "Could not change the course archive state.");
+      return false;
+    }
     const updatedClass = {
       ...managedClass,
-      archived: willArchive,
-      archivedAt: willArchive ? now : null,
-      // Archived courses are removed from everyday teacher/student workflows.
-      // Restored courses remain unpublished until the instructor publishes them.
-      isPublished: willArchive ? false : managedClass.isPublished,
+      ...persistedClass,
+      id: managedClass.id,
+      backendId: managedClass.backendId || persistedClass.id,
     };
 
     const updatedClasses = classes.map((cls) =>
@@ -1167,9 +1225,11 @@ export default function TeacherDashboard() {
 
     showManagerSuccess(
       willArchive
-        ? "Course archived. It is now hidden from assignment and message selectors."
-        : "Course restored. Publish it when students should access it again."
+        ? "Course archived. It is hidden from active teacher workflows, while students retain access to previous work."
+        : `Course restored to its previous ${updatedClass.isPublished === false ? "unpublished" : "published"} state.`,
+      { persistent: true }
     );
+    return true;
   }
 
   async function removeManagedCourse() {
@@ -1327,7 +1387,7 @@ export default function TeacherDashboard() {
     }
   }
 
-  function handleUpdateManagedCourse(e) {
+  async function handleUpdateManagedCourse(e) {
     e.preventDefault();
 
     if (!managedClass) return;
@@ -1342,14 +1402,26 @@ export default function TeacherDashboard() {
       return;
     }
 
+    let persistedClass;
+    try {
+      persistedClass = await updateTeacherCourse(
+        managedClass.backendId || managedClass.id,
+        {
+          name: cleanName,
+          description: manageCourseForm.description.trim(),
+          semester: manageCourseForm.semester,
+        }
+      );
+    } catch (error) {
+      setManagerError(error?.message || "The course details could not be saved.");
+      return;
+    }
+
     const updatedClass = {
       ...managedClass,
-      name: cleanName,
-      description:
-        manageCourseForm.description.trim() ||
-        "No course description specified.",
-      semester: manageCourseForm.semester,
-      isPublished: managedClass.isPublished !== false,
+      ...persistedClass,
+      id: managedClass.id,
+      backendId: managedClass.backendId || persistedClass.id,
     };
 
     const updatedClasses = classes.map((cls) =>
@@ -1361,6 +1433,13 @@ export default function TeacherDashboard() {
     }
 
     setManagedClass(updatedClass);
+    const savedCourseDetails = {
+      name: updatedClass.name || "",
+      description: updatedClass.description || "",
+      semester: updatedClass.semester || CURRENT_ACADEMIC_SEMESTER,
+    };
+    setManageCourseForm(savedCourseDetails);
+    setManageCourseBaseline(savedCourseDetails);
 
     const data = getPraxisData();
 
@@ -1440,7 +1519,7 @@ export default function TeacherDashboard() {
     showManagerSuccess("Course updated.");
   }
 
-  function handleAddStudentToManagedCourse(e) {
+  async function handleAddStudentToManagedCourse(e) {
     e.preventDefault();
 
     if (!managedClass) return;
@@ -1448,7 +1527,6 @@ export default function TeacherDashboard() {
     setManagerError("");
     setManagerSuccess("");
 
-    const cleanName = studentNameToAdd.trim() || "Student";
     const cleanEmail = studentEmailToAdd.trim().toLowerCase();
 
     if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
@@ -1477,52 +1555,43 @@ export default function TeacherDashboard() {
       return;
     }
 
-    const newEnrollment = {
-      id: "enr_" + Date.now(),
-      studentName: cleanName,
-      studentEmail: cleanEmail,
-      classId: managedClass.id,
-      classCode: managedClass.code,
-      className: managedClass.name,
-      enrolledAt: new Date().toISOString(),
-    };
-
-    const data = getPraxisData();
-    const updatedEnrollments = [...(data.enrollments || []), newEnrollment];
-
-    savePraxisData({
-      ...data,
-      enrollments: updatedEnrollments,
-    });
-
-    setEnrollments(updatedEnrollments);
+    try {
+      await addStudentToCourse(
+        managedClass.backendId || managedClass.id,
+        cleanEmail
+      );
+      await refreshEnrollments();
+    } catch (error) {
+      setManagerError(error?.message || "The student could not be added.");
+      return;
+    }
     setStudentNameToAdd("");
     setStudentEmailToAdd("");
     showManagerSuccess(`${cleanEmail} added to ${managedClass.code}.`);
   }
 
-  function removeStudentFromManagedCourse(enrollmentId) {
+  async function removeStudentFromManagedCourse(enrollmentId) {
     if (!managedClass) return;
-
-    const confirmed = window.confirm(
-      "Are you sure you want to remove this student from the course?"
+    const enrollment = getClassEnrollments(managedClass).find(
+      (entry) => String(entry.id) === String(enrollmentId)
     );
-
-    if (!confirmed) return;
-
-    const data = getPraxisData();
-
-    const updatedEnrollments = (data.enrollments || []).filter(
-      (enrollment) => String(enrollment.id) !== String(enrollmentId)
-    );
-
-    savePraxisData({
-      ...data,
-      enrollments: updatedEnrollments,
-    });
-
-    setEnrollments(updatedEnrollments);
+    const studentId = enrollment?.studentId;
+    if (!studentId) {
+      setManagerError("The student record is missing its account ID. Refresh and try again.");
+      return false;
+    }
+    try {
+      await removeStudentFromCourse(
+        managedClass.backendId || managedClass.id,
+        studentId
+      );
+      await refreshEnrollments();
+    } catch (error) {
+      setManagerError(error?.message || "The student could not be removed.");
+      return false;
+    }
     showManagerSuccess("Student removed from the course.");
+    return true;
   }
 
   const pageTitles = {
@@ -1594,8 +1663,11 @@ export default function TeacherDashboard() {
 
             <div>
               <h1 className="text-2xl font-bold tracking-tight leading-none">
-                <span className="text-blue-400">p</span>
-                <span className="text-white">raxis</span>
+                <span className="text-white">pr</span>
+                <span className="text-blue-400">a</span>
+                <span className="text-white">x</span>
+                <span className="text-blue-400">i</span>
+                <span className="text-white">s</span>
               </h1>
 
               <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
@@ -1937,12 +2009,11 @@ export default function TeacherDashboard() {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          {!isWorkspaceLoading && classes.length > 0 && <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => {
-                setIsSidebarOpen(false);
-                setIsCreateOpen(true);
+                openCreateCourse();
               }}
               className="bg-slate-950 hover:bg-slate-800 text-white font-sans text-xs font-bold px-4 py-2 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
             >
@@ -1950,7 +2021,7 @@ export default function TeacherDashboard() {
               <span className="hidden sm:inline">Create Course</span>
               <span className="sm:hidden">Create</span>
             </button>
-          </div>
+          </div>}
         </header>
 
         <div className="flex-1 overflow-y-auto p-8 relative blueprint-grid">
@@ -1958,6 +2029,7 @@ export default function TeacherDashboard() {
             {activeTab === "overview" && (
               <OverviewPanel
                 classes={classes}
+                isWorkspaceLoading={isWorkspaceLoading}
                 totalClassesCount={totalClassesCount}
                 totalAssignmentsCount={totalAssignmentsCount}
                 pendingReviewsCount={pendingReviewsCount}
@@ -1967,6 +2039,7 @@ export default function TeacherDashboard() {
                 setExpandedClassId={setExpandedClassId}
                 openCourseManager={openCourseManager}
                 onCreateAssignment={openCreateAssignment}
+                onCreateCourse={openCreateCourse}
                 onOpenReviews={openPendingReviews}
               />
             )}
@@ -1988,7 +2061,17 @@ export default function TeacherDashboard() {
                 />
               )}
 
-              {activeTab === "communication" && <TeacherCommunication />}
+              {activeTab === "communication" &&
+                (isWorkspaceLoading ? (
+                  <div
+                    className="flex min-h-48 items-center justify-center text-sm font-semibold text-slate-500"
+                    role="status"
+                  >
+                    Loading workspace…
+                  </div>
+                ) : (
+                  <TeacherCommunication />
+                ))}
             </Suspense>
           </div>
         </div>
@@ -2005,16 +2088,22 @@ export default function TeacherDashboard() {
           createError={createError}
           createSuccess={createSuccess}
           handleCreateCourse={handleCreateCourse}
-          onClose={() => setIsCreateOpen(false)}
+          onClose={() => {
+            setIsCreateOpen(false);
+            setCreateError("");
+            setCreateSuccess("");
+          }}
         />
       )}
 
       {managedClass && (
         <CourseManagerModal
           managedClass={managedClass}
+          instructorName={teacherIdentity.name}
           managerMode={managerMode}
           setManagerMode={setManagerMode}
           manageCourseForm={manageCourseForm}
+          manageCourseBaseline={manageCourseBaseline}
           setManageCourseForm={setManageCourseForm}
           studentNameToAdd={studentNameToAdd}
           setStudentNameToAdd={setStudentNameToAdd}
@@ -2023,8 +2112,10 @@ export default function TeacherDashboard() {
           managerError={managerError}
           setManagerError={setManagerError}
           managerSuccess={managerSuccess}
+          setManagerSuccess={setManagerSuccess}
           closeCourseManager={closeCourseManager}
           copyCourseInvite={copyCourseInvite}
+          onCreateFirstAssignment={openFirstAssignmentForCourse}
           toggleManagedCoursePublication={toggleManagedCoursePublication}
           toggleManagedCourseArchive={toggleManagedCourseArchive}
           removeManagedCourse={removeManagedCourse}
@@ -2076,6 +2167,7 @@ export default function TeacherDashboard() {
 
 function OverviewPanel({
   classes,
+  isWorkspaceLoading,
   totalClassesCount,
   totalAssignmentsCount,
   pendingReviewsCount,
@@ -2085,6 +2177,7 @@ function OverviewPanel({
   setExpandedClassId,
   openCourseManager,
   onCreateAssignment,
+  onCreateCourse,
   onOpenReviews,
 }) {
   const [courseFilter, setCourseFilter] = useState("current");
@@ -2102,8 +2195,75 @@ function OverviewPanel({
   const displayedCourses =
     courseFilter === "past" ? pastCourses : currentCourses;
 
+  if (isWorkspaceLoading) {
+    return (
+      <div className="flex min-h-[55vh] items-center justify-center" role="status" aria-live="polite">
+        <div className="w-full max-w-3xl rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
+          <div className="mx-auto h-12 w-12 animate-pulse rounded-2xl bg-blue-100" />
+          <div className="mx-auto mt-5 h-5 w-52 animate-pulse rounded-full bg-slate-200" />
+          <div className="mx-auto mt-3 h-3 w-80 max-w-full animate-pulse rounded-full bg-slate-100" />
+          <p className="mt-5 text-center text-sm font-semibold text-slate-500">
+            Loading your instructor workspace…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
+      {classes.length === 0 ? (
+        <section className="grid grid-cols-1 gap-4 pt-10 animate-fade-in-up sm:pt-14 lg:grid-cols-2 lg:pt-16">
+          <button
+            type="button"
+            onClick={onCreateCourse}
+            className="group flex w-full flex-col items-center justify-center rounded-3xl border border-blue-200 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 px-6 py-9 text-center text-white shadow-xl shadow-blue-950/10 transition-all hover:-translate-y-0.5 hover:shadow-2xl sm:py-10"
+          >
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-inner transition-transform group-hover:scale-105">
+              <Plus className="h-7 w-7" />
+            </div>
+            <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">
+              Step 1 · Start here
+            </p>
+            <h2 className="mt-1 font-serif text-2xl font-black sm:text-3xl">
+              Create your first course
+            </h2>
+            <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-300">
+              Set up the course details and student access code, then create
+              your first assignment.
+            </p>
+            <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-950/30 transition-colors group-hover:bg-blue-500">
+              <Plus className="h-4 w-4" />
+              Create Course
+            </span>
+          </button>
+
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            title="Create a course first to unlock assignments"
+            className="flex w-full cursor-not-allowed flex-col items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 px-6 py-9 text-center text-slate-400 shadow-sm sm:py-10"
+          >
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-400 shadow-inner">
+              <BookOpen className="h-6 w-6" />
+            </div>
+            <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+              Step 2 · Locked
+            </p>
+            <h2 className="mt-1 font-serif text-2xl font-black text-slate-500">
+              Create an assignment
+            </h2>
+            <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-400">
+              Create a course first to unlock assignments.
+            </p>
+            <span className="mt-6 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-6 py-3 text-sm font-bold text-slate-400">
+              <KeyRound className="h-4 w-4" />
+              Locked until course creation
+            </span>
+          </button>
+        </section>
+      ) : (
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-fade-in-up">
         <button
           type="button"
@@ -2187,7 +2347,11 @@ function OverviewPanel({
           </div>
         </button>
       </section>
+      )}
 
+      {(totalClassesCount > 0 ||
+        totalAssignmentsCount > 0 ||
+        pendingReviewsCount > 0) && (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
         <MetricCard
           cardType="classes"
@@ -2216,7 +2380,9 @@ function OverviewPanel({
           tone="sky"
         />
       </div>
+      )}
 
+      {classes.length > 0 && (
       <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-4 animate-fade-in-up [animation-delay:150ms]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
@@ -2393,6 +2559,7 @@ function OverviewPanel({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -2472,16 +2639,17 @@ function CreateCourseModal({
               onChange={(e) => setSemesterInput(e.target.value)}
               className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
             >
-              <option value="Fall 2026">Fall 2026</option>
-              <option value="Spring 2027">Spring 2027</option>
-              <option value="Summer 2027">Summer 2027</option>
-              <option value="Fall 2027">Fall 2027</option>
+              {UPCOMING_ACADEMIC_SEMESTERS.map((semester) => (
+                <option key={semester} value={semester}>
+                  {semester}
+                </option>
+              ))}
             </select>
           </div>
 
           <div className="space-y-1.5">
             <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 block px-1">
-              Course Description
+              Welcome Note
               <span className="normal-case tracking-normal font-sans font-medium text-slate-300 ml-1">
                 (optional)
               </span>
@@ -2491,16 +2659,9 @@ function CreateCourseModal({
               rows={3}
               value={descriptionInput}
               onChange={(e) => setDescriptionInput(e.target.value)}
-              placeholder="Add a short description or important note..."
+              placeholder="Add an optional short course description or a welcome note for your students"
               className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none transition-all resize-none shadow-inner"
             />
-          </div>
-
-          <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2.5 flex items-start gap-2">
-            <Info className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-            <p className="text-[11px] leading-relaxed text-blue-800">
-              Praxis creates a unique student access code automatically.
-            </p>
           </div>
 
           {createError && (
@@ -2536,9 +2697,11 @@ function CreateCourseModal({
 
 function CourseManagerModal({
   managedClass,
+  instructorName,
   managerMode,
   setManagerMode,
   manageCourseForm,
+  manageCourseBaseline,
   setManageCourseForm,
   studentNameToAdd,
   setStudentNameToAdd,
@@ -2547,8 +2710,10 @@ function CourseManagerModal({
   managerError,
   setManagerError,
   managerSuccess,
+  setManagerSuccess,
   closeCourseManager,
   copyCourseInvite,
+  onCreateFirstAssignment,
   toggleManagedCoursePublication,
   toggleManagedCourseArchive,
   removeManagedCourse,
@@ -2561,6 +2726,20 @@ function CourseManagerModal({
   computeCourseStatus,
   getClassEnrollments,
 }) {
+  const [isInviteVisible, setIsInviteVisible] = useState(false);
+  const [archiveConfirmation, setArchiveConfirmation] = useState(null);
+  const [isChangingArchiveState, setIsChangingArchiveState] = useState(false);
+  const [studentRemovalTarget, setStudentRemovalTarget] = useState(null);
+  const [isRemovingStudent, setIsRemovingStudent] = useState(false);
+  const inviteText = buildCourseInviteMessage(
+    managedClass,
+    undefined,
+    instructorName
+  );
+  const hasUnsavedChanges =
+    manageCourseForm.name !== manageCourseBaseline.name ||
+    manageCourseForm.description !== manageCourseBaseline.description ||
+    manageCourseForm.semester !== manageCourseBaseline.semester;
   const publicationTooltip =
     managedClass.isPublished === false
       ? "Make the course visible and allow students to join."
@@ -2591,21 +2770,6 @@ function CourseManagerModal({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={managedClass.archived === true}
-              onClick={() => copyCourseInvite(managedClass)}
-              className="inline-flex items-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all disabled:cursor-not-allowed disabled:opacity-40"
-              title={
-                managedClass.archived === true
-                  ? "Restore the course before copying an invite"
-                  : "Copy a student course invitation"
-              }
-            >
-              <Copy className="w-4 h-4" />
-              Copy Invite
-            </button>
-
             <div className="relative group">
               <button
                 type="button"
@@ -2638,7 +2802,11 @@ function CourseManagerModal({
 
             <button
               type="button"
-              onClick={toggleManagedCourseArchive}
+              onClick={() =>
+                setArchiveConfirmation(
+                  managedClass.archived === true ? "restore" : "archive"
+                )
+              }
               className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all ${
                 managedClass.archived === true
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
@@ -2690,9 +2858,21 @@ function CourseManagerModal({
                 <CheckSquare className="h-4 w-4 shrink-0" />
               )}
 
-              <span className="font-semibold">
+              <span className="flex-1 font-semibold">
                 {managerError || managerSuccess}
               </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setManagerError("");
+                  setManagerSuccess("");
+                }}
+                className="ml-auto rounded-lg p-1 opacity-70 transition-opacity hover:bg-white/60 hover:opacity-100"
+                aria-label="Dismiss course notification"
+              >
+                <X className="h-4 w-4" />
+              </button>
             </div>
           </div>
         )}
@@ -2721,7 +2901,7 @@ function CourseManagerModal({
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                 }`}
               >
-                Students
+                View/Add Students
               </button>
             </div>
 
@@ -2759,10 +2939,17 @@ function CourseManagerModal({
                     }
                     className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
                   >
-                    <option value="Fall 2026">Fall 2026</option>
-                    <option value="Spring 2027">Spring 2027</option>
-                    <option value="Summer 2027">Summer 2027</option>
-                    <option value="Fall 2027">Fall 2027</option>
+                    {manageCourseForm.semester &&
+                      !UPCOMING_ACADEMIC_SEMESTERS.includes(manageCourseForm.semester) && (
+                        <option value={manageCourseForm.semester}>
+                          {manageCourseForm.semester}
+                        </option>
+                      )}
+                    {UPCOMING_ACADEMIC_SEMESTERS.map((semester) => (
+                      <option key={semester} value={semester}>
+                        {semester}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -2786,7 +2973,12 @@ function CourseManagerModal({
 
                 <button
                   type="submit"
-                  className="w-full bg-slate-950 text-white hover:bg-slate-800 font-sans text-xs font-bold py-3.5 rounded-xl shadow-md transition-all hover:scale-[1.01]"
+                  disabled={!hasUnsavedChanges}
+                  className={`w-full font-sans text-xs font-bold py-3.5 rounded-xl shadow-md transition-all ${
+                    hasUnsavedChanges
+                      ? "bg-slate-950 text-white hover:bg-slate-800 hover:scale-[1.01]"
+                      : "cursor-not-allowed bg-slate-100 text-slate-400 shadow-none"
+                  }`}
                 >
                   Save Course Changes
                 </button>
@@ -2850,9 +3042,7 @@ function CourseManagerModal({
 
                         <button
                           type="button"
-                          onClick={() =>
-                            removeStudentFromManagedCourse(enrollment.id)
-                          }
+                          onClick={() => setStudentRemovalTarget(enrollment)}
                           className="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold px-3 py-2 rounded-xl hover:bg-red-100"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -2882,9 +3072,24 @@ function CourseManagerModal({
                 </span>
               </div>
 
-              <p className="mt-4 text-3xl font-mono font-black tracking-wide text-blue-700">
-                {managedClass.code}
-              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <p className="text-3xl font-mono font-black tracking-wide text-blue-700">
+                  {managedClass.code}
+                </p>
+
+                <button
+                  type="button"
+                  disabled={managedClass.archived === true}
+                  onClick={async () => {
+                    setIsInviteVisible(true);
+                    await copyCourseInvite(managedClass);
+                  }}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[10px] font-bold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Invite Students
+                </button>
+              </div>
 
               <p className="mt-2 text-xs leading-relaxed text-slate-500">
                 {managedClass.archived === true
@@ -2892,10 +3097,211 @@ function CourseManagerModal({
                   : "Students enter this code in Praxis to join the course."}
               </p>
 
+              {isInviteVisible && (
+                <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
+                  <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-slate-600">
+                    {inviteText}
+                  </p>
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={managedClass.archived === true}
+                onClick={() => onCreateFirstAssignment(managedClass)}
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Plus className="h-4 w-4" />
+                Create First Assignment
+              </button>
+
+              {hasUnsavedChanges && (
+                <p className="mt-2 text-center text-[10px] font-semibold text-amber-700">
+                  Save your course changes before creating an assignment.
+                </p>
+              )}
+
             </div>
           </div>
         </div>
       </div>
+
+      {archiveConfirmation && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="archive-course-title"
+        >
+          <div className="w-full max-w-lg overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+            <div className="p-6 sm:p-7">
+              <div className="flex items-start gap-4">
+                <div
+                  className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border ${
+                    archiveConfirmation === "archive"
+                      ? "border-amber-200 bg-amber-50 text-amber-700"
+                      : "border-blue-200 bg-blue-50 text-blue-700"
+                  }`}
+                >
+                  {archiveConfirmation === "archive" ? (
+                    <Archive className="h-5 w-5" />
+                  ) : (
+                    <RotateCcw className="h-5 w-5" />
+                  )}
+                </div>
+
+                <div className="min-w-0">
+                  <p
+                    className={`font-mono text-[10px] font-bold uppercase tracking-widest ${
+                      archiveConfirmation === "archive"
+                        ? "text-amber-700"
+                        : "text-blue-700"
+                    }`}
+                  >
+                    Course status
+                  </p>
+                  <h3
+                    id="archive-course-title"
+                    className="mt-1 font-serif text-xl font-black text-slate-950"
+                  >
+                    {archiveConfirmation === "archive"
+                      ? `Archive ${managedClass.name}?`
+                      : `Restore ${managedClass.name}?`}
+                  </h3>
+
+                  {archiveConfirmation === "archive" ? (
+                    <div className="mt-3 space-y-3 text-sm leading-relaxed text-slate-600">
+                      <p>
+                        The course will leave your active course, assignment,
+                        and message lists. No course data will be deleted.
+                      </p>
+                      <div className="rounded-2xl border border-amber-100 bg-amber-50/70 p-4 text-xs leading-relaxed text-amber-900">
+                        Students will retain read-only access to previous
+                        assignments, submissions, feedback, and grades. They
+                        cannot start, edit, or submit work while the course is
+                        archived.
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-3 space-y-3 text-sm leading-relaxed text-slate-600">
+                      <p>
+                        The course will return to your active workspace with
+                        its previous publication state preserved.
+                      </p>
+                      <div className="rounded-2xl border border-blue-100 bg-blue-50/70 p-4 text-xs leading-relaxed text-blue-900">
+                        This course will be restored as{" "}
+                        <strong>
+                          {managedClass.isPublished === false
+                            ? "unpublished"
+                            : "published"}
+                        </strong>
+                        .
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={isChangingArchiveState}
+                onClick={() => setArchiveConfirmation(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isChangingArchiveState}
+                onClick={async () => {
+                  setIsChangingArchiveState(true);
+                  const changed = await toggleManagedCourseArchive();
+                  setIsChangingArchiveState(false);
+                  if (changed) setArchiveConfirmation(null);
+                }}
+                className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  archiveConfirmation === "archive"
+                    ? "border-amber-700 bg-amber-600 text-white hover:bg-amber-700"
+                    : "border-blue-700 bg-blue-600 text-white hover:bg-blue-700"
+                }`}
+              >
+                {archiveConfirmation === "archive" ? (
+                  <Archive className="h-4 w-4" />
+                ) : (
+                  <RotateCcw className="h-4 w-4" />
+                )}
+                {isChangingArchiveState
+                  ? "Updating…"
+                  : archiveConfirmation === "archive"
+                    ? "Archive Course"
+                    : "Restore Course"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {studentRemovalTarget && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="remove-student-title"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-3xl border border-red-100 bg-white shadow-2xl">
+            <div className="p-6 sm:p-7">
+              <div className="flex items-start gap-4">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-red-100 bg-red-50 text-red-600">
+                  <UserPlus className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-mono text-[10px] font-bold uppercase tracking-widest text-red-600">
+                    Course roster
+                  </p>
+                  <h3
+                    id="remove-student-title"
+                    className="mt-1 font-serif text-xl font-black text-slate-950"
+                  >
+                    Remove {studentRemovalTarget.studentName || "this student"}?
+                  </h3>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-600">
+                    They will lose access to this course. Their existing
+                    submission records are preserved.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-100 bg-slate-50 px-6 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={isRemovingStudent}
+                onClick={() => setStudentRemovalTarget(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isRemovingStudent}
+                onClick={async () => {
+                  setIsRemovingStudent(true);
+                  const removed = await removeStudentFromManagedCourse(
+                    studentRemovalTarget.id
+                  );
+                  setIsRemovingStudent(false);
+                  if (removed) setStudentRemovalTarget(null);
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-700 bg-red-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Trash2 className="h-4 w-4" />
+                {isRemovingStudent ? "Removing…" : "Remove Student"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isRemoveCourseConfirmOpen && (
         <div

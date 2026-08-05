@@ -1,8 +1,6 @@
-import React from "react";
+import { useState } from "react";
 import {
   AlertCircle,
-  CheckCircle2,
-  ClipboardList,
   Link2,
   Loader2,
   Pencil,
@@ -27,11 +25,8 @@ export default function RubricSetupStep({
   handleFileUpload,
   isParsingRubric,
   rubricParseError,
-  rubricParseSuccess,
   isGeneratingRubric,
   rubricGenerationError,
-  rubricGenerationSuccess,
-  handleGenerateRubric,
   parsedRubricSchema,
   parsedRubricMatrix,
   criteria,
@@ -48,6 +43,21 @@ export default function RubricSetupStep({
   addBand,
   removeBand,
 }) {
+  const [sourceExpanded, setSourceExpanded] = useState(!rubricMode);
+  const selectedSavedRubric = savedRubricOptions.find(
+    (rubric) => String(rubric.id) === String(selectedRubricId)
+  );
+  const sourceSummary =
+    rubricMode === "uploaded"
+      ? uploadedRubricName || "Uploaded rubric"
+      : rubricMode === "saved"
+      ? selectedSavedRubric?.title || "Previous rubric"
+      : rubricMode === "generated"
+      ? "AI-created rubric"
+      : rubricMode === "manual"
+      ? "Manual rubric"
+      : "Choose a rubric source";
+
   const canShowRubricDetails =
     (rubricMode === "manual" && criteria.length > 0) ||
     (rubricMode === "uploaded" &&
@@ -62,161 +72,180 @@ export default function RubricSetupStep({
       Boolean(selectedRubricId) &&
       criteria.length > 0);
 
-  const sourceButtonClass = (active) =>
-    `w-full text-left rounded-xl border px-3 py-3 transition-all ${
-      active
-        ? "bg-blue-50 border-blue-300 ring-4 ring-blue-500/10"
-        : "bg-white border-slate-200 hover:border-blue-200 hover:bg-blue-50/30"
-    }`;
-
   return (
     <div className="space-y-4">
       <div className="space-y-4">
-        <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4">
-          <div className="flex items-start justify-between gap-3 mb-4">
+        {sourceExpanded || !rubricMode ? (
+          <div className="rounded-3xl border border-slate-200 bg-slate-50/70 p-5 sm:p-7">
+          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h4 className="font-serif text-sm font-bold text-slate-950">
-                Rubric source
-              </h4>
+              <h3 className="text-xl font-black text-slate-950 sm:text-2xl">
+                Rubric <span className="font-semibold text-slate-500">(optional)</span>
+              </h3>
 
-              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                Choose one source. You can change it any time in this step.
+              <p className="mt-2 text-base leading-relaxed text-slate-600 sm:text-lg">
+                Upload or reuse a rubric. The AI will shape its output to match.
               </p>
             </div>
 
             {rubricMode && criteria.length > 0 && (
-              <span className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">
-                {rubricTotal} pts
+              <span className="shrink-0 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-bold text-blue-700">
+                {rubricTotal} points
               </span>
             )}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
-            <label
-              className={`${sourceButtonClass(
-                rubricMode === "uploaded"
-              )} block cursor-pointer ${
-                isParsingRubric ? "pointer-events-none opacity-80" : ""
-              }`}
-              onClick={() => setRubricMode("uploaded")}
-            >
-              <input
-                type="file"
-                accept=".pdf,.doc,.docx,.txt"
-                className="hidden"
-                onChange={(event) =>
-                  handleFileUpload(event.target.files?.[0])
-                }
-              />
+          <label className="block text-base font-black text-slate-800 sm:text-lg">
+            Rubric upload
+            <span className="font-semibold text-slate-500"> — drag and drop or click to browse</span>
+          </label>
 
-              <div className="flex items-center gap-2">
-                {isParsingRubric ? (
-                  <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                ) : (
-                  <Upload className="h-4 w-4 text-blue-600" />
-                )}
+          <label
+            className={`mt-3 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-8 text-center transition-all sm:min-h-48 ${
+              rubricMode === "uploaded"
+                ? "border-blue-400 bg-blue-50 ring-4 ring-blue-500/10"
+                : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/30"
+            } ${isParsingRubric ? "pointer-events-none opacity-80" : ""}`}
+            onClick={() => setRubricMode("uploaded")}
+          >
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx,.txt"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                handleFileUpload(file);
+                setSourceExpanded(false);
+              }}
+            />
 
-                <p className="text-xs font-bold text-slate-900">
-                  {isParsingRubric ? "Parsing rubric..." : "Upload rubric"}
-                </p>
-              </div>
+            {isParsingRubric ? (
+              <Loader2 className="h-9 w-9 animate-spin text-blue-600" />
+            ) : (
+              <Upload className="h-9 w-9 text-blue-600" />
+            )}
 
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Upload PDF, Word, or text.
-              </p>
+            <p className="mt-4 text-lg font-bold text-slate-800 sm:text-xl">
+              {isParsingRubric
+                ? "Reading your rubric..."
+                : "Drop your rubric PDF or Word document here, or click to browse"}
+            </p>
 
-              {uploadedRubricName && (
-                <p className="mt-2 inline-block max-w-full truncate rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] text-blue-700">
-                  {uploadedRubricName}
-                </p>
-              )}
+            <p className="mt-2 text-sm text-slate-500 sm:text-base">
+              PDF, DOC, DOCX, or TXT
+            </p>
+
+            {uploadedRubricName && (
+              <span className="mt-4 max-w-full truncate rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700">
+                {uploadedRubricName}
+              </span>
+            )}
+          </label>
+
+          <div className="mt-6">
+            <label htmlFor="saved-rubric-source" className="block text-base font-bold text-slate-700">
+              Use a previous rubric
             </label>
 
+            <select
+              id="saved-rubric-source"
+              value={rubricMode === "saved" ? selectedRubricId : ""}
+              onChange={(event) => {
+                const rubricId = event.target.value;
+                setRubricMode("saved");
+                handleSavedRubricSelection(rubricId);
+                if (rubricId) setSourceExpanded(false);
+              }}
+              className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            >
+              <option value="">Select a saved rubric</option>
+              {savedRubricOptions.map((rubric) => (
+                <option key={rubric.id} value={rubric.id}>
+                  {rubric.title}
+                  {rubric.sourceAssignmentTitle ? ` — from ${rubric.sourceAssignmentTitle}` : ""}
+                </option>
+              ))}
+            </select>
+
+            {savedRubricOptions.length === 0 && (
+              <p className="mt-2 text-sm text-slate-500">No previous rubrics are available yet.</p>
+            )}
+          </div>
+
+          <div className="mt-5 border-t border-slate-200 pt-4 text-center">
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  startGeneratedRubric();
+                  setSourceExpanded(false);
+                }}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition-colors sm:text-base ${
+                  rubricMode === "generated"
+                    ? "bg-violet-50 text-violet-800"
+                    : "text-slate-600 hover:bg-violet-50 hover:text-violet-800"
+                }`}
+              >
+                <Wand2 className="h-4 w-4" />
+                Let AI create the rubric
+              </button>
+
+              <span className="hidden text-slate-300 sm:inline" aria-hidden="true">•</span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  startManualRubric();
+                  setSourceExpanded(false);
+                }}
+                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition-colors sm:text-base ${
+                  rubricMode === "manual"
+                    ? "bg-blue-100 text-blue-800"
+                    : "text-slate-600 hover:bg-blue-50 hover:text-blue-800"
+                }`}
+              >
+                <Pencil className="h-4 w-4" />
+                Create rubric manually
+              </button>
+            </div>
+
+            <p className="mt-1 text-xs text-slate-500 sm:text-sm">
+              Choose either option to build a rubric and review it before saving.
+            </p>
+          </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
+                Rubric source selected
+              </p>
+              <p className="mt-1 truncate text-base font-black text-slate-950 sm:text-lg">
+                {sourceSummary}
+              </p>
+              {criteria.length > 0 && (
+                <p className="mt-1 text-sm text-slate-600">
+                  {criteria.length} {criteria.length === 1 ? "criterion" : "criteria"} · {rubricTotal} points
+                </p>
+              )}
+            </div>
+
             <button
               type="button"
-              onClick={() => setRubricMode("saved")}
-              className={sourceButtonClass(rubricMode === "saved")}
+              onClick={() => setSourceExpanded(true)}
+              className="inline-flex shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm font-bold text-blue-700 transition hover:bg-blue-50"
             >
-              <div className="flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-blue-600" />
-
-                <p className="text-xs font-bold text-slate-900">
-                  Reuse previous
-                </p>
-              </div>
-
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Use a saved rubric.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              onClick={startGeneratedRubric}
-              className={sourceButtonClass(rubricMode === "generated")}
-            >
-              <div className="flex items-center gap-2">
-                <Wand2 className="h-4 w-4 text-violet-600" />
-
-                <p className="text-xs font-bold text-slate-900">
-                  Auto-generate rubric
-                </p>
-              </div>
-
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                AI creates it from details.
-              </p>
-            </button>
-
-            <button
-              type="button"
-              onClick={startManualRubric}
-              className={sourceButtonClass(rubricMode === "manual")}
-            >
-              <div className="flex items-center gap-2">
-                <Pencil className="h-4 w-4 text-blue-600" />
-
-                <p className="text-xs font-bold text-slate-900">
-                  Create manually
-                </p>
-              </div>
-
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Build criteria and bands.
-              </p>
+              Change rubric source
             </button>
           </div>
-        </div>
+        )}
 
-        <section className="space-y-4 min-w-0">
+        {!sourceExpanded && rubricMode && (
+          <section className="space-y-4 min-w-0">
           {rubricMode === "saved" && (
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_320px] xl:items-end">
-                <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                    Choose a saved rubric
-                  </label>
-
-                  <select
-                    value={selectedRubricId}
-                    onChange={(event) =>
-                      handleSavedRubricSelection(event.target.value)
-                    }
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-                  >
-                    <option value="">Select a saved or previous rubric</option>
-
-                    {savedRubricOptions.map((rubric) => (
-                      <option key={rubric.id} value={rubric.id}>
-                        {rubric.title}
-                        {rubric.sourceAssignmentTitle
-                          ? `  -  from ${rubric.sourceAssignmentTitle}`
-                          : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-end">
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Rubric title
@@ -280,30 +309,14 @@ export default function RubricSetupStep({
             </div>
           )}
 
-          {(rubricParseSuccess || rubricParseError) &&
-            rubricMode === "uploaded" && (
-              <div
-                className={`flex items-start gap-2 rounded-xl border p-3 ${
-                  rubricParseError
-                    ? "border-amber-200 bg-amber-50"
-                    : "border-emerald-200 bg-emerald-50"
-                }`}
-              >
-                {rubricParseError ? (
-                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
-                ) : (
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
-                )}
-
-                <p
-                  className={`text-xs leading-relaxed ${
-                    rubricParseError ? "text-amber-800" : "text-emerald-800"
-                  }`}
-                >
-                  {rubricParseError || rubricParseSuccess}
+          {rubricParseError && rubricMode === "uploaded" && (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                <p className="text-xs leading-relaxed text-amber-800">
+                  {rubricParseError}
                 </p>
               </div>
-            )}
+          )}
 
           {canShowRubricDetails && (
             <>
@@ -357,64 +370,6 @@ export default function RubricSetupStep({
             </>
           )}
 
-          {!rubricMode && (
-            <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-[#F8FAFC] p-8 text-center">
-              <div className="max-w-md">
-                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-600 shadow-sm">
-                  <ClipboardList className="h-5 w-5" />
-                </div>
-
-                <h4 className="mt-4 font-serif text-base font-bold text-slate-950">
-                  Choose a rubric source
-                </h4>
-
-                <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                  Select Upload rubric, Reuse previous, Auto-generate rubric,
-                  or Create manually. The rubric setup and preview will appear
-                  here only after you make a selection.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {rubricMode === "uploaded" &&
-            !uploadedRubricName &&
-            !isParsingRubric &&
-            !criteria.length && (
-              <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-blue-200 bg-blue-50/40 p-8 text-center">
-                <div className="max-w-md">
-                  <Upload className="mx-auto h-7 w-7 text-blue-600" />
-
-                  <h4 className="mt-3 font-serif text-base font-bold text-slate-950">
-                    Upload a rubric file
-                  </h4>
-
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    Click the Upload rubric option again to choose a PDF, Word,
-                    or text file. The parsed rubric will appear here afterward.
-                  </p>
-                </div>
-              </div>
-            )}
-
-          {rubricMode === "saved" &&
-            !selectedRubricId && (
-              <div className="flex min-h-[360px] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-[#F8FAFC] p-8 text-center">
-                <div className="max-w-md">
-                  <ClipboardList className="mx-auto h-7 w-7 text-blue-600" />
-
-                  <h4 className="mt-3 font-serif text-base font-bold text-slate-950">
-                    Select a saved rubric
-                  </h4>
-
-                  <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                    Choose a rubric from the saved-rubric list on the left. Its
-                    preview and editable criteria will then appear here.
-                  </p>
-                </div>
-              </div>
-            )}
-
           {rubricMode === "uploaded" &&
             isParsingRubric &&
             !criteria.length && (
@@ -430,7 +385,8 @@ export default function RubricSetupStep({
                 </div>
               </div>
             )}
-        </section>
+          </section>
+        )}
       </div>
     </div>
   );

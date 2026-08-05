@@ -55,8 +55,11 @@ export default function Navbar() {
             </div>
 
             <span className="text-2xl font-bold tracking-tight leading-none">
-              <span className="text-blue-600">p</span>
-              <span className="text-slate-900">raxis</span>
+              <span className="text-slate-900">pr</span>
+              <span className="text-blue-600">a</span>
+              <span className="text-slate-900">x</span>
+              <span className="text-blue-600">i</span>
+              <span className="text-slate-900">s</span>
             </span>
           </div>
 

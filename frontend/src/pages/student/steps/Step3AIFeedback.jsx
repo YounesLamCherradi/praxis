@@ -11,8 +11,7 @@ import {
   X,
 } from "lucide-react";
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
-const AI_ENDPOINT = `${API_BASE_URL}/api/generate`;
+const AI_ENDPOINT = "/api/generate";
 
 const REVIEW_PROGRESS_MESSAGES = [
   "Reading your draft carefully...",
