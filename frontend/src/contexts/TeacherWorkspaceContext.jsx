@@ -2269,15 +2269,40 @@ export function TeacherWorkspaceProvider({ children }) {
     const now =
       new Date().toISOString();
 
+    const reopenedTeacherReview = {
+      status: "reopened",
+      reopenedAt: now,
+      revisionMessage: options.message || options.revisionMessage || "",
+      rowScores: [],
+      suggestedRowScores: [],
+      suggestedGrade: null,
+      finalScore: "",
+      finalNotes: "",
+      annotations: [],
+      rubricScores: {},
+      rubricCalculatedScore: null,
+      rubricOverride: false,
+      savedAt: null,
+      acceptedAt: null,
+    };
+
     await updateSubmissionAsTeacher(id, {
       ...sourceSubmission,
       status: "reopened",
-      teacherReview: {
-        ...(sourceSubmission.teacherReview || sourceSubmission.teacher_review || {}),
-        status: "reopened",
-        reopenedAt: now,
-        revisionMessage: options.message || options.revisionMessage || "",
-      },
+      score: null,
+      feedback: "",
+      reviewedAt: null,
+      annotations: [],
+      rubricScores: {},
+      rubricCalculatedScore: null,
+      rubricOverride: false,
+      selfAssessment: {},
+      teacherReview: reopenedTeacherReview,
+      writingEvents: [],
+      keystrokeLog: [],
+      feedbackHistory: [],
+      attemptReset: true,
+      reopenedAt: now,
     });
 
     const previousTeacherReview =
@@ -2354,10 +2379,8 @@ export function TeacherWorkspaceProvider({ children }) {
           ]
         : existingFeedbackHistory;
 
-    /*
-      Reopen the same attempt in place.
-      A new attempt is created only when the student actually resubmits.
-    */
+    /* The durable row stays editable in place. The revision ledger exposes
+       its graded predecessor as an immutable previous attempt. */
     const reopenedSubmission = {
       ...sourceSubmission,
 
@@ -2380,7 +2403,37 @@ export function TeacherWorkspaceProvider({ children }) {
 
       previousTeacherReview,
       reopenSnapshot,
-      feedbackHistory,
+      previousAttemptFeedbackHistory: feedbackHistory,
+      feedbackHistory: [],
+
+      score: null,
+      feedback: "",
+      reviewedAt: null,
+      annotations: [],
+      rubricScores: {},
+      rubricCalculatedScore: null,
+      rubricOverride: false,
+      teacherReview: reopenedTeacherReview,
+      selfAssessment: {},
+      selfRubricScores: {},
+      selfRubricTotal: 0,
+      selfRubricPercentage: 0,
+      selfAssessmentComplete: false,
+      selfRubricAssessment: false,
+      writingEvents: [],
+      writingReplay: [],
+      writingHistory: [],
+      keystrokeLog: [],
+      copyPasteLogs: [],
+      focusLossLogs: [],
+      integrityLogs: [],
+      fluencySummary: {
+        attemptBaseText: revisionText,
+        attemptStartedAt: now,
+      },
+
+      attemptNumber: Number(sourceSubmission.attemptNumber || 1) + 1,
+      previousSubmissionId: sourceSubmission.id,
 
       content: revisionText,
       draftText: revisionText,

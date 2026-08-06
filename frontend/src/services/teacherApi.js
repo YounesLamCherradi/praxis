@@ -405,6 +405,18 @@ export async function updateSubmissionAsTeacher(submissionId, submission = {}) {
       draft_text: submission.draftText,
       final_text: submission.finalText,
       submitted_at: submission.submittedAt,
+      ...(submission.attemptReset === true
+        ? {
+            self_assessment: {},
+            writing_events: [],
+            keystroke_log: [],
+            feedback_history: [],
+            fluency_summary: {
+              attemptBaseText: submission.draftText || "",
+              attemptStartedAt: submission.reopenedAt || new Date().toISOString(),
+            },
+          }
+        : {}),
     }),
   });
   return normalizeSubmission(data.submission);

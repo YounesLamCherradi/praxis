@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   Award,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -2415,7 +2416,16 @@ function FinalCheckPanel({
               : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
           }`}
         >
-          <ShieldCheck className={`mt-0.5 h-4 w-4 shrink-0 ${attested ? "text-emerald-700" : "text-amber-700"}`} />
+          <span
+            aria-hidden="true"
+            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 ${
+              attested
+                ? "border-emerald-600 bg-emerald-600 text-white"
+                : "border-amber-500 bg-white text-transparent"
+            }`}
+          >
+            <Check className="h-3.5 w-3.5" />
+          </span>
           <div className="min-w-0 flex-1">
             <p className="text-xs font-bold text-slate-900">
               {attested ? "Academic honor confirmed" : "Confirm this is your own work"}
@@ -2424,7 +2434,9 @@ function FinalCheckPanel({
               I reviewed the final draft and am ready to submit it to my instructor.
             </p>
           </div>
-          {attested && <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />}
+          <span className="sr-only">
+            {attested ? "Confirmed" : "Not confirmed"}
+          </span>
         </button>
 
         {submitMessage && (

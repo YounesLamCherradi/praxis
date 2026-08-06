@@ -2872,12 +2872,15 @@ export function StudentWorkspaceProvider({
         ...(originalSnapshot ||
           existingDraft),
 
-        id: existingDraft.id,
+        id: `${existingDraft.id}:attempt:${Math.max(
+          1,
+          Number(originalSnapshot?.attemptNumber || existingDraft.attemptNumber || 2) - 1
+        )}`,
 
         attemptNumber:
           Number(
-            existingDraft.attemptNumber ||
-              originalSnapshot?.attemptNumber ||
+            originalSnapshot?.attemptNumber ||
+              Math.max(1, Number(existingDraft.attemptNumber || 2) - 1) ||
               1
           ),
 
@@ -2983,10 +2986,8 @@ export function StudentWorkspaceProvider({
         );
 
       const nextAttemptNumber =
-        Number(
-          previousAttempt.attemptNumber ||
-            1
-        ) + 1;
+        Number(existingDraft.attemptNumber || 0) ||
+        Number(previousAttempt.attemptNumber || 1) + 1;
 
       let newSubmission = {
         ...existingDraft,

@@ -80,6 +80,52 @@ describe('durable submission attempts', () => {
     assert.equal(attempts[1].final_text, 'Revised answer');
   });
 
+  test('shows a reopened revision immediately as clean Attempt 2', () => {
+    const reopened = {
+      ...submission,
+      status: 'reopened',
+      version: 8,
+      teacher_review: { status: 'reopened', finalScore: '', annotations: [] },
+    };
+    const attempts = buildSubmissionAttempts(reopened, [
+      {
+        submission_id: 'submission-1',
+        revision_number: 4,
+        change_type: 'submitted',
+        snapshot: { ...submission, status: 'submitted', final_text: 'First answer', version: 4 },
+      },
+      {
+        submission_id: 'submission-1',
+        revision_number: 6,
+        change_type: 'reviewed',
+        snapshot: {
+          ...submission,
+          status: 'graded',
+          final_text: 'First answer',
+          teacher_review: { status: 'graded', finalScore: 16, annotations: [{ id: 'old-note' }] },
+          version: 6,
+        },
+      },
+      {
+        submission_id: 'submission-1',
+        revision_number: 8,
+        change_type: 'reviewed',
+        snapshot: reopened,
+      },
+    ]);
+
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].attempt_number, 1);
+    assert.equal(attempts[0].teacher_review.finalScore, 16);
+    assert.equal(attempts[0].teacher_review.annotations.length, 1);
+    assert.equal(attempts[0].is_current, false);
+    assert.equal(attempts[1].attempt_number, 2);
+    assert.equal(attempts[1].status, 'reopened');
+    assert.equal(attempts[1].teacher_review.finalScore, '');
+    assert.equal(attempts[1].teacher_review.annotations.length, 0);
+    assert.equal(attempts[1].is_current, true);
+  });
+
   test('expands attempts independently for every student submission', () => {
     const list = buildSubmissionAttemptList(
       [submission, { ...submission, id: 'submission-2', student_id: 'student-2' }],

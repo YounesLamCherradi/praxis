@@ -2221,7 +2221,7 @@ function ReviewModalOverlay({
         {/* TOP COMPACT PROFILE LINE HEADER */}
         <div className="grid shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-5 py-3 xl:grid-cols-[minmax(0,1fr)_auto]">
           
-          <div className="flex min-w-0 items-center gap-4 overflow-hidden xl:flex-nowrap">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
             <div>
               <div className="flex items-center gap-2 whitespace-nowrap">
                 <h3 className="font-serif text-base font-bold text-slate-900 truncate">
@@ -2258,7 +2258,7 @@ function ReviewModalOverlay({
             <div className="h-6 w-[1px] bg-slate-200 hidden lg:block" />
 
             {/* Assignment- and attempt-specific score summaries */}
-            <div className="hidden items-center gap-4 text-xs lg:flex">
+            <div className="flex flex-wrap items-center gap-3 text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="font-mono text-[9px] font-bold uppercase text-slate-400">
                   Self-grade:
@@ -2311,7 +2311,7 @@ function ReviewModalOverlay({
           </div>
 
           {/* Quick Right Side Window Actions & Page Turning Carousel */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
               disabled={
@@ -2816,7 +2816,7 @@ export default function TeacherSubmissions({
      * summary refreshes cannot reset the open review snapshot or its UI state.
      */
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSubmissionId, setSubmissions]);
+  }, [selectedSubmissionId, selectedSubmission?.version, selectedSubmission?.status, selectedSubmission?.attemptNumber, setSubmissions]);
 
   const activeReviewSubmission =
     reviewSubmissionSnapshot &&
