@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import AuthService from "../../services/auth";
@@ -20,13 +20,12 @@ import {
   ShieldCheck,
   Sparkles,
   User,
-  Users,
 } from "lucide-react";
 
 const SIGNUP_CODE_PENDING_KEY = "praxis-signup-code-pending-v1";
 const SIGNUP_CODE_COOLDOWN_MS = 60 * 1000;
 
-export default function Signup() {
+export default function Signup({ accountRole = "student" }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [inviteCode] = useState(
@@ -34,13 +33,14 @@ export default function Signup() {
       normalizeCourseInviteCode(searchParams.get("invite")) ||
       getPendingCourseInvite()
   );
+  const signupRole = inviteCode ? "student" : accountRole;
+  const isInstructorSignup = signupRole === "teacher";
   const { signUp, setUser } = useAuth();
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [otpCode, setOtpCode] = useState("");
-  const [role, setRole] = useState("student");
   const [loading, setLoading] = useState(false);
   const [codeLoading, setCodeLoading] = useState(false);
   const [error, setError] = useState("");
@@ -91,7 +91,6 @@ export default function Signup() {
   const waitSeconds = Math.max(0, Math.ceil((resendAt - countdownNow) / 1000));
   const cleanEmail = email.trim().toLowerCase();
   const isAuiEmail = cleanEmail.endsWith("@aui.ma") && cleanEmail.includes("@");
-  const canRequestCode = isAuiEmail;
   const passwordChecks = {
     length: password.length >= 10,
     lower: /[a-z]/.test(password),
@@ -107,16 +106,6 @@ export default function Signup() {
     { key: "number", label: "One number" },
     { key: "special", label: "One special character" },
   ];
-
-  function passwordHint(pass) {
-    return [
-      pass.length >= 10,
-      /[a-z]/.test(pass),
-      /[A-Z]/.test(pass),
-      /\d/.test(pass),
-      /[^A-Za-z0-9]/.test(pass),
-    ].every(Boolean);
-  }
 
   async function handleRequestCode() {
     setCodeLoading(true);
@@ -156,7 +145,7 @@ export default function Signup() {
     setLoading(true);
     setError("");
 
-    if (!name.trim() || !email.trim() || !password || !otpCode.trim()) {
+    if (!name.trim() || !email.trim() || !password) {
       setError("Please fill in all required registration fields.");
       setLoading(false);
       return;
@@ -168,14 +157,34 @@ export default function Signup() {
       return;
     }
 
-    if (!/^\d{6}$/.test(otpCode.trim())) {
-      setError("Enter a valid 6-digit verification code.");
+    if (!Object.values(passwordChecks).every(Boolean)) {
+      setError("Password must be 10+ chars and include uppercase, lowercase, number, and special character.");
       setLoading(false);
       return;
     }
 
-    if (!Object.values(passwordChecks).every(Boolean)) {
-      setError("Password must be 10+ chars and include uppercase, lowercase, number, and special character.");
+    if (!codeRequested) {
+      try {
+        const requestedAt = Date.now();
+        await AuthService.requestSignupCode(cleanEmail, name.trim());
+        setCountdownNow(requestedAt);
+        setResendAt(requestedAt + SIGNUP_CODE_COOLDOWN_MS);
+        setCodeRequested(true);
+        window.sessionStorage.setItem(
+          SIGNUP_CODE_PENDING_KEY,
+          JSON.stringify({ email: cleanEmail, requestedAt })
+        );
+        setMessage("We sent a 6-digit verification code to your email.");
+      } catch (err) {
+        setError(err.message || "Could not send verification code.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    if (!/^\d{6}$/.test(otpCode.trim())) {
+      setError("Enter the 6-digit verification code from your email.");
       setLoading(false);
       return;
     }
@@ -187,15 +196,15 @@ export default function Signup() {
         name.trim(),
         cleanEmail,
         password,
-        inviteCode ? "student" : role,
+        signupRole,
         otpCode.trim()
       );
 
       setUser(profile);
 
-      if (inviteCode || role === "student") {
+      if (signupRole === "student") {
         navigate(inviteCode ? `/join?code=${encodeURIComponent(inviteCode)}` : "/student");
-      } else if (role === "teacher") {
+      } else if (signupRole === "teacher") {
         navigate("/teacher");
       } else {
         navigate("/");
@@ -287,13 +296,15 @@ export default function Signup() {
             </div>
 
             <h1 className="font-serif text-5xl xl:text-6xl font-black tracking-tight leading-[0.98] text-slate-950">
-              Create your academic writing workspace.
+              {isInstructorSignup
+                ? "Create your instructor workspace."
+                : "Create your student writing workspace."}
             </h1>
 
             <p className="mt-5 text-base text-slate-600 leading-relaxed max-w-lg">
-              Register with your AUI account to access guided writing,
-              instructors review tools, responsible AI support, and transparent
-              writing process workflows.
+              {isInstructorSignup
+                ? "Register with your AUI account to create courses, manage assignments, and review student writing."
+                : "Register with your AUI account to join courses and access guided, responsible writing support."}
             </p>
 
             <div className="mt-8 grid gap-3 max-w-md">
@@ -331,11 +342,17 @@ export default function Signup() {
                 </div>
 
                 <h2 className="text-2xl font-serif font-black text-slate-950">
-                  Register workspace
+                  {codeRequested
+                    ? "Verify your email"
+                    : isInstructorSignup
+                    ? "Instructor registration"
+                    : "Student registration"}
                 </h2>
 
                 <p className="text-xs font-mono uppercase text-blue-700 font-bold tracking-wider mt-1">
-                   Join the AUI platform · email code required
+                  {codeRequested
+                    ? "Enter the code to finish registration"
+                    : "Join the AUI platform · email code required"}
                 </p>
               </div>
 
@@ -346,7 +363,7 @@ export default function Signup() {
                 </div>
               )}
 
-              {message && (
+              {message && !codeRequested && (
                 <div className="mb-5 p-3.5 bg-blue-50 border border-blue-200 rounded-2xl flex items-start gap-2.5 text-xs text-blue-800 font-medium">
                   <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
                   <span>{message}</span>
@@ -354,6 +371,8 @@ export default function Signup() {
               )}
 
               <form className="space-y-4" onSubmit={handleSignup}>
+                {!codeRequested && (
+                  <>
                 <div>
                   <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
                     Full Name
@@ -396,23 +415,32 @@ export default function Signup() {
                     />
                     </div>
 
-                    {canRequestCode && (
-                      <button
-                        type="button"
-                        onClick={handleRequestCode}
-                        disabled={codeLoading || waitSeconds > 0}
-                        className="px-4 py-3 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-400 shadow-lg shadow-blue-600/20"
-                      >
-                        {codeLoading ? "Sending..." : waitSeconds > 0 ? `${waitSeconds}s` : "Get code"}
-                      </button>
-                    )}
                   </div>
                 </div>
+                  </>
+                )}
 
                 {codeRequested && (
-                  <div>
+                  <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                    <div className="mb-4 flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-white text-blue-700 shadow-sm">
+                        <Mail className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-bold text-slate-900">
+                          Check your email
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          Enter the 6-digit code sent to
+                        </p>
+                        <p className="truncate text-xs font-bold text-blue-700" title={cleanEmail}>
+                          {cleanEmail}
+                        </p>
+                      </div>
+                    </div>
+
                     <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                      6-Digit Verification Code
+                      Verification code
                     </label>
 
                     <div className="mt-1.5 relative rounded-xl shadow-sm">
@@ -424,16 +452,43 @@ export default function Signup() {
                         type="text"
                         value={otpCode}
                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
-                        placeholder="123456"
+                        placeholder="000000"
                         maxLength={6}
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        autoFocus
                         required
-                        className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-sm tracking-[0.35em] font-mono focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
+                        className="block w-full pl-10 pr-4 py-3.5 border border-blue-200 rounded-xl text-center text-lg tracking-[0.45em] font-mono font-bold focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
                       />
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCodeRequested(false);
+                          setOtpCode("");
+                          setMessage("");
+                          setResendAt(0);
+                          window.sessionStorage.removeItem(SIGNUP_CODE_PENDING_KEY);
+                        }}
+                        className="font-bold text-slate-600 hover:text-blue-700"
+                      >
+                        Change account details
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleRequestCode}
+                        disabled={codeLoading || waitSeconds > 0}
+                        className="font-bold text-blue-700 disabled:text-slate-400"
+                      >
+                        {codeLoading ? "Sending…" : waitSeconds > 0 ? `Resend in ${waitSeconds}s` : "Resend code"}
+                      </button>
                     </div>
                   </div>
                 )}
 
-                <div>
+                {!codeRequested && (
+                  <div>
                   <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
                     Create Password
                   </label>
@@ -453,7 +508,7 @@ export default function Signup() {
                     />
                   </div>
 
-                  {password.length > 0 && (
+                  {password.length > 0 && !codeRequested && (
                     <div className="mt-2 space-y-1.5">
                       {passwordRules.map((rule) => {
                         const satisfied = passwordChecks[rule.key];
@@ -473,40 +528,26 @@ export default function Signup() {
                       })}
                     </div>
                   )}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide mb-1.5">
-                    Campus Academic Role
-                  </label>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setRole("student")}
-                      className={`py-3 rounded-xl border text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                        role === "student"
-                          ? "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-600/20"
-                          : "bg-white border-slate-300 text-slate-600 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700"
-                      }`}
-                    >
-                      Student
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => !inviteCode && setRole("teacher")}
-                      disabled={Boolean(inviteCode)}
-                      className={`py-3 rounded-xl border text-xs font-mono font-bold uppercase tracking-wider transition-all cursor-pointer ${
-                        role === "teacher"
-                          ? "bg-blue-600 text-white border-blue-600 shadow-md shadow-blue-600/20"
-                          : "bg-white border-slate-300 text-slate-600 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700"
-                      }`}
-                    >
-                      Instructor
-                    </button>
                   </div>
-                </div>
+                )}
+
+                {!codeRequested && (
+                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                  <div className="flex items-center gap-2 text-sm font-bold text-blue-900">
+                    {isInstructorSignup ? (
+                      <GraduationCap className="h-4 w-4" />
+                    ) : (
+                      <User className="h-4 w-4" />
+                    )}
+                    {isInstructorSignup ? "Instructor account" : "Student account"}
+                  </div>
+                  <p className="mt-1 text-xs text-blue-700">
+                    {isInstructorSignup
+                      ? "This page creates instructor accounts only."
+                      : "This page creates student accounts only."}
+                  </p>
+                  </div>
+                )}
 
                 <button
                   type="submit"
@@ -516,11 +557,11 @@ export default function Signup() {
                   {loading ? (
                     <span className="flex items-center gap-1.5">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Creating account...
+                      {codeRequested ? "Creating account..." : "Sending code..."}
                     </span>
                   ) : (
                     <>
-                      Create Workspace
+                      {codeRequested ? "Verify & Create Workspace" : "Sign Up"}
                       <ArrowRight className="w-4 h-4" />
                     </>
                   )}
@@ -539,6 +580,19 @@ export default function Signup() {
                   Sign in
                 </button>
               </div>
+
+              {!inviteCode && (
+                <div className="mt-3 text-center text-xs text-slate-500">
+                  {isInstructorSignup ? "Are you a student?" : "Are you an instructor?"}{" "}
+                  <button
+                    type="button"
+                    onClick={() => navigate(isInstructorSignup ? "/signup" : "/instructor-signup")}
+                    className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
+                  >
+                    {isInstructorSignup ? "Create a student account" : "Go to instructor registration"}
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="mt-5 text-center text-[10px] font-mono text-slate-400 uppercase tracking-wider">

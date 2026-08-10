@@ -32,6 +32,7 @@ export default function AppRoutes() {
         <Route path="/admin-login" element={<AdminLogin />} />
 
         <Route path="/signup" element={<Signup />} />
+        <Route path="/instructor-signup" element={<Signup accountRole="teacher" />} />
         <Route path="/join" element={<CourseInvite />} />
 
         {/* STUDENT */}

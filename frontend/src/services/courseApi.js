@@ -66,6 +66,13 @@ export async function addStudentToCourse(courseId, studentEmail) {
   });
 }
 
+export async function sendCourseInvitation(courseId, studentEmail) {
+  return request(`/api/classes/${encodeURIComponent(courseId)}/invitations`, {
+    method: "POST",
+    body: JSON.stringify({ studentEmail }),
+  });
+}
+
 export async function removeStudentFromCourse(courseId, studentId) {
   return request(
     `/api/classes/${encodeURIComponent(courseId)}/members/${encodeURIComponent(studentId)}`,

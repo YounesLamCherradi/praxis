@@ -15,6 +15,7 @@ import {
   getOrCreateMySubmission,
   getStudentAssignments,
   getStudentSubmissions,
+  getStudentSubmissionSummaries,
   saveMySubmission,
   submitMyAssignment,
 } from "../services/teacherApi";
@@ -2048,12 +2049,9 @@ export function StudentWorkspaceProvider({
 
       refreshing = true;
       try {
-        await queryClient.invalidateQueries({
-          queryKey: queryKeys.studentSubmissions,
-        });
         const backendRows = await queryClient.fetchQuery({
-          queryKey: [...queryKeys.studentSubmissions, "all"],
-          queryFn: () => getStudentSubmissions([]),
+          queryKey: [...queryKeys.studentSubmissions, "status"],
+          queryFn: getStudentSubmissionSummaries,
           staleTime: 0,
         });
 
@@ -2267,14 +2265,21 @@ export function StudentWorkspaceProvider({
         if (!databaseSubmission?.id) {
           databaseSubmission = await getOrCreateMySubmission(assignmentId);
         }
-        const saved = await saveMySubmission({
+        const outgoing = {
           ...record,
           id: databaseSubmission.id,
           version: databaseSubmission.version,
           updatedAt: databaseSubmission.updatedAt,
-        });
-        rememberDurableSubmission(assignmentId, saved);
-        return saved;
+        };
+        const saved = await saveMySubmission(outgoing, databaseSubmission);
+        const confirmed = {
+          ...outgoing,
+          ...saved,
+          writingEvents: outgoing.writingEvents || [],
+          keystrokeLog: outgoing.keystrokeLog || [],
+        };
+        rememberDurableSubmission(assignmentId, confirmed);
+        return confirmed;
       })
       .catch((error) => {
         console.error("Supabase draft autosave failed; local recovery copy retained:", error);
@@ -3704,7 +3709,7 @@ export function StudentWorkspaceProvider({
           tone: "amber",
           title: "Draft required",
           message:
-            "Write part of your response in the Draft step before opening AI Feedback.",
+            "Write part of your response in the Draft Editor before requesting AI feedback.",
         });
 
         return false;
@@ -3793,8 +3798,7 @@ export function StudentWorkspaceProvider({
         !options.skipFeedbackPrompt &&
         !activeSubmission?.feedbackPromptResolvedAt
       ) {
-        const currentFeedbackView =
-          Number(studentStep) === 2 ? "Draft" : "AI Feedback";
+        const currentFeedbackView = "Draft";
 
         showStudentWorkflowNotice({
           tone: "blue",

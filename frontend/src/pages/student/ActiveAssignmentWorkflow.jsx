@@ -272,7 +272,7 @@ export default function ActiveAssignmentWorkflow() {
     {
       id: "coach",
       targetStep: 1,
-      label: "Coach",
+      label: "Outline",
       icon: MessageSquare,
       enabled: aiIdeasCoach && !assignmentLocked,
       disabledReason: "Coach is disabled.",
@@ -282,7 +282,7 @@ export default function ActiveAssignmentWorkflow() {
     {
       id: "draft-feedback",
       targetStep: studentStep === 3 ? 3 : 2,
-      label: "Draft & Feedback",
+      label: "Draft",
       icon: PenTool,
       enabled: !assignmentLocked,
       disabledReason: "This assignment is locked after submission.",
@@ -292,7 +292,7 @@ export default function ActiveAssignmentWorkflow() {
     {
       id: "rubric",
       targetStep: 4,
-      label: "Rubric",
+      label: "Reflection",
       icon: ClipboardCheck,
       enabled:
         rubricCriteria.length > 0 &&
@@ -313,10 +313,8 @@ export default function ActiveAssignmentWorkflow() {
       targetStep: 4,
       label: "Submit",
       icon: Lock,
-      enabled: (wordCount > 0 && rubricComplete) || assignmentLocked,
-      disabledReason: !rubricComplete
-        ? "Complete the rubric check before submitting."
-        : "Write your draft before final submission.",
+      enabled: wordCount > 0 || assignmentLocked,
+      disabledReason: "Write your draft before final submission.",
       active:
         studentStep === 4 &&
         (assignmentLocked || finalStageView === "submit"),
@@ -326,15 +324,10 @@ export default function ActiveAssignmentWorkflow() {
 
   const activeStepMeta =
     steps.find((step) => step.active) || steps[0];
-
-  const activeStepTitle =
-    studentStep === 1
-      ? "Step 1: Plan Your Ideas"
-      : studentStep === 2 || studentStep === 3
-        ? "Step 2: Draft & Feedback"
-          : assignmentLocked || finalStageView === "submit"
-            ? "Step 4: Submit Assignment"
-            : "Step 3: Rubric Check";
+  const activeStepNumber = Math.max(
+    1,
+    steps.findIndex((step) => step.id === activeStepMeta.id) + 1
+  );
 
   function renderActiveStepComponent() {
     if (assignmentLocked && studentStep !== 4) {
@@ -411,13 +404,13 @@ export default function ActiveAssignmentWorkflow() {
 
           <div className="hidden h-5 w-px bg-slate-200 xl:block" />
 
-          <div className="min-w-0 xl:flex-1">
+          <div className="flex min-w-0 items-center gap-2 xl:flex-1">
             <p className="font-mono text-[9px] font-black uppercase tracking-wider text-blue-700">
               {activeStepMeta?.label || "Assignment Step"}
             </p>
-
+            <span className="text-slate-300">·</span>
             <h2 className="truncate font-serif text-sm font-bold text-slate-900">
-              {activeStepTitle}
+              Step {activeStepNumber} of {steps.length}
             </h2>
           </div>
 
@@ -462,8 +455,12 @@ export default function ActiveAssignmentWorkflow() {
                       if (isLocked) {
                         showStudentWorkflowNotice?.({
                           tone: "amber",
-                          title: `${step.label} is not available yet`,
-                          message: step.disabledReason,
+                          title: assignmentLocked
+                            ? "Assignment locked"
+                            : `${step.label} is not available yet`,
+                          message: assignmentLocked
+                            ? "This assignment is locked after submission."
+                            : step.disabledReason,
                         });
                         return;
                       }
@@ -530,19 +527,13 @@ export default function ActiveAssignmentWorkflow() {
           </div>
         </div>
 
-        {assignmentLocked && (
-          <div className="mb-3 flex shrink-0 items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
-            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-            <p>
-              This assignment has been submitted. Editing is locked.
-            </p>
-          </div>
+        {!assignmentLocked && (
+          <CompactAssignmentBrief
+            title={assignment.title}
+            instructions={conciseInstructions}
+            compact
+          />
         )}
-
-        <CompactAssignmentBrief
-          title={assignment.title}
-          instructions={conciseInstructions}
-        />
 
         {studentWorkflowNotice && (
           <WorkflowNoticeBox
@@ -692,24 +683,33 @@ function WorkflowNoticeBox({
 function CompactAssignmentBrief({
   title,
   instructions,
+  compact = false,
 }) {
   return (
-    <section className="shrink-0 rounded-2xl border border-blue-100 bg-blue-50/40 px-4 py-3">
-      <div className="flex items-start gap-3">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-700 shadow-sm">
-          <FileText className="h-4 w-4" />
+    <section className="relative shrink-0 overflow-hidden rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/40 px-5 py-4 shadow-sm">
+      <span className="absolute inset-y-0 left-0 w-1.5 bg-blue-600" />
+      <div className={`flex items-start gap-3 ${compact ? "xl:items-center" : ""}`}>
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">
+          <FileText className="h-5 w-5" />
         </span>
 
-        <div className="min-w-0">
-          <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
-            Assignment Brief
-          </p>
+        <div className={`min-w-0 flex-1 ${compact ? "xl:grid xl:grid-cols-[minmax(280px,0.7fr)_minmax(0,1.8fr)] xl:items-center xl:gap-6" : ""}`}>
+          <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-blue-700">
+              Assignment Brief
+            </p>
+            <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[9px] font-bold text-blue-700">
+              Read this first
+            </span>
+          </div>
 
-          <h2 className="mt-1 font-serif text-base font-bold text-slate-950">
+          <h2 className="mt-1.5 font-serif text-lg font-black text-slate-950">
             {title || "Untitled Assignment"}
           </h2>
+          </div>
 
-          <p className="mt-1.5 text-[11px] leading-relaxed text-slate-600">
+          <p className={`${compact ? "mt-2 border-t border-blue-100 pt-2 xl:mt-0 xl:border-l xl:border-t-0 xl:py-1 xl:pl-6" : "mt-2 max-w-[1200px]"} text-xs leading-5 text-slate-700`}>
             {instructions}
           </p>
         </div>

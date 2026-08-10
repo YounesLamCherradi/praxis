@@ -3216,9 +3216,6 @@ export default function AdminDashboard() {
                     Change Password
                   </span>
 
-                  <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 font-mono text-[8px] text-slate-500">
-                    UI ready
-                  </span>
                 </button>
 
                 <button

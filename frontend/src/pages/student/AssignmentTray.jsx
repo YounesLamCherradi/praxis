@@ -1,4 +1,3 @@
-import React from "react";
 import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 import {
   Award,
@@ -108,11 +107,40 @@ function formatAssignmentDeadline(assignment = {}) {
 export default function AssignmentTray() {
   const {
     assignments = [],
+    classes = [],
     submissions = [],
     currentClassId = "__all__",
     openStudentAssignment,
     openingAssignmentId,
   } = useStudentWorkspace();
+
+  function getCourseName(assignment = {}) {
+    const matchedCourse = classes.find(
+      (course) => String(course?.id) === String(assignment.classId)
+    );
+    const rawName = String(
+      matchedCourse?.name ||
+        matchedCourse?.courseName ||
+        assignment.className ||
+        assignment.courseName ||
+        "Course"
+    ).trim();
+    const courseCode = String(
+      matchedCourse?.code || assignment.classCode || assignment.courseCode || ""
+    )
+      .trim()
+      .toUpperCase();
+    const nameParts = rawName.split(":");
+
+    if (
+      nameParts.length > 1 &&
+      nameParts[0].trim().toUpperCase() === courseCode
+    ) {
+      return nameParts.slice(1).join(":").trim() || rawName;
+    }
+
+    return rawName;
+  }
 
   const filteredAssignments = assignments.filter((assignment) => {
     if (currentClassId === "__all__") return true;
@@ -239,7 +267,7 @@ export default function AssignmentTray() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="text-[10px] font-mono font-bold text-blue-700 uppercase tracking-wider bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
-                    {assignment.classCode || assignment.courseCode || "AUI ACADEMY"}
+                    {getCourseName(assignment)}
                   </span>
 
                   <span className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${statusConfig.className}`}>

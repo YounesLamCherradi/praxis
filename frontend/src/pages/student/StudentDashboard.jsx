@@ -1,4 +1,4 @@
-import React, {
+import {
   lazy,
   Suspense,
   useEffect,
@@ -29,7 +29,6 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
-  Sparkle,
   Trash2,
   X,
 } from "lucide-react";
@@ -67,6 +66,25 @@ function getCourseCode(course = {}) {
   );
 }
 
+function getCourseDisplayName(course = {}) {
+  const courseName = String(
+    course.name || course.courseName || course.className || ""
+  ).trim();
+  const courseCode = getCourseCode(course);
+
+  if (!courseName) return courseCode || "Course";
+
+  const nameParts = courseName.split(":");
+  if (
+    nameParts.length > 1 &&
+    normalizeCourseCode(nameParts[0]) === courseCode
+  ) {
+    return nameParts.slice(1).join(":").trim() || courseName;
+  }
+
+  return courseName;
+}
+
 function getStudentEmail(authUser, authProfile) {
   return (
     authUser?.email ||
@@ -83,6 +101,9 @@ function getStudentName(authUser, authProfile) {
     authProfile?.fullName ||
     authProfile?.name ||
     authProfile?.studentName ||
+    authUser?.full_name ||
+    authUser?.fullName ||
+    authUser?.name ||
     authUser?.user_metadata?.full_name ||
     authUser?.user_metadata?.name ||
     "Student Account"
@@ -283,6 +304,7 @@ export default function StudentDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const handledDeepLinkRef = useRef("");
   const restoringDeepLinkRef = useRef(false);
+  const hasShownRemainingToastRef = useRef(false);
 
   const {
     signOut,
@@ -312,6 +334,8 @@ export default function StudentDashboard() {
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState("");
   const [isJoiningCourse, setIsJoiningCourse] = useState(false);
+  const [showRemainingAssignmentsToast, setShowRemainingAssignmentsToast] =
+    useState(false);
   const hasJoinedCourses = classes.length > 0;
 
   useEffect(() => {
@@ -467,10 +491,12 @@ export default function StudentDashboard() {
   );
 
   useEffect(() => {
-    setReadNotificationIds(
-      readStudentNotificationIds(
-        studentEmail
-      )
+    const syncReadStateTimeoutId = window.setTimeout(
+      () =>
+        setReadNotificationIds(
+          readStudentNotificationIds(studentEmail)
+        ),
+      0
     );
 
     function handleNotificationStorage(
@@ -496,6 +522,7 @@ export default function StudentDashboard() {
     );
 
     return () => {
+      window.clearTimeout(syncReadStateTimeoutId);
       window.removeEventListener(
         "storage",
         handleNotificationStorage
@@ -543,107 +570,103 @@ export default function StudentDashboard() {
 
   const draftCount = useMemo(
     () =>
-      currentStudentSubmissions.filter(
-        (submission) => {
-          const status =
-            normalizeStudentDashboardStatus(
-              submission.status
-            );
+      currentStudentSubmissions.filter((submission) => {
+        const status = normalizeStudentDashboardStatus(submission.status);
 
-          if (
-            status === "draft" ||
-            status === "reopened" ||
-            status === "missing"
-          ) {
-            return true;
-          }
-
-          return (
-            status === "late" &&
-            !hasDashboardSubmissionEvidence(
-              submission
-            )
-          );
-        }
-      ).length,
+        return (
+          status === "draft" ||
+          status === "reopened" ||
+          status === "missing" ||
+          (status === "late" &&
+            !hasDashboardSubmissionEvidence(submission))
+        );
+      }).length,
     [currentStudentSubmissions]
   );
 
-  /*
-   * This mirrors the instructor dashboard review-inbox rule:
-   * only current Submitted/Late attempts from current assignments count.
-   * On the student side, the list is additionally restricted to this student.
-   */
-  const pendingReviewSubmissions = useMemo(
+  const pendingReviewCount = useMemo(
     () =>
-      currentStudentSubmissions.filter(
-        (submission) => {
-          const status =
-            normalizeStudentDashboardStatus(
-              submission.status
-            );
+      currentStudentSubmissions.filter((submission) => {
+        const status = normalizeStudentDashboardStatus(submission.status);
 
-          return (
-            (
-              status === "submitted" ||
-              status === "late"
-            ) &&
-            hasDashboardSubmissionEvidence(
-              submission
-            )
-          );
-        }
-      ),
-    [currentStudentSubmissions]
-  );
-
-  const pendingReviewCount =
-    pendingReviewSubmissions.length;
-
-  const feedbackReadyCount = useMemo(
-    () =>
-      currentStudentSubmissions.filter(
-        (submission) => {
-          const status =
-            normalizeStudentDashboardStatus(
-              submission.status
-            );
-
-          return Boolean(
-            status === "graded" ||
-              submission.reviewedAt ||
-              submission.teacherReviewedAt ||
-              submission.teacherReview?.savedAt ||
-              submission.teacher_review?.savedAt
-          );
-        }
-      ).length,
+        return (
+          (status === "submitted" || status === "late") &&
+          hasDashboardSubmissionEvidence(submission)
+        );
+      }).length,
     [currentStudentSubmissions]
   );
 
   const submittedCount = useMemo(
     () =>
-      currentStudentSubmissions.filter(
-        (submission) => {
-          const status =
-            normalizeStudentDashboardStatus(
-              submission.status
-            );
+      currentStudentSubmissions.filter((submission) => {
+        const status = normalizeStudentDashboardStatus(submission.status);
 
-          return (
-            status === "submitted" ||
-            status === "graded" ||
-            (
-              status === "late" &&
-              hasDashboardSubmissionEvidence(
-                submission
-              )
-            )
-          );
-        }
-      ).length,
+        return (
+          status === "submitted" ||
+          status === "graded" ||
+          (status === "late" && hasDashboardSubmissionEvidence(submission))
+        );
+      }).length,
     [currentStudentSubmissions]
   );
+
+  const visibleAssignments = useMemo(
+    () =>
+      assignments.filter(
+        (assignment) =>
+          currentClassId === "__all__" ||
+          String(assignment?.classId) === String(currentClassId)
+      ),
+    [assignments, currentClassId]
+  );
+
+  const remainingAssignmentsCount = useMemo(() => {
+    const submissionByAssignment = new Map(
+      currentStudentSubmissions.map((submission) => [
+        String(submission.assignmentId),
+        submission,
+      ])
+    );
+
+    return visibleAssignments.filter((assignment) => {
+      const submission = submissionByAssignment.get(String(assignment.id));
+      if (!submission) return true;
+
+      const status = normalizeStudentDashboardStatus(submission.status);
+      if (status === "graded" || status === "submitted") return false;
+
+      return !(
+        status === "late" && hasDashboardSubmissionEvidence(submission)
+      );
+    }).length;
+  }, [currentStudentSubmissions, visibleAssignments]);
+
+  useEffect(() => {
+    if (
+      !hasJoinedCourses ||
+      workspaceSyncState.status === "loading" ||
+      hasShownRemainingToastRef.current
+    ) {
+      return;
+    }
+
+    hasShownRemainingToastRef.current = true;
+
+    const showTimeoutId = window.setTimeout(
+      () => setShowRemainingAssignmentsToast(true),
+      0
+    );
+    const hideTimeoutId = window.setTimeout(
+      () => setShowRemainingAssignmentsToast(false),
+      5000
+    );
+
+    return () => {
+      window.clearTimeout(showTimeoutId);
+      window.clearTimeout(hideTimeoutId);
+    };
+  }, [hasJoinedCourses, workspaceSyncState.status]);
 
   const studentNotifications = useMemo(() => {
     const currentSubmissionByAssignment =
@@ -679,11 +702,9 @@ export default function StudentDashboard() {
             String(assignment.classId)
         ) || null;
 
-      const courseCode =
-        assignment.classCode ||
-        assignment.courseCode ||
-        getCourseCode(matchedCourse) ||
-        "COURSE";
+      const courseName = matchedCourse
+        ? getCourseDisplayName(matchedCourse)
+        : assignment.className || assignment.courseName || "Course";
 
       const assignmentTitle =
         assignment.title ||
@@ -712,7 +733,7 @@ export default function StudentDashboard() {
           ].join("::"),
           type: "new_assignment",
           title: "New assignment opened",
-          message: `${courseCode} · ${assignmentTitle}`,
+          message: `${courseName} · ${assignmentTitle}`,
           createdAt: openedAt,
           assignmentId:
             assignment.id,
@@ -746,7 +767,7 @@ export default function StudentDashboard() {
           ].join("::"),
           type: "reopened",
           title: "Assignment reopened",
-          message: `${courseCode} · ${assignmentTitle}`,
+          message: `${courseName} · ${assignmentTitle}`,
           createdAt: reopenedAt,
           assignmentId:
             assignment.id,
@@ -774,7 +795,7 @@ export default function StudentDashboard() {
           ].join("::"),
           type: "graded",
           title: "Assignment graded",
-          message: `${courseCode} · ${assignmentTitle}`,
+          message: `${courseName} · ${assignmentTitle}`,
           createdAt: gradedAt,
           assignmentId:
             assignment.id,
@@ -1087,7 +1108,7 @@ export default function StudentDashboard() {
         setIsBugReportOpen(false);
         setBugReportSuccess("");
       }, 1100);
-    } catch (error) {
+    } catch {
       setBugReportError(
         "The report could not be saved. Try a smaller picture or submit without a picture."
       );
@@ -1517,7 +1538,7 @@ export default function StudentDashboard() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 h-screen w-[17rem] bg-slate-950 text-slate-200 shadow-2xl transition-transform duration-200 md:relative md:z-20 md:w-68 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 h-screen w-64 border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-64 md:translate-x-0 ${
           isSidebarOpen
             ? "translate-x-0"
             : "-translate-x-full"
@@ -1525,8 +1546,8 @@ export default function StudentDashboard() {
       >
         <div className="flex h-full flex-col justify-between">
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="p-6 border-b border-slate-800/80 flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-white border border-blue-400/20 shadow-md shadow-blue-500/10 flex items-center justify-center shrink-0 overflow-hidden">
+          <div className="flex items-center gap-3 border-b border-blue-100/80 px-5 py-5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
@@ -1536,51 +1557,42 @@ export default function StudentDashboard() {
 
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-none">
-                <span className="text-white">pr</span>
-                <span className="text-blue-400">a</span>
-                <span className="text-white">x</span>
-                <span className="text-blue-400">i</span>
-                <span className="text-white">s</span>
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-600">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-600">i</span>
+                <span className="text-slate-900">s</span>
               </h1>
 
-              <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
-                Student Dashboard
+              <p className="mt-1 text-[10px] font-medium text-slate-500">
+                Your writing space
               </p>
             </div>
           </div>
 
-          <div className="p-5 space-y-7 flex-1 overflow-y-auto">
+          <div className="flex-1 space-y-7 overflow-y-auto p-4">
             <div className="space-y-1.5">
-              <div className="flex justify-between items-center px-3 mb-2">
-                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-500 block">
-                  Active Courses
+              <div className="mb-2 flex items-center px-2">
+                <span className="text-xs font-bold text-slate-700">
+                  My courses
                 </span>
-
-                <button
-                  type="button"
-                  onClick={openEnrollModal}
-                  className="text-[10px] font-mono font-bold text-blue-300 hover:text-white flex items-center gap-0.5 transition-colors cursor-pointer"
-                >
-                  <Plus className="w-3 h-3" />
-                  Join
-                </button>
               </div>
 
               <button
                 type="button"
                 onClick={() => navigateToCourseWorkspace("__all__")}
-                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-bold transition-all text-left group cursor-pointer border ${
+                className={`group flex w-full cursor-pointer items-center justify-between rounded-xl px-3.5 py-3 text-left text-xs font-bold transition-all ${
                   currentClassId === "__all__"
-                    ? "bg-blue-600/15 text-white border-blue-400/30 shadow-inner"
-                    : "text-slate-400 border-transparent hover:text-white hover:bg-slate-800/50"
+                    ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
+                    : "text-slate-600 hover:bg-white hover:text-slate-900"
                 }`}
               >
                 <div className="flex items-center gap-2.5">
                   <Layers
                     className={`w-4 h-4 stroke-[1.8] ${
                       currentClassId === "__all__"
-                        ? "text-blue-300"
-                        : "text-slate-500"
+                        ? "text-blue-600"
+                        : "text-slate-400"
                     }`}
                   />
 
@@ -1591,7 +1603,7 @@ export default function StudentDashboard() {
                   className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
                     currentClassId === "__all__"
                       ? "bg-blue-600 text-white"
-                      : "bg-slate-800 text-slate-500"
+                      : "bg-slate-200/70 text-slate-500"
                   }`}
                 >
                   {totalAssignmentsCount}
@@ -1614,25 +1626,23 @@ export default function StudentDashboard() {
                     key={course.id}
                     type="button"
                     onClick={() => navigateToCourseWorkspace(course.id)}
-                    className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-bold transition-all text-left group cursor-pointer border ${
+                    className={`group flex w-full cursor-pointer items-center justify-between rounded-xl px-3.5 py-3 text-left text-xs font-bold transition-all ${
                       isSelected
-                        ? "bg-blue-600/15 text-white border-blue-400/30 shadow-inner"
-                        : "text-slate-400 border-transparent hover:text-white hover:bg-slate-800/50"
+                        ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
+                        : "text-slate-600 hover:bg-white hover:text-slate-900"
                     }`}
                   >
                     <div className="flex items-center gap-2.5 truncate">
                       <BookOpen
                         className={`w-4 h-4 stroke-[1.8] shrink-0 ${
                           isSelected
-                            ? "text-blue-300"
-                            : "text-slate-500"
+                            ? "text-blue-600"
+                            : "text-slate-400"
                         }`}
                       />
 
                       <span className="truncate">
-                        {course.name
-                          ? course.name.split(":")[0]
-                          : getCourseCode(course) || course.id}
+                        {getCourseDisplayName(course)}
                       </span>
                     </div>
 
@@ -1640,7 +1650,7 @@ export default function StudentDashboard() {
                       className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shrink-0 ${
                         isSelected
                           ? "bg-blue-600 text-white"
-                          : "bg-slate-800 text-slate-500"
+                          : "bg-slate-200/70 text-slate-500"
                       }`}
                     >
                       {classCount}
@@ -1650,11 +1660,11 @@ export default function StudentDashboard() {
               })}
             </div>
 
-            <div className="pt-5 border-t border-slate-800/80 space-y-2.5">
+            <div className="space-y-2.5 border-t border-blue-100 pt-5">
               <div className="flex items-center justify-between px-2">
                 <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] text-slate-500">
-                    Notifications
+                  <span className="text-xs font-bold text-slate-700">
+                    Updates
                   </span>
 
                   {studentNotifications.length > 0 && (
@@ -1665,8 +1675,8 @@ export default function StudentDashboard() {
                 <span
                   className={`inline-flex min-w-6 items-center justify-center rounded-full border px-1.5 py-0.5 font-mono text-[9px] font-black ${
                     studentNotifications.length > 0
-                      ? "border-blue-500/30 bg-blue-500/15 text-blue-300"
-                      : "border-slate-800 bg-slate-900 text-slate-600"
+                      ? "border-blue-200 bg-blue-100 text-blue-700"
+                      : "border-slate-200 bg-white text-slate-400"
                   }`}
                 >
                   {studentNotifications.length > 9
@@ -1675,38 +1685,39 @@ export default function StudentDashboard() {
                 </span>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/90 to-slate-950/70 shadow-[0_14px_34px_-24px_rgba(37,99,235,0.8)]">
-                <div className="flex items-center gap-2.5 border-b border-slate-800/80 px-3.5 py-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10 text-blue-300">
+              <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+                {studentNotifications.length === 0 ? (
+                  <div className="flex items-center gap-3 px-3.5 py-3.5">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                      <BadgeCheck className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-bold text-slate-700">
+                        You’re up to date
+                      </p>
+                      <p className="mt-0.5 text-[9px] text-slate-400">
+                        No new course updates.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                <div className="flex items-center gap-2.5 border-b border-slate-100 px-3.5 py-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                     <Bell className="h-4 w-4" />
                   </div>
 
                   <div className="min-w-0">
-                    <p className="text-[10px] font-bold text-slate-200">
+                    <p className="text-[10px] font-bold text-slate-700">
                       Assignment updates
                     </p>
 
-                    <p className="truncate text-[8px] text-slate-500">
-                      Open, reopened, and graded
+                    <p className="truncate text-[9px] text-slate-400">
+                      What’s new in your courses
                     </p>
                   </div>
                 </div>
 
-                {studentNotifications.length === 0 ? (
-                  <div className="flex flex-col items-center px-4 py-5 text-center">
-                    <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/80 text-slate-500">
-                      <Bell className="h-4 w-4" />
-                    </div>
-
-                    <p className="mt-3 text-[10px] font-bold text-slate-300">
-                      No new notifications
-                    </p>
-
-                    <p className="mt-1 max-w-[170px] text-[9px] leading-relaxed text-slate-600">
-                      New, reopened, or graded assignments will appear here.
-                    </p>
-                  </div>
-                ) : (
                   <div className="space-y-1.5 p-2">
                     {studentNotifications.map(
                       (notification) => {
@@ -1728,16 +1739,16 @@ export default function StudentDashboard() {
                         const tone =
                           isReopened
                             ? {
-                                icon: "border-violet-500/25 bg-violet-500/10 text-violet-300",
+                                icon: "border-violet-200 bg-violet-50 text-violet-600",
                                 line: "bg-violet-400",
                               }
                             : isGraded
                             ? {
-                                icon: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+                                icon: "border-emerald-200 bg-emerald-50 text-emerald-600",
                                 line: "bg-emerald-400",
                               }
                             : {
-                                icon: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+                                icon: "border-blue-200 bg-blue-50 text-blue-600",
                                 line: "bg-blue-400",
                               };
 
@@ -1750,7 +1761,7 @@ export default function StudentDashboard() {
                                 notification
                               )
                             }
-                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-slate-700 hover:bg-slate-900 hover:shadow-lg"
+                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-blue-100 hover:bg-blue-50/60 hover:shadow-sm"
                           >
                             <span
                               className={`absolute bottom-2 left-0 top-2 w-0.5 rounded-r-full ${tone.line}`}
@@ -1764,11 +1775,11 @@ export default function StudentDashboard() {
 
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
-                                <p className="text-[10px] font-bold leading-tight text-slate-200">
+                                <p className="text-[10px] font-bold leading-tight text-slate-700">
                                   {notification.title}
                                 </p>
 
-                                <span className="shrink-0 font-mono text-[8px] text-slate-600">
+                                <span className="shrink-0 text-[8px] text-slate-400">
                                   {formatRelativeTime(
                                     notification.createdAt
                                   )}
@@ -1779,7 +1790,7 @@ export default function StudentDashboard() {
                                 {notification.message}
                               </p>
 
-                              <span className="mt-1.5 inline-flex items-center gap-1 text-[8px] font-bold text-blue-300 transition-colors group-hover:text-blue-200">
+                              <span className="mt-1.5 inline-flex items-center gap-1 text-[8px] font-bold text-blue-600 transition-colors group-hover:text-blue-700">
                                 Open assignment
                                 <ChevronRight className="h-3 w-3" />
                               </span>
@@ -1789,27 +1800,28 @@ export default function StudentDashboard() {
                       }
                     )}
                   </div>
+                  </>
                 )}
               </div>
             </div>
           </div>
         </div>
 
-        <div className="relative border-t border-slate-800/80 bg-slate-950/20 p-4">
+        <div className="relative border-t border-blue-100 bg-white/60 p-4">
           {isAccountMenuOpen && (
-            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-slate-700/90 bg-slate-950 shadow-[0_24px_55px_rgba(0,0,0,0.45)]">
-              <div className="border-b border-slate-800 px-3.5 py-3">
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-xl">
+              <div className="border-b border-slate-100 px-3.5 py-3">
                 <div className="flex items-center gap-2.5">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
                     ST
                   </div>
 
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-white">
+                    <p className="truncate text-xs font-bold text-slate-800">
                       {studentName}
                     </p>
 
-                    <p className="mt-0.5 truncate text-[9px] font-mono text-slate-400">
+                    <p className="mt-0.5 truncate text-[9px] text-slate-400">
                       {studentEmail}
                     </p>
                   </div>
@@ -1820,23 +1832,20 @@ export default function StudentDashboard() {
                 <button
                   type="button"
                   onClick={openPasswordPanel}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-blue-500/10 hover:text-blue-200"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-600 transition-all hover:bg-blue-50 hover:text-blue-700"
                 >
-                  <KeyRound className="h-4 w-4 text-blue-300" />
+                  <KeyRound className="h-4 w-4 text-blue-500" />
 
                   <span className="flex-1">
                     Change Password
                   </span>
 
-                  <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[8px] font-mono text-slate-500">
-                    UI ready
-                  </span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-rose-500/10 hover:text-rose-300"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-600 transition-all hover:bg-rose-50 hover:text-rose-600"
                 >
                   <LogOut className="h-4 w-4" />
                   Log Out
@@ -1848,11 +1857,11 @@ export default function StudentDashboard() {
           <button
             type="button"
             onClick={openBugReportForm}
-            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            className="mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700"
             aria-label="Report a bug"
           >
-            <Megaphone className="h-4 w-4 text-blue-300" />
-            <span className="flex-1">Report a Bug</span>
+            <Megaphone className="h-4 w-4 text-slate-400" />
+            <span className="flex-1">Share feedback</span>
           </button>
 
           <button
@@ -1860,8 +1869,8 @@ export default function StudentDashboard() {
             onClick={toggleAccountMenu}
             className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
               isAccountMenuOpen
-                ? "border-blue-500/40 bg-blue-500/10"
-                : "border-transparent hover:border-slate-800 hover:bg-slate-900/70"
+                ? "border-blue-200 bg-white shadow-sm"
+                : "border-transparent hover:border-blue-100 hover:bg-white"
             }`}
             aria-expanded={isAccountMenuOpen}
             aria-label="Open student account menu"
@@ -1871,19 +1880,18 @@ export default function StudentDashboard() {
             </div>
 
             <div className="min-w-0 flex-1">
-              <h4 className="truncate text-xs font-bold text-white">
-                {studentName}
-              </h4>
-
-              <p className="truncate text-[9px] font-mono text-slate-400">
-                {studentEmail}
+              <p className="text-[9px] font-medium text-slate-400">
+                Welcome back,
               </p>
+              <h4 className="truncate text-xs font-bold text-slate-800">
+                {studentName === "Student Account" ? "My account" : studentName}
+              </h4>
             </div>
 
             <ChevronDown
-              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
                 isAccountMenuOpen
-                  ? "rotate-180 text-blue-300"
+                  ? "rotate-180 text-blue-600"
                   : ""
               }`}
             />
@@ -1921,9 +1929,28 @@ export default function StudentDashboard() {
                     (course) =>
                       String(course.id) ===
                       String(currentClassId)
-                  )?.name || "Course Workspace"}
+                  )
+                  ? getCourseDisplayName(
+                      classes.find(
+                        (course) =>
+                          String(course.id) === String(currentClassId)
+                      )
+                    )
+                  : "Course Workspace"}
             </span>
           </div>
+
+          {hasJoinedCourses && !selectedAssignmentId && (
+            <button
+              type="button"
+              onClick={openEnrollModal}
+              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98] sm:px-4"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Enter Course Code</span>
+              <span className="sm:hidden">Join</span>
+            </button>
+          )}
 
         </header>
 
@@ -1939,28 +1966,45 @@ export default function StudentDashboard() {
                 : "max-w-7xl"
             }`}
           >
-            {!selectedAssignmentId && hasJoinedCourses && (
-              <div className="bg-gradient-to-r from-blue-50 to-white border border-blue-100/80 rounded-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in-up">
-                <div className="space-y-1">
-                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                    <Sparkle className="w-4 h-4 text-blue-600" />
-                    Course Access Window
-                  </h3>
-
-                  <p className="text-xs text-slate-500 max-w-xl">
-                    Has your instructor provided a course code? Enter
-                    it to load your writing workspace and assigned
-                    prompts.
+            {showRemainingAssignmentsToast && !selectedAssignmentId && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`fixed bottom-5 right-5 z-50 flex max-w-sm items-center gap-3 rounded-2xl border bg-white px-4 py-3 shadow-xl animate-fade-in-up ${
+                  remainingAssignmentsCount === 0
+                    ? "border-emerald-200 shadow-emerald-950/10"
+                    : "border-blue-200 shadow-blue-950/10"
+                }`}
+              >
+                <div
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white ${
+                    remainingAssignmentsCount === 0
+                      ? "bg-emerald-600"
+                      : "bg-blue-600"
+                  }`}
+                >
+                  {remainingAssignmentsCount === 0 ? (
+                    <BadgeCheck className="h-4 w-4" />
+                  ) : (
+                    <BookOpen className="h-4 w-4" />
+                  )}
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900">
+                    {remainingAssignmentsCount === 0
+                      ? "You’re all caught up"
+                      : `You have ${remainingAssignmentsCount} ${
+                          remainingAssignmentsCount === 1
+                            ? "assignment"
+                            : "assignments"
+                        } left`}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    {remainingAssignmentsCount === 0
+                      ? "There is no unfinished work right now."
+                      : "Choose an assignment below to keep working."}
                   </p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={openEnrollModal}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-600/20 cursor-pointer whitespace-nowrap hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  Enter Course Code
-                </button>
               </div>
             )}
 
@@ -1978,41 +2022,87 @@ export default function StudentDashboard() {
                 <ActiveAssignmentWorkflow />
               ) : (
                 hasJoinedCourses ? (
-                <div className="space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
-                  <StudentMetricCard
-                    cardType="draft"
-                    icon={FileText}
-                    label="Active Drafts"
-                    value={`${draftCount || 0} Workspaces`}
-                    description="Unlocked prompts ready for student drafting steps."
-                    tone="blue"
-                    pulse
-                  />
-
-                  <StudentMetricCard
-                    cardType="pending"
-                    icon={Clock}
-                    label="Awaiting Review"
-                    value={`${pendingReviewCount} Tasks`}
-                    description="Submitted work currently waiting for instructor review."
-                    tone="indigo"
-                  />
-
-                  <StudentMetricCard
-                    cardType="verified"
-                    icon={ShieldCheck}
-                    label="Submitted Work"
-                    value={`${submittedCount} Complete`}
-                    description="Completed submissions with process visibility attached."
-                    tone="sky"
-                  />
+                <div className="space-y-6">
+                {currentClassId === "__all__" ? (
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3 animate-fade-in-up [animation-delay:100ms]">
+                    <StudentMetricCard
+                      cardType="draft"
+                      icon={FileText}
+                      label="Active Drafts"
+                      value={`${draftCount} Active ${
+                        draftCount === 1 ? "assignment" : "assignments"
+                      }`}
+                      description="Assignments ready for you to continue writing."
+                      tone="blue"
+                    />
+                    <StudentMetricCard
+                      cardType="pending"
+                      icon={Clock}
+                      label="Awaiting Review"
+                      value={`${pendingReviewCount} ${
+                        pendingReviewCount === 1 ? "assignment" : "assignments"
+                      }`}
+                      description="Submitted work waiting for instructor review."
+                      tone="indigo"
+                    />
+                    <StudentMetricCard
+                      cardType="verified"
+                      icon={ShieldCheck}
+                      label="Submitted Work"
+                      value={`${submittedCount} ${
+                        submittedCount === 1 ? "assignment" : "assignments"
+                      }`}
+                      description="Assignments you have already submitted."
+                      tone="sky"
+                    />
+                  </div>
+                ) : (
+                <div className={`flex items-center gap-4 rounded-2xl border px-5 py-4 shadow-sm animate-fade-in-up [animation-delay:100ms] ${
+                  remainingAssignmentsCount === 0
+                    ? "border-emerald-200 bg-gradient-to-r from-emerald-50 to-white"
+                    : "border-blue-200 bg-gradient-to-r from-blue-50 to-white"
+                }`}>
+                  <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${
+                    remainingAssignmentsCount === 0
+                      ? "border-emerald-200 bg-white text-emerald-600"
+                      : "border-blue-200 bg-white text-blue-600"
+                  }`}>
+                    {remainingAssignmentsCount === 0 ? (
+                      <BadgeCheck className="h-5 w-5" />
+                    ) : (
+                      <BookOpen className="h-5 w-5" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-slate-900">
+                      {remainingAssignmentsCount === 0
+                        ? "You’re all caught up"
+                        : `${remainingAssignmentsCount} ${
+                            remainingAssignmentsCount === 1
+                              ? "assignment"
+                              : "assignments"
+                          } left`}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      {remainingAssignmentsCount === 0
+                        ? "You have completed all currently available assignments."
+                        : "Select an unfinished assignment below to continue your work."}
+                    </p>
+                  </div>
+                  <span className={`hidden shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${
+                    remainingAssignmentsCount === 0
+                      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
+                      : "border-blue-200 bg-blue-100 text-blue-700"
+                  }`}>
+                    {remainingAssignmentsCount === 0 ? "Complete" : "In progress"}
+                  </span>
                 </div>
+                )}
 
                 <div className="space-y-2 animate-fade-in-up [animation-delay:150ms]">
                   <div className="space-y-1">
                     <h2 className="font-serif text-2xl font-black text-slate-900">
-                      Course Assignment Workspaces
+                      Your assignments
                     </h2>
 
                     <p className="text-xs text-slate-400 font-medium">
@@ -2026,33 +2116,46 @@ export default function StudentDashboard() {
                 </div>
                 ) : (
                   <section className="flex min-h-[58vh] items-center justify-center animate-fade-in-up">
-                    <button
-                      type="button"
-                      onClick={openEnrollModal}
-                      className="group flex w-full max-w-2xl flex-col items-center justify-center rounded-3xl border border-blue-200 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 px-6 py-12 text-center text-white shadow-xl shadow-blue-950/10 transition-all hover:-translate-y-0.5 hover:shadow-2xl sm:px-10 sm:py-14"
-                    >
-                      <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-inner transition-transform group-hover:scale-105">
-                        <Plus className="h-7 w-7" />
+                    <div className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-blue-100 bg-white px-6 py-12 text-center shadow-xl shadow-blue-950/5 sm:px-10 sm:py-14">
+                      <div
+                        aria-hidden="true"
+                        className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-blue-100/60 blur-2xl"
+                      />
+                      <div
+                        aria-hidden="true"
+                        className="absolute -bottom-20 -left-16 h-48 w-48 rounded-full bg-sky-100/60 blur-2xl"
+                      />
+
+                      <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600 shadow-sm">
+                        <BookOpen className="h-7 w-7" />
                       </div>
 
-                      <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">
-                        Step 1 · Start here
+                      <p className="relative mt-5 text-[11px] font-bold text-blue-600">
+                        Welcome to Praxis
                       </p>
 
-                      <h2 className="mt-1 font-serif text-2xl font-black sm:text-3xl">
+                      <h2 className="relative mt-1 text-2xl font-black text-slate-900 sm:text-3xl">
                         Join your first course
                       </h2>
 
-                      <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-300">
+                      <p className="relative mx-auto mt-3 max-w-lg text-sm leading-relaxed text-slate-500">
                         Enter the course code provided by your instructor to
-                        access assignments and start your writing workspace.
+                        see your assignments and begin writing.
                       </p>
 
-                      <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-950/30 transition-colors group-hover:bg-blue-500">
+                      <button
+                        type="button"
+                        onClick={openEnrollModal}
+                        className="relative mt-7 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-lg active:translate-y-0"
+                      >
                         <Plus className="h-4 w-4" />
-                        Join Course
-                      </span>
-                    </button>
+                        Enter Course Code
+                      </button>
+
+                      <p className="relative mt-4 text-[10px] text-slate-400">
+                        You can find the code in your instructor’s invitation.
+                      </p>
+                    </div>
                   </section>
                 )
               )}
@@ -2476,54 +2579,44 @@ function StudentMetricCard({
   description,
   tone,
   cardType,
-  pulse,
 }) {
   const toneStyles = {
     blue: {
       icon: "bg-blue-50 border-blue-100 text-blue-600",
       label: "text-blue-700 bg-blue-50 border-blue-100",
     },
-
     indigo: {
       icon: "bg-indigo-50 border-indigo-100 text-indigo-600",
-      label:
-        "text-indigo-700 bg-indigo-50 border-indigo-100",
+      label: "text-indigo-700 bg-indigo-50 border-indigo-100",
     },
-
     sky: {
       icon: "bg-sky-50 border-sky-100 text-sky-600",
       label: "text-sky-700 bg-sky-50 border-sky-100",
     },
   };
-
   const styles = toneStyles[tone] || toneStyles.blue;
 
   return (
     <div
-      className={`bg-white border border-slate-200/80 rounded-2xl p-5 flex items-start gap-4 transition-all duration-300 hover:-translate-y-1 ${
+      className={`flex cursor-default items-start gap-4 rounded-2xl border border-slate-200/80 bg-white p-5 transition-all duration-300 hover:-translate-y-1 ${
         cardType ? `glow-box-${cardType}` : ""
-      } cursor-default`}
+      }`}
     >
       <div
-        className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${styles.icon}`}
+        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${styles.icon}`}
       >
-        <Icon className="w-5 h-5 stroke-[1.8]" />
+        <Icon className="h-5 w-5 stroke-[1.8]" />
       </div>
-
-      <div className="space-y-1 min-w-0">
+      <div className="min-w-0 space-y-1">
         <span
-          className={`text-[9px] font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded border inline-block ${
-            styles.label
-          } ${pulse ? "status-pulse" : ""}`}
+          className={`inline-block rounded border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${styles.label}`}
         >
           {label}
         </span>
-
-        <h4 className="text-xl font-serif font-bold text-slate-900">
+        <h4 className="text-lg font-bold text-slate-900">
           {value}
         </h4>
-
-        <p className="text-[11px] text-slate-400 font-medium">
+        <p className="text-[11px] font-medium text-slate-400">
           {description}
         </p>
       </div>

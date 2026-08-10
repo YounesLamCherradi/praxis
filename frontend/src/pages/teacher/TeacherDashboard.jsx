@@ -20,6 +20,7 @@ import {
   deleteTeacherCourse,
   getTeacherCourses,
   removeStudentFromCourse,
+  sendCourseInvitation,
   updateTeacherCourse,
 } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
@@ -71,6 +72,7 @@ import {
   FileCheck2,
   RotateCcw,
   LogOut,
+  Loader2,
   ChevronDown,
   ChevronRight,
   Plus,
@@ -198,6 +200,9 @@ function getTeacherIdentity(authUser, authProfile) {
     authProfile?.full_name ||
       authProfile?.fullName ||
       authProfile?.name ||
+      authUser?.full_name ||
+      authUser?.fullName ||
+      authUser?.name ||
       authUser?.user_metadata?.full_name ||
       authUser?.user_metadata?.name ||
       "Instructor Account"
@@ -364,6 +369,13 @@ export default function TeacherDashboard() {
 
   const [managedClass, setManagedClass] = useState(null);
   const [managerMode, setManagerMode] = useState("details");
+  const [isInviteCoursePickerOpen, setIsInviteCoursePickerOpen] =
+    useState(false);
+  const [inviteCourseId, setInviteCourseId] = useState("");
+  const [inviteStudentEmail, setInviteStudentEmail] = useState("");
+  const [inviteEmailError, setInviteEmailError] = useState("");
+  const [inviteEmailSuccess, setInviteEmailSuccess] = useState("");
+  const [isSendingInviteEmail, setIsSendingInviteEmail] = useState(false);
 
   const [manageCourseForm, setManageCourseForm] = useState({
     name: "",
@@ -1038,6 +1050,50 @@ export default function TeacherDashboard() {
     setIsRemoveCourseConfirmOpen(false);
   }
 
+  function handleOpenStudentInvites() {
+    const availableCourses = classes.filter(
+      (course) => course?.archived !== true
+    );
+    if (availableCourses.length === 0) return;
+
+    setInviteCourseId(
+      availableCourses.length === 1 ? String(availableCourses[0].id) : ""
+    );
+    setInviteStudentEmail("");
+    setInviteEmailError("");
+    setInviteEmailSuccess("");
+    setIsInviteCoursePickerOpen(true);
+  }
+
+  async function handleSendStudentInvitation(event) {
+    event.preventDefault();
+    const email = inviteStudentEmail.trim().toLowerCase();
+
+    setInviteEmailError("");
+    setInviteEmailSuccess("");
+    if (!inviteCourseId) {
+      setInviteEmailError("Choose a course.");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setInviteEmailError("Enter a valid student email address.");
+      return;
+    }
+
+    setIsSendingInviteEmail(true);
+    try {
+      await sendCourseInvitation(inviteCourseId, email);
+      setInviteEmailSuccess(`Invitation sent to ${email}.`);
+      setInviteStudentEmail("");
+    } catch (error) {
+      setInviteEmailError(
+        error?.message || "The invitation could not be sent. Please try again."
+      );
+    } finally {
+      setIsSendingInviteEmail(false);
+    }
+  }
+
   function openFirstAssignmentForCourse(course) {
     if (!course) return;
 
@@ -1120,7 +1176,7 @@ export default function TeacherDashboard() {
       await writeClipboardText(
         buildCourseInviteMessage(course, undefined, teacherIdentity.name)
       );
-      showManagerSuccess("Copied to clipboard.");
+      showManagerSuccess("Course invitation copied to your clipboard.");
       return true;
     } catch (error) {
       console.error("Could not copy the course invite:", error);
@@ -1646,14 +1702,14 @@ export default function TeacherDashboard() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 h-full w-[17rem] shrink-0 bg-slate-950 text-slate-200 shadow-2xl transition-transform duration-200 md:relative md:z-20 md:w-68 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 h-full w-64 shrink-0 border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-64 md:translate-x-0 ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex h-full flex-col justify-between">
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="p-6 border-b border-blue-900/30 flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-white border border-blue-400/20 shadow-md shadow-blue-900/30 flex items-center justify-center shrink-0 overflow-hidden">
+          <div className="flex items-center gap-3 border-b border-blue-100/80 px-5 py-5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
@@ -1662,34 +1718,26 @@ export default function TeacherDashboard() {
             </div>
 
             <div>
-              <h1 className="text-2xl font-bold tracking-tight leading-none">
-                <span className="text-white">pr</span>
-                <span className="text-blue-400">a</span>
-                <span className="text-white">x</span>
-                <span className="text-blue-400">i</span>
-                <span className="text-white">s</span>
+              <h1 className="text-xl font-bold tracking-tight leading-none">
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-600">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-600">i</span>
+                <span className="text-slate-900">s</span>
               </h1>
 
-              <p className="text-[9px] font-mono font-bold text-blue-300 uppercase tracking-wider mt-1.5">
-                Instructor Dashboard
+              <p className="mt-1 text-[10px] font-medium text-slate-500">
+                Your teaching space
               </p>
             </div>
           </div>
 
-          <div className="p-5 space-y-7 flex-1 overflow-y-auto">
+          <div className="flex-1 space-y-7 overflow-y-auto p-4">
             <div className="space-y-1.5">
-              <div className="flex justify-between items-center px-3 mb-2">
-                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-500 block">
-                  Create Course
+              <div className="mb-2 flex items-center px-2">
+                <span className="text-xs font-bold text-slate-700">
+                  Teaching
                 </span>
-
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(true)}
-                  className="w-5 h-5 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 hover:text-blue-300 hover:border-blue-400 transition-all cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
               </div>
 
               <SidebarButton
@@ -1713,8 +1761,8 @@ export default function TeacherDashboard() {
             </div>
 
             <div className="space-y-1.5">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-500 block px-3 mb-2">
-                Engagement
+              <span className="mb-2 block px-2 text-xs font-bold text-slate-700">
+                Connect
               </span>
 
               <SidebarButton
@@ -1725,77 +1773,46 @@ export default function TeacherDashboard() {
               />
             </div>
 
-            <div className="pt-5 border-t border-slate-800/80 space-y-2.5">
-              <div className="flex items-center justify-between px-2">
+            <div className="space-y-2 border-t border-blue-100 pt-5">
+              <button
+                type="button"
+                onClick={openPendingReviews}
+                disabled={sidebarNotifications.length === 0}
+                className="group flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-blue-50 disabled:cursor-default disabled:hover:bg-transparent"
+              >
                 <div className="flex items-center gap-2">
-                  <span className="text-[9px] font-mono font-bold uppercase tracking-[0.18em] text-slate-500">
-                    Notifications
+                  <Bell className={`h-4 w-4 ${sidebarNotifications.length > 0 ? "text-blue-600" : "text-slate-400"}`} />
+                  <span className="text-xs font-bold text-slate-700">Reviews</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`inline-flex min-w-6 items-center justify-center rounded-full border px-1.5 py-0.5 font-mono text-[9px] font-black ${
+                      sidebarNotifications.length > 0
+                        ? "border-blue-200 bg-blue-100 text-blue-700"
+                        : "border-slate-200 bg-white text-slate-400"
+                    }`}
+                  >
+                    {sidebarNotifications.length > 9 ? "9+" : sidebarNotifications.length}
                   </span>
-
                   {sidebarNotifications.length > 0 && (
-                    <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.9)]" />
+                    <ChevronRight className="h-3.5 w-3.5 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600" />
                   )}
                 </div>
+              </button>
 
-                <span
-                  className={`inline-flex min-w-6 items-center justify-center rounded-full border px-1.5 py-0.5 font-mono text-[9px] font-black ${
-                    sidebarNotifications.length > 0
-                      ? "border-blue-500/30 bg-blue-500/15 text-blue-300"
-                      : "border-slate-800 bg-slate-900 text-slate-600"
-                  }`}
-                >
-                  {sidebarNotifications.length > 9
-                    ? "9+"
-                    : sidebarNotifications.length}
-                </span>
-              </div>
-
-              <div className="overflow-hidden rounded-2xl border border-slate-800/80 bg-gradient-to-b from-slate-900/90 to-slate-950/70 shadow-[0_14px_34px_-24px_rgba(37,99,235,0.8)]">
-                <div className="flex items-center justify-between border-b border-slate-800/80 px-3.5 py-3">
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-500/10 text-blue-300">
-                      <Bell className="h-4 w-4" />
-                    </div>
-
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-bold text-slate-200">
-                        Review inbox
-                      </p>
-                      <p className="truncate text-[8px] text-slate-500">
-                        Current-course activity
-                      </p>
-                    </div>
+              {sidebarNotifications.length === 0 ? (
+                <div className="flex items-center gap-2.5 rounded-xl border border-emerald-100 bg-emerald-50/70 px-3 py-2.5">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-600 shadow-sm">
+                    <CheckSquare className="h-3.5 w-3.5" />
                   </div>
-
-                  {sidebarNotifications.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={openPendingReviews}
-                      className="rounded-lg border border-slate-700/80 bg-slate-900 px-2 py-1 font-mono text-[8px] font-bold uppercase tracking-wide text-blue-300 transition-colors hover:border-blue-500/40 hover:bg-blue-500/10"
-                    >
-                      Open
-                    </button>
-                  )}
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-bold text-slate-700">You’re all caught up</p>
+                    <p className="truncate text-[8px] text-slate-400">New student work will appear here.</p>
+                  </div>
                 </div>
-
-                {sidebarNotifications.length === 0 ? (
-                  <div className="flex flex-col items-center px-4 py-5 text-center">
-                    <div className="relative flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-800 bg-slate-900/80 text-slate-500">
-                      <Bell className="h-4 w-4" />
-                      <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-slate-700" />
-                    </div>
-
-                    <p className="mt-3 text-[10px] font-bold text-slate-300">
-                      You are all caught up
-                    </p>
-
-                    <p className="mt-1 max-w-[170px] text-[9px] leading-relaxed text-slate-600">
-                      New submissions and resubmissions from current courses will appear here.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-1.5 p-2">
+              ) : (
+                <>
+                  <div className="space-y-1.5">
                       {sidebarNotifications.slice(0, 3).map((notification) => {
                         const isResubmission =
                           notification.type === "resubmission";
@@ -1808,20 +1825,20 @@ export default function TeacherDashboard() {
 
                         const tone = isResubmission
                           ? {
-                              icon: "border-violet-500/25 bg-violet-500/10 text-violet-300",
+                              icon: "border-violet-200 bg-violet-50 text-violet-600",
                               line: "bg-violet-400",
-                              chip: "border-violet-500/20 bg-violet-500/10 text-violet-300",
+                              chip: "border-violet-200 bg-violet-50 text-violet-600",
                             }
                           : isLate
                           ? {
-                              icon: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+                              icon: "border-amber-200 bg-amber-50 text-amber-600",
                               line: "bg-amber-400",
-                              chip: "border-amber-500/20 bg-amber-500/10 text-amber-300",
+                              chip: "border-amber-200 bg-amber-50 text-amber-600",
                             }
                           : {
-                              icon: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+                              icon: "border-blue-200 bg-blue-50 text-blue-600",
                               line: "bg-blue-400",
-                              chip: "border-blue-500/20 bg-blue-500/10 text-blue-300",
+                              chip: "border-blue-200 bg-blue-50 text-blue-600",
                             };
 
                         return (
@@ -1831,7 +1848,7 @@ export default function TeacherDashboard() {
                             onClick={() =>
                               openSidebarNotification(notification)
                             }
-                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-800/70 bg-slate-950/55 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-slate-700 hover:bg-slate-900 hover:shadow-lg"
+                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-blue-100 hover:bg-blue-50/60 hover:shadow-sm"
                           >
                             <span
                               className={`absolute bottom-2 left-0 top-2 w-0.5 rounded-r-full ${tone.line}`}
@@ -1845,7 +1862,7 @@ export default function TeacherDashboard() {
 
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start gap-1.5">
-                                <p className="min-w-0 flex-1 truncate text-[9.5px] font-bold text-slate-200 group-hover:text-white">
+                                <p className="min-w-0 flex-1 truncate text-[9.5px] font-bold text-slate-700">
                                   {notification.title}
                                 </p>
 
@@ -1856,58 +1873,57 @@ export default function TeacherDashboard() {
                                 </span>
                               </div>
 
-                              <p className="mt-1 truncate text-[9px] font-semibold text-slate-400">
+                              <p className="mt-1 truncate text-[9px] font-semibold text-slate-500">
                                 {notification.studentLabel}
                               </p>
 
                               <div className="mt-0.5 flex items-center gap-1">
-                                <p className="min-w-0 flex-1 truncate text-[8px] text-slate-600">
+                                <p className="min-w-0 flex-1 truncate text-[8px] text-slate-400">
                                   {notification.assignmentLabel}
                                 </p>
-                                <ChevronRight className="h-3 w-3 shrink-0 text-slate-700 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-400" />
+                                <ChevronRight className="h-3 w-3 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600" />
                               </div>
                             </div>
                           </button>
                         );
                       })}
-                    </div>
+                  </div>
 
+                  {sidebarNotifications.length > 3 && (
                     <button
                       type="button"
                       onClick={openPendingReviews}
-                      className="flex w-full items-center justify-between border-t border-slate-800/80 px-3.5 py-2.5 text-left transition-colors hover:bg-blue-500/5"
+                      className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-blue-50"
                     >
-                      <span className="font-mono text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">
-                        Review queue
-                      </span>
+                      <span className="text-[8px] font-bold text-slate-400">View all reviews</span>
 
-                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-blue-300">
+                      <span className="inline-flex items-center gap-1 text-[9px] font-bold text-blue-600">
                         {sidebarNotifications.length} pending
                         <ChevronRight className="h-3 w-3" />
                       </span>
                     </button>
+                  )}
                   </>
                 )}
-              </div>
             </div>
           </div>
         </div>
 
-        <div className="relative border-t border-slate-800/80 bg-slate-950/20 p-4">
+        <div className="relative border-t border-blue-100 bg-white/60 p-4">
           {isAccountMenuOpen && (
-            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-slate-700/90 bg-slate-950 shadow-[0_24px_55px_rgba(0,0,0,0.45)]">
-              <div className="border-b border-slate-800 px-3.5 py-3">
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-xl">
+              <div className="border-b border-slate-100 px-3.5 py-3">
                 <div className="flex items-center gap-2.5">
                   <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
                     {teacherIdentity.initials}
                   </div>
 
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-white">
+                    <p className="truncate text-xs font-bold text-slate-800">
                       {teacherIdentity.name}
                     </p>
 
-                    <p className="mt-0.5 truncate text-[9px] font-mono text-slate-400">
+                    <p className="mt-0.5 truncate text-[9px] text-slate-400">
                       {teacherIdentity.email}
                     </p>
                   </div>
@@ -1918,19 +1934,16 @@ export default function TeacherDashboard() {
                 <button
                   type="button"
                   onClick={openPasswordPanel}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-blue-500/10 hover:text-blue-200"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-600 transition-all hover:bg-blue-50 hover:text-blue-700"
                 >
-                  <KeyRound className="h-4 w-4 text-blue-300" />
+                  <KeyRound className="h-4 w-4 text-blue-500" />
                   <span className="flex-1">Change Password</span>
-                  <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[8px] font-mono text-slate-500">
-                    UI ready
-                  </span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleLogout}
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-rose-500/10 hover:text-rose-300"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-600 transition-all hover:bg-rose-50 hover:text-rose-600"
                 >
                   <LogOut className="h-4 w-4" />
                   Log Out
@@ -1942,11 +1955,11 @@ export default function TeacherDashboard() {
           <button
             type="button"
             onClick={openBugReportForm}
-            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            className="mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700"
             aria-label="Report a bug"
           >
-            <Megaphone className="h-4 w-4 text-blue-300" />
-            <span className="flex-1">Report a Bug</span>
+            <Megaphone className="h-4 w-4 text-slate-400" />
+            <span className="flex-1">Share feedback</span>
           </button>
 
           <button
@@ -1954,8 +1967,8 @@ export default function TeacherDashboard() {
             onClick={toggleAccountMenu}
             className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
               isAccountMenuOpen
-                ? "border-blue-500/40 bg-blue-500/10"
-                : "border-transparent hover:border-slate-800 hover:bg-slate-900/70"
+                ? "border-blue-200 bg-white shadow-sm"
+                : "border-transparent hover:border-blue-100 hover:bg-white"
             }`}
             aria-expanded={isAccountMenuOpen}
             aria-label="Open instructor account menu"
@@ -1965,18 +1978,19 @@ export default function TeacherDashboard() {
             </div>
 
             <div className="min-w-0 flex-1">
-              <h4 className="truncate text-xs font-bold text-white">
-                {teacherIdentity.name}
-              </h4>
-
-              <p className="truncate text-[9px] font-mono text-slate-400">
-                {teacherIdentity.email}
+              <p className="text-[9px] font-medium text-slate-400">
+                Welcome back,
               </p>
+              <h4 className="truncate text-xs font-bold text-slate-800">
+                {teacherIdentity.name === "Instructor Account"
+                  ? "My account"
+                  : teacherIdentity.name}
+              </h4>
             </div>
 
             <ChevronDown
-              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
-                isAccountMenuOpen ? "rotate-180 text-blue-300" : ""
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                isAccountMenuOpen ? "rotate-180 text-blue-600" : ""
               }`}
             />
           </button>
@@ -2004,7 +2018,7 @@ export default function TeacherDashboard() {
 
             <span className="hidden sm:inline">Workspace</span>
             <ChevronRight className="hidden h-3.5 w-3.5 text-slate-300 sm:inline" />
-            <span className="text-slate-950 font-bold uppercase tracking-wider font-mono">
+            <span className="font-bold text-slate-950">
               {pageTitles[activeTab] || "Instructor Workspace"}
             </span>
           </div>
@@ -2012,10 +2026,26 @@ export default function TeacherDashboard() {
           {!isWorkspaceLoading && classes.length > 0 && <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={handleOpenStudentInvites}
+              disabled={!classes.some((course) => course?.archived !== true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 shadow-sm transition-all hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+              title={
+                classes.some((course) => course?.archived !== true)
+                  ? "Invite students to a course"
+                  : "Create or restore a course first"
+              }
+            >
+              <UserPlus className="h-4 w-4" />
+              <span className="hidden sm:inline">Invite Students</span>
+              <span className="sm:hidden">Invite</span>
+            </button>
+
+            <button
+              type="button"
               onClick={() => {
                 openCreateCourse();
               }}
-              className="bg-slate-950 hover:bg-slate-800 text-white font-sans text-xs font-bold px-4 py-2 rounded-xl transition-all tracking-wide flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.01]"
+              className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98]"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Create Course</span>
@@ -2094,6 +2124,129 @@ export default function TeacherDashboard() {
             setCreateSuccess("");
           }}
         />
+      )}
+
+      {isInviteCoursePickerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <button
+            type="button"
+            aria-label="Close course selection"
+            onClick={() => setIsInviteCoursePickerOpen(false)}
+            className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
+          />
+
+          <div className="relative z-10 w-full max-w-md rounded-3xl border border-blue-100 bg-white p-6 shadow-2xl animate-fade-in-up">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                  <UserPlus className="h-5 w-5" />
+                </div>
+                <h2 className="mt-4 text-lg font-bold text-slate-900">
+                  Invite students
+                </h2>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Choose a course and send a Praxis invitation by email.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsInviteCoursePickerOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Close course selection"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSendStudentInvitation} className="mt-5 space-y-4">
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="invite-course"
+                  className="block text-[10px] font-bold text-slate-500"
+                >
+                  Course
+                </label>
+                <select
+                  id="invite-course"
+                  value={inviteCourseId}
+                  onChange={(event) => {
+                    setInviteCourseId(event.target.value);
+                    setInviteEmailError("");
+                    setInviteEmailSuccess("");
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-800 outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                >
+                  <option value="">Select a course</option>
+                  {classes
+                    .filter((course) => course?.archived !== true)
+                    .map((course) => (
+                      <option key={course.id} value={course.id}>
+                        {course.name || "Course"} · {course.code}
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="invite-student-email"
+                  className="block text-[10px] font-bold text-slate-500"
+                >
+                  Student email
+                </label>
+                <input
+                  id="invite-student-email"
+                  type="email"
+                  required
+                  value={inviteStudentEmail}
+                  onChange={(event) => {
+                    setInviteStudentEmail(event.target.value);
+                    setInviteEmailError("");
+                    setInviteEmailSuccess("");
+                  }}
+                  placeholder="student@example.com"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                />
+              </div>
+
+              <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 text-[11px] leading-relaxed text-slate-600">
+                The email includes the course name, instructor, access code,
+                and a secure link to join Praxis.
+              </div>
+
+              {inviteEmailError && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-xs font-semibold text-red-700">
+                  {inviteEmailError}
+                </div>
+              )}
+
+              {inviteEmailSuccess && (
+                <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-3 text-xs font-semibold text-emerald-700">
+                  <CheckSquare className="h-4 w-4 shrink-0" />
+                  {inviteEmailSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={
+                  isSendingInviteEmail ||
+                  !inviteCourseId ||
+                  !inviteStudentEmail.trim()
+                }
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isSendingInviteEmail ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                {isSendingInviteEmail ? "Sending invitation..." : "Send Invitation"}
+              </button>
+            </form>
+          </div>
+        </div>
       )}
 
       {managedClass && (
@@ -2213,53 +2366,27 @@ function OverviewPanel({
   return (
     <div className="space-y-8">
       {classes.length === 0 ? (
-        <section className="grid grid-cols-1 gap-4 pt-10 animate-fade-in-up sm:pt-14 lg:grid-cols-2 lg:pt-16">
+        <section className="flex justify-center pt-10 animate-fade-in-up sm:pt-14 lg:pt-16">
           <button
             type="button"
             onClick={onCreateCourse}
-            className="group flex w-full flex-col items-center justify-center rounded-3xl border border-blue-200 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 px-6 py-9 text-center text-white shadow-xl shadow-blue-950/10 transition-all hover:-translate-y-0.5 hover:shadow-2xl sm:py-10"
+            className="group flex w-full max-w-2xl flex-col items-center justify-center rounded-3xl border border-blue-100 bg-white px-6 py-10 text-center shadow-xl shadow-blue-950/5 transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-2xl sm:px-10 sm:py-12"
           >
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 shadow-inner transition-transform group-hover:scale-105">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 shadow-sm transition-transform group-hover:scale-105">
               <Plus className="h-7 w-7" />
             </div>
-            <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-blue-300">
-              Step 1 · Start here
+            <p className="mt-5 text-[10px] font-bold text-blue-600">
+              Welcome to your teaching space
             </p>
-            <h2 className="mt-1 font-serif text-2xl font-black sm:text-3xl">
+            <h2 className="mt-1 text-2xl font-black text-slate-900 sm:text-3xl">
               Create your first course
             </h2>
-            <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-300">
-              Set up the course details and student access code, then create
-              your first assignment.
+            <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-500">
+              Add the course details, then share its access code with your students.
             </p>
-            <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-950/30 transition-colors group-hover:bg-blue-500">
+            <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-colors group-hover:bg-blue-700">
               <Plus className="h-4 w-4" />
               Create Course
-            </span>
-          </button>
-
-          <button
-            type="button"
-            disabled
-            aria-disabled="true"
-            title="Create a course first to unlock assignments"
-            className="flex w-full cursor-not-allowed flex-col items-center justify-center rounded-3xl border border-slate-200 bg-slate-50 px-6 py-9 text-center text-slate-400 shadow-sm sm:py-10"
-          >
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-400 shadow-inner">
-              <BookOpen className="h-6 w-6" />
-            </div>
-            <p className="mt-5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-              Step 2 · Locked
-            </p>
-            <h2 className="mt-1 font-serif text-2xl font-black text-slate-500">
-              Create an assignment
-            </h2>
-            <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-400">
-              Create a course first to unlock assignments.
-            </p>
-            <span className="mt-6 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-100 px-6 py-3 text-sm font-bold text-slate-400">
-              <KeyRound className="h-4 w-4" />
-              Locked until course creation
             </span>
           </button>
         </section>
@@ -2268,31 +2395,30 @@ function OverviewPanel({
         <button
           type="button"
           onClick={onCreateAssignment}
-          className="group text-left rounded-2xl border border-slate-950 bg-slate-950 p-5 text-white shadow-sm transition-all hover:-translate-y-0.5 hover:bg-slate-900 hover:shadow-lg"
+          className="group rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 to-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg"
         >
           <div className="flex items-start justify-between gap-5">
             <div className="flex items-start gap-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/10">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/20">
                 <Plus className="h-5 w-5" />
               </div>
 
               <div>
-                <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-blue-300">
-                  Primary Action
+                <p className="text-[10px] font-bold text-blue-600">
+                  Start something new
                 </p>
 
-                <h2 className="mt-1 text-lg font-bold">
+                <h2 className="mt-1 text-lg font-bold text-slate-900">
                   Create an assignment
                 </h2>
 
-                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-300">
-                  Build, configure, publish, and manage assignments for your
-                  courses.
+                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
+                  Create and publish a writing assignment for one of your courses.
                 </p>
               </div>
             </div>
 
-            <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-500 transition-transform group-hover:translate-x-1 group-hover:text-white" />
+            <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-blue-300 transition-transform group-hover:translate-x-1 group-hover:text-blue-600" />
           </div>
         </button>
 
@@ -2314,8 +2440,8 @@ function OverviewPanel({
 
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[10px] font-mono font-bold uppercase tracking-[0.16em] text-blue-700">
-                    Review Work
+                  <p className="text-[10px] font-bold text-blue-600">
+                    Student work
                   </p>
 
                   {pendingReviewsCount > 0 && (
@@ -2326,7 +2452,7 @@ function OverviewPanel({
                 </div>
 
                 <h2 className="mt-1 text-lg font-bold text-slate-950">
-                  Grade student work
+                  Review student work
                 </h2>
 
                 <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
@@ -2357,8 +2483,8 @@ function OverviewPanel({
           cardType="classes"
           icon={Layers}
           label="Active Courses"
-          value={`${totalClassesCount} Courses`}
-          description="Current courses shown in everyday instructor workflows."
+          value={`${totalClassesCount} ${totalClassesCount === 1 ? "course" : "courses"}`}
+          description="Courses you are currently teaching."
           tone="blue"
         />
 
@@ -2366,8 +2492,8 @@ function OverviewPanel({
           cardType="assignments"
           icon={BookOpen}
           label="Assignments"
-          value={`${totalAssignmentsCount} Assignments`}
-          description="Writing assignments configured for your courses."
+          value={`${totalAssignmentsCount} ${totalAssignmentsCount === 1 ? "assignment" : "assignments"}`}
+          description="Writing assignments across your courses."
           tone="indigo"
         />
 
@@ -2375,8 +2501,8 @@ function OverviewPanel({
           cardType="reviews"
           icon={ShieldCheck}
           label="Pending Reviews"
-          value={`${pendingReviewsCount} Submissions`}
-          description="Student submissions waiting for your review."
+          value={`${pendingReviewsCount} ${pendingReviewsCount === 1 ? "submission" : "submissions"}`}
+          description="Student work waiting for your feedback."
           tone="sky"
         />
       </div>
@@ -2386,12 +2512,12 @@ function OverviewPanel({
       <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-4 animate-fade-in-up [animation-delay:150ms]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h3 className="font-serif text-lg font-bold text-slate-900">
-              Courses & Access Codes
+            <h3 className="text-lg font-bold text-slate-900">
+              Your courses
             </h3>
 
             <p className="text-xs text-slate-400 font-medium">
-              Current courses are shown by default. Open Past to manage archived courses.
+              Open a course to manage students, assignments, and its access code.
             </p>
           </div>
 
@@ -2483,12 +2609,12 @@ function OverviewPanel({
                           </span>
                         </div>
 
-                        <h5 className="text-xs font-black text-slate-900 tracking-wide uppercase font-sans truncate mt-1">
+                        <h5 className="mt-1 truncate text-sm font-bold text-slate-900">
                           {cls.name}
                         </h5>
                       </div>
 
-                      <span className="font-mono text-xs font-black bg-blue-600/10 text-blue-700 px-2 py-1 rounded border border-blue-600/20 shadow-inner shrink-0">
+                      <span className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-xs font-bold text-blue-700">
                         {cls.code}
                       </span>
                     </div>
@@ -2504,7 +2630,7 @@ function OverviewPanel({
                       <button
                         type="button"
                         onClick={() => openCourseManager(cls)}
-                        className="w-full flex items-center justify-center gap-2 bg-slate-950 border border-[#0B1320] rounded-xl px-3 py-2 text-[10px] font-mono font-bold text-white hover:bg-slate-800 transition-all"
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-bold text-white shadow-sm shadow-blue-600/15 transition-all hover:bg-blue-700"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                         Manage Course
@@ -2515,7 +2641,7 @@ function OverviewPanel({
                         onClick={() =>
                           setExpandedClassId(isRosterOpen ? null : cls.id)
                         }
-                        className="w-full flex items-center justify-between bg-white border border-slate-200 rounded-xl px-3 py-2 text-[10px] font-mono font-bold text-slate-600 hover:border-blue-600/40 hover:text-blue-600 transition-all"
+                        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
                       >
                         <span>Students</span>
                         <span>{isRosterOpen ? "Hide" : "Show"}</span>
@@ -3084,10 +3210,20 @@ function CourseManagerModal({
                     setIsInviteVisible(true);
                     await copyCourseInvite(managedClass);
                   }}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[10px] font-bold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    managerSuccess === "Course invitation copied to your clipboard."
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                      : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                  }`}
                 >
-                  <Copy className="h-3.5 w-3.5" />
-                  Invite Students
+                  {managerSuccess === "Course invitation copied to your clipboard." ? (
+                    <CheckSquare className="h-3.5 w-3.5" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                  {managerSuccess === "Course invitation copied to your clipboard."
+                    ? "Invite copied!"
+                    : "Invite Students"}
                 </button>
               </div>
 
@@ -3686,16 +3822,16 @@ function SidebarButton({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full flex items-center justify-between px-3.5 py-3 rounded-xl text-xs font-bold transition-all text-left group cursor-pointer border ${
+      className={`group flex w-full cursor-pointer items-center justify-between rounded-xl px-3.5 py-3 text-left text-xs font-bold transition-all ${
         active
-          ? "bg-slate-800/80 text-white border-slate-700 shadow-inner"
-          : "text-slate-400 border-transparent hover:text-white hover:bg-slate-800/30"
+          ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
+          : "text-slate-600 hover:bg-white hover:text-slate-900"
       }`}
     >
       <div className="flex items-center gap-2.5">
         <Icon
           className={`w-4 h-4 stroke-[1.8] ${
-            active ? "text-blue-300" : "text-slate-500"
+            active ? "text-blue-600" : "text-slate-400"
           }`}
         />
 
@@ -3709,7 +3845,7 @@ function SidebarButton({
               ? badgeTone === "blue"
                 ? "bg-blue-500 text-white"
                 : "bg-blue-600 text-white"
-              : "bg-slate-800 text-slate-500"
+              : "bg-slate-200/70 text-slate-500"
           }`}
         >
           {badge}
@@ -3756,7 +3892,7 @@ function MetricCard({ icon: Icon, label, value, description, tone, cardType }) {
           {label}
         </span>
 
-        <h4 className="text-xl font-serif font-bold text-slate-900">
+        <h4 className="text-lg font-bold text-slate-900">
           {value}
         </h4>
 

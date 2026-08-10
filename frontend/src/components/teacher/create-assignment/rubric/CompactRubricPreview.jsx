@@ -1,5 +1,5 @@
 import React from "react";
-import { AlertCircle, ArrowRight } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 import {
   getRubricToneClasses,
@@ -12,8 +12,6 @@ export default function CompactRubricPreview({
   criteria = [],
   rubricTotal = 0,
   parsedRubricMatrix = null,
-  expandedCriterionId,
-  setExpandedCriterionId,
 }) {
   const normalizedCriteria = safeArray(criteria).map(normalizeCriterion);
 
@@ -30,8 +28,6 @@ export default function CompactRubricPreview({
       </div>
     );
   }
-
-  const activeId = expandedCriterionId || normalizedCriteria[0]?.id;
 
   return (
     <div className="bg-[#F8FAFC]">
@@ -52,38 +48,26 @@ export default function CompactRubricPreview({
 
       <div className="p-4 space-y-2">
         <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-mono font-black uppercase tracking-wider text-slate-400">
-          <span className="col-span-6">Criterion</span>
+          <span className="col-span-10">Criterion</span>
           <span className="col-span-2 text-center">Points</span>
-          <span className="col-span-4 text-right">Action</span>
         </div>
 
         {normalizedCriteria.map((criterion) => {
-          const isOpen = String(activeId) === String(criterion.id);
           const bands = safeArray(criterion.bands);
 
           return (
             <div
               key={criterion.id}
-              className={`rounded-2xl border bg-white transition-all ${
-                isOpen
-                  ? "border-blue-200 shadow-sm"
-                  : "border-slate-200 hover:border-blue-100"
-              }`}
+              className="rounded-2xl border border-blue-200 bg-white shadow-sm"
             >
-              <button
-                type="button"
-                onClick={() =>
-                  setExpandedCriterionId(isOpen ? "" : criterion.id)
-                }
-                className="w-full grid grid-cols-12 gap-2 items-center p-3 text-left"
-              >
-                <div className="col-span-6 min-w-0">
-                  <p className="text-xs font-black text-slate-950 truncate">
+              <div className="grid grid-cols-12 items-center gap-2 p-3">
+                <div className="col-span-10 min-w-0">
+                  <p className="text-xs font-black text-slate-950">
                     {criterion.name}
                   </p>
 
                   {criterion.description && (
-                    <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
                       {criterion.description}
                     </p>
                   )}
@@ -94,28 +78,9 @@ export default function CompactRubricPreview({
                     {criterion.points || criterion.maxScore || 0} pts
                   </span>
                 </div>
+              </div>
 
-                <div className="col-span-4 flex justify-end">
-                  <span
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold ${
-                      isOpen
-                        ? "bg-blue-600 text-white"
-                        : "bg-blue-50 text-blue-700 border border-blue-100"
-                    }`}
-                  >
-                    {isOpen ? "Hide details" : "View details"}
-
-                    <ArrowRight
-                      className={`w-3.5 h-3.5 transition-transform ${
-                        isOpen ? "rotate-90" : ""
-                      }`}
-                    />
-                  </span>
-                </div>
-              </button>
-
-              {isOpen && (
-                <div className="px-3 pb-3">
+              <div className="px-3 pb-3">
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
                     {bands.map((band) => {
                       const tone =
@@ -147,17 +112,11 @@ export default function CompactRubricPreview({
                     })}
                   </div>
                 </div>
-              )}
             </div>
           );
         })}
 
-        <div className="flex items-center justify-between pt-2 text-[11px] text-slate-500">
-          <span>
-            Only one criterion is expanded at a time to keep the setup screen
-            short.
-          </span>
-
+        <div className="flex items-center justify-end pt-2 text-[11px] text-slate-500">
           <span className="font-mono font-bold">
             Total: {rubricTotal} pts
           </span>

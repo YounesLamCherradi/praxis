@@ -2170,6 +2170,11 @@ function ReviewModalOverlay({
   const submissionDetailsRef = useRef(null);
   const [gradeSheetOpen, setGradeSheetOpen] = useState(false);
   const [gradeSheetData, setGradeSheetData] = useState(null);
+  const [reviewStatusMessage, setReviewStatusMessage] = useState("");
+
+  useEffect(() => {
+    setReviewStatusMessage("");
+  }, [selectedSubmission?.id, selectedAttemptId]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -2312,6 +2317,24 @@ function ReviewModalOverlay({
 
           {/* Quick Right Side Window Actions & Page Turning Carousel */}
           <div className="flex flex-wrap items-center justify-end gap-2">
+            {reviewStatusMessage && (
+              <div
+                role="status"
+                aria-live="polite"
+                className={`hidden max-w-[260px] items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-semibold leading-4 lg:flex ${
+                  /successfully|saved/i.test(reviewStatusMessage)
+                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                    : /could not|failed|error/i.test(reviewStatusMessage)
+                    ? "border-red-200 bg-red-50 text-red-800"
+                    : "border-amber-200 bg-amber-50 text-amber-800"
+                }`}
+                title={reviewStatusMessage}
+              >
+                <CheckSquare className="h-3.5 w-3.5 shrink-0" />
+                <span className="line-clamp-2">{reviewStatusMessage}</span>
+              </div>
+            )}
+
             <button
               type="button"
               disabled={
@@ -2329,7 +2352,7 @@ function ReviewModalOverlay({
                   ? "Previous attempts are read-only"
                   : isReopenedAttempt
                   ? "The student must resubmit this reopened attempt before a new review can be saved"
-                  : "Save the current grade, feedback, annotations, and review"
+                  : "Submit the completed grade and feedback to the student"
               }
             >
               <CheckSquare className="h-4 w-4" />
@@ -2338,7 +2361,7 @@ function ReviewModalOverlay({
                   ? "Previous Attempt"
                   : isReopenedAttempt
                   ? "Awaiting Resubmission"
-                  : "Save Review"}
+                  : "Submit Grade"}
               </span>
             </button>
 
@@ -2469,6 +2492,7 @@ function ReviewModalOverlay({
               submission={submissionForReview}
               onBack={onClose}
               onSaveReview={onSaveReview}
+              onStatusMessageChange={setReviewStatusMessage}
               readOnly={isPreviousAttempt}
             />
           )}

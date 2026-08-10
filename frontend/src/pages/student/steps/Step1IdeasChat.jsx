@@ -14,26 +14,6 @@ function getText(value) {
   return String(value || "").trim();
 }
 
-const COACH_REPLY_MAX_WORDS = 35;
-
-function keepCoachReplyBrief(value) {
-  const clean = getText(value).replace(/\s+/g, " ");
-  if (!clean) return "";
-
-  const sentences = clean.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [clean];
-  const firstTwoSentences = sentences.slice(0, 2).join(" ").trim();
-  const words = firstTwoSentences.split(/\s+/).filter(Boolean);
-
-  if (words.length <= COACH_REPLY_MAX_WORDS) return firstTwoSentences;
-
-  const shortened = words.slice(0, COACH_REPLY_MAX_WORDS).join(" ")
-    .replace(/[,:;\-–—]+$/g, "")
-    .trim();
-  const question = firstTwoSentences.includes("?");
-
-  return `${shortened}${question ? "?" : "."}`;
-}
-
 function normalizeChatMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
 
@@ -218,48 +198,31 @@ function buildIdeasCoachSystemPrompt({
   return `You are a supportive writing coach helping a student plan their writing. Your role is to ${focus}.
 
 RULES:
-1. Ask ONE focused question at a time. Every reply must be no more than TWO short sentences and 35 words total.
-2. Prefer one short question. Use a second sentence only for a brief hint, challenge, or transition.
-3. NEVER write text the student could copy into their assignment.
-4. If a student seems stuck or says they don't know, don't keep pushing. Instead, offer a simple, structured prompt like: "What are your two or three main ideas?" or "Which idea should come first?"
-5. Help the student organise their thinking with specific questions about their main idea, order, evidence, examples, or reasoning.
-6. If the student asks you to write for them, gently redirect with a question instead.
-7. Match your vocabulary to CEFR level ${languageLevel}; keep it simple and encouraging.
-8. Never repeat the same question twice in a conversation.
-9. After two or three useful student replies, briefly ask whether they are ready to draft or want one more planning question.
-10. If the student seems ready, tell them clearly to click the Next button. Do not ask them to write sentences in chat.
-11. Challenge vague or weak ideas with one precise follow-up, such as "What exactly would you ask?" or "What evidence supports that reason?"
-12. Before moving to another main idea or step, check whether the current one is specific and sufficiently developed.
-13. For process assignments, help improve each step before moving forward. For arguments, test the claim, evidence, counterargument, and response.
+1. Ask ONE question at a time. Keep it short and friendly.
+2. NEVER write text the student could copy into their assignment.
+3. If a student seems stuck or says they don't know, don't keep pushing. Instead, offer a simple, structured prompt like: "What are your two or three main ideas?" or "Which of those ideas would make the most sense to write about first?"
+4. Help the student organise their thinking by asking questions like: "What is the most important thing you want to say?", "Which idea would come first — and why?", or "What example could you use to explain that?"
+5. If the student asks you to write for them, gently redirect with a question instead.
+6. Match your vocabulary to CEFR level ${languageLevel} — keep it simple and encouraging.
+7. Never repeat the same question twice in a conversation.
+8. After two or three useful student replies, briefly check whether they already have enough ideas to begin drafting. Ask: "Do you feel ready to draft now, or do you want one more planning question?"
+9. If the student seems ready, tell them clearly to click Continue to Draft. Do not tell them to write sentences in the chat.
+10. Do not accept vague ideas too quickly. Ask a friendly follow-up such as "What exactly do you mean?" or "Why would that help?"
+11. Before moving from one main idea to the next, ask whether the student feels satisfied with the current one or wants to develop it a little more.
+12. If the student gives a weak first idea, help them make it more specific before moving on.
+13. For process assignments, help improve each step before moving forward.
 14. Never say "share it here" or ask the student to draft their first sentence in chat. The chat is only for planning.
 
 Assignment title: "${assignmentTitle}"
 Task: "${assignmentPrompt}"
 
-Start by asking the student what topic or idea they are thinking about. If they struggle to answer, suggest they think about two or three possible ideas and pick the one they feel most confident about.`;
+Be conversational and encouraging. Briefly acknowledge the student's answer before asking the next question. Start with their general idea or position; introduce evidence, organisation, or counterarguments only after you understand what they want to say.`;
 }
 
 function buildOpeningCoachMessage({
   assignmentTitle,
-  assignmentPrompt,
-  assignmentType,
 }) {
-  const cleanPrompt = getText(assignmentPrompt);
-  const type = String(assignmentType || "").toLowerCase();
-  let text;
-
-  if (type === "argument" || /argu|position|agree|disagree/i.test(cleanPrompt)) {
-    text = `What is the strongest reason someone might disagree with your position on “${assignmentTitle},” and what evidence could help you answer them?`;
-  } else if (type === "narrative") {
-    text = `Which specific moment would best reveal why “${assignmentTitle}” matters, and what detail would make that moment clear to a reader?`;
-  } else if (type === "compare") {
-    text = `Which difference matters most in “${assignmentTitle},” and what example would prove its importance?`;
-  } else if (type === "process") {
-    text = `Which step in “${assignmentTitle}” is most likely to confuse a reader, and what detail would make it easier to follow?`;
-  } else {
-    const taskFocus = cleanPrompt.replace(/\s+/g, " ").slice(0, 110);
-    text = `The task asks you to consider “${taskFocus || assignmentTitle}.” What decision must you make first, and what evidence will guide it?`;
-  }
+  const text = `Hello! I’m your writing coach. I won’t write the assignment for you, but I’ll ask friendly questions to help you plan your own ideas. What are your first thoughts about “${assignmentTitle || "this assignment"}”?`;
 
   return {
     role: "assistant",
@@ -713,7 +676,7 @@ export default function Step1IdeasChat() {
 
       const coachMessage = {
         role: "assistant",
-        text: keepCoachReplyBrief(rawCoachReply),
+        text: getText(rawCoachReply),
         createdAt: new Date().toISOString(),
       };
 
@@ -892,14 +855,6 @@ export default function Step1IdeasChat() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                {autoBuildOutlineFromCoach && (
-                  <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 font-mono text-[9px] font-bold text-violet-700">
-                    Notes outline on
-                  </span>
-                )}
-
-              </div>
             </div>
 
             {!aiAllowed && (
@@ -1044,7 +999,7 @@ export default function Step1IdeasChat() {
                     ? "Coach time is finished. Continue to the draft."
                     : isThinking
                     ? "Please wait for the Coach to reply..."
-                    : "Ask a planning question..."
+                    : "Type your response..."
                 }
                 className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
               />

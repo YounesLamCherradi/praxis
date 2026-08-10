@@ -9,16 +9,14 @@ import {
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
+  ArrowLeft,
   BookOpen,
   Calendar,
-  CheckCircle2,
   ClipboardCheck,
   Eye,
   Layers,
-  Pencil,
   Plus,
-  Trash2,
-  Users,
+  Search,
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
@@ -177,7 +175,8 @@ function hasSubmissionEvidence(submission = {}) {
 
 function getAssignmentSubmissionMetrics(
   assignment,
-  submissions
+  submissions,
+  totalStudents = 0
 ) {
   const assignmentSubmissions =
     getAssignmentSubmissions(
@@ -192,6 +191,7 @@ function getAssignmentSubmissionMetrics(
 
   const students = new Set();
   let pending = 0;
+  let graded = 0;
 
   actualSubmissions.forEach((submission) => {
     students.add(
@@ -208,10 +208,19 @@ function getAssignmentSubmissionMetrics(
       submission.isCurrent !== false &&
       (status === "submitted" || status === "late")
     ) pending += 1;
+    if (submission.isCurrent !== false && status === "graded") {
+      graded += 1;
+    }
   });
 
+  const submittedStudents = students.size;
+  const rosterTotal = Math.max(Number(totalStudents || 0), submittedStudents);
+
   return {
-    students: students.size,
+    students: rosterTotal,
+    submitted: submittedStudents,
+    missing: Math.max(0, rosterTotal - submittedStudents),
+    graded,
     attempts: actualSubmissions.length,
     pending,
   };
@@ -320,9 +329,26 @@ export default function TeacherAssignments({
   const [selectedClassId, setSelectedClassId] = useState("");
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissionStatusFilter, setSubmissionStatusFilter] = useState("All");
+  const [assignmentSearch, setAssignmentSearch] = useState("");
+  const [assignmentStatusFilter, setAssignmentStatusFilter] = useState("All");
+  const [assignmentGradingFilter, setAssignmentGradingFilter] = useState("All");
   const [statusChangeAssignmentId, setStatusChangeAssignmentId] = useState("");
   const [statusChangeMessage, setStatusChangeMessage] = useState("");
+  const [assignmentPendingDelete, setAssignmentPendingDelete] = useState(null);
+  const [isDeletingAssignment, setIsDeletingAssignment] = useState(false);
   const appliedWorkspaceRequestRef = useRef(0);
+
+  async function confirmAssignmentDelete() {
+    if (!assignmentPendingDelete?.id || isDeletingAssignment) return;
+
+    setIsDeletingAssignment(true);
+    try {
+      await deleteAssignment(assignmentPendingDelete.id);
+      setAssignmentPendingDelete(null);
+    } finally {
+      setIsDeletingAssignment(false);
+    }
+  }
 
   async function handleToggleAssignmentStatus(assignment) {
     if (!assignment?.id || statusChangeAssignmentId) return;
@@ -609,7 +635,7 @@ export default function TeacherAssignments({
               setSelectedClassId(
                 relatedClass ? String(relatedClass.id) : ""
               );
-              setSelectedAssignmentId(String(createdAssignment.id));
+              setSelectedAssignmentId("");
               setSubmissionStatusFilter("All");
             }
 
@@ -640,7 +666,7 @@ export default function TeacherAssignments({
             setSelectedClassId(
               relatedClass ? String(relatedClass.id) : ""
             );
-            setSelectedAssignmentId(String(assignmentToSelect.id));
+            setSelectedAssignmentId("");
             setSubmissionStatusFilter("All");
           }}
           onClose={() => {
@@ -708,40 +734,71 @@ export default function TeacherAssignments({
     );
   }
 
-  const activeAssignmentStatus = activeAssignment
-    ? normalizeAssignmentStatus(activeAssignment)
-    : "Draft";
-  const activeAssignmentDraft = activeAssignmentStatus !== "Published";
-  const activeAssignmentComplete = activeAssignment
-    ? isAssignmentComplete(activeAssignment)
-    : false;
-  const shouldLockDraftActions =
-    Boolean(activeAssignment) &&
-    activeAssignmentDraft &&
-    !activeAssignmentComplete;
   const detailsAssignment = selectedAssignment || activeAssignment;
+  const activeReviewClass = activeAssignment
+    ? activeClasses.find((course) =>
+        assignmentMatchesClass(activeAssignment, course)
+      ) || null
+    : null;
+  const listAssignments = selectedClass ? courseAssignments : activeAssignments;
+  const filteredAssignments = listAssignments.filter((assignment) => {
+    const query = assignmentSearch.trim().toLowerCase();
+    if (
+      query &&
+      !String(assignment.title || "").toLowerCase().includes(query)
+    ) {
+      return false;
+    }
+
+    const status = normalizeAssignmentStatus(assignment);
+    if (assignmentStatusFilter !== "All" && status !== assignmentStatusFilter) {
+      return false;
+    }
+
+    const relatedClass = activeClasses.find((course) =>
+      assignmentMatchesClass(assignment, course)
+    );
+    const courseStudentCount = Math.max(
+      Array.isArray(relatedClass?.members) ? relatedClass.members.length : 0,
+      Array.isArray(relatedClass?.enrollments)
+        ? relatedClass.enrollments.length
+        : 0
+    );
+    const metrics = getAssignmentSubmissionMetrics(
+      assignment,
+      submissions,
+      courseStudentCount
+    );
+
+    if (assignmentGradingFilter === "Needs review") return metrics.pending > 0;
+    if (assignmentGradingFilter === "Completed") {
+      return metrics.submitted > 0 && metrics.pending === 0;
+    }
+    if (assignmentGradingFilter === "No submissions") {
+      return metrics.submitted === 0;
+    }
+    return true;
+  });
 
   return (
     <>
       <div className="space-y-6">
-        {/* Header Dashboard & Dynamic Shortcut Actions */}
         <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
             <div>
-              <div className="mb-2 inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-blue-700">
+              <div className="mb-2 inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">
                 <Layers className="h-3 w-3" />
-                Assignments & Submissions
+                Assignments
               </div>
-              <h2 className="font-serif text-xl font-bold text-slate-950">
-                Assignments Workspace
+              <h2 className="text-xl font-bold text-slate-950">
+                Your assignments
               </h2>
               <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-                Select a course, then choose one assignment to manage it and review only its student submissions.
+                Choose an assignment to see student progress and review submissions.
               </p>
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {/* Shortcut: Review Pending */}
               <button
                 type="button"
                 disabled={!firstPendingAssignment}
@@ -758,7 +815,6 @@ export default function TeacherAssignments({
                   : "No Pending Reviews"}
               </button>
 
-              {/* Shortcut: Create Assignment */}
               <button
                 type="button"
                 disabled={activeClasses.length === 0}
@@ -776,12 +832,10 @@ export default function TeacherAssignments({
             </div>
           </div>
 
-          {/* Sequential Selectors */}
-          <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">
-            {/* Step 1: Course Selection */}
+          {activeClasses.length > 1 ? (
             <label className="space-y-1.5">
-              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                1. Select Course
+              <span className="text-[10px] font-bold text-slate-400">
+                Course
               </span>
               <select
                 value={selectedClassId}
@@ -792,9 +846,9 @@ export default function TeacherAssignments({
                   setSelectedAssignment(null);
                   setSubmissionFilterAssignment(null);
                 }}
-                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-800 transition-all focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                className="mt-1.5 w-full max-w-md rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-800 transition-all focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
               >
-                <option value="">{activeClasses.length === 0 ? "No active courses" : "Select a course"}</option>
+                <option value="">All courses</option>
                 {activeClasses.map((cls) => (
                   <option key={cls.id} value={cls.id}>
                     {cls.code ? `${cls.code}  -  ${cls.name}` : cls.name}
@@ -802,201 +856,344 @@ export default function TeacherAssignments({
                 ))}
               </select>
             </label>
+          ) : selectedClass ? (
+            <div className="mt-5 inline-flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+              <BookOpen className="h-4 w-4" />
+              {selectedClass.name}
+            </div>
+          ) : null}
 
-            {/* Step 2: Assignment Selection */}
-            <label className="space-y-1.5">
-              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                2. Select Assignment
-              </span>
-              <select
-                value={selectedAssignmentId}
-                onChange={(e) => {
-                  setSelectedAssignmentId(e.target.value);
-                  setSubmissionStatusFilter("All");
-                }}
-                disabled={!selectedClass || courseAssignments.length === 0}
-                className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-800 transition-all focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <option value="">
-                  {!selectedClass
-                    ? "Select a course first"
-                    : courseAssignments.length === 0
-                    ? "No assignments available"
-                    : "Select an assignment"}
-                </option>
-
-                {courseAssignments.map((assignment) => {
-                  const pending = getPendingSubmissionCount(
-                    assignment,
-                    submissions
-                  );
-
-                  return (
-                    <option key={assignment.id} value={assignment.id}>
-                      {assignment.title || "Untitled Assignment"}
-                      {pending > 0 ? ` (${pending} pending)` : ""}
-                    </option>
-                  );
-                })}
-              </select>
+          <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-5 md:grid-cols-[minmax(220px,1fr)_180px_190px]">
+            <label className="relative">
+              <span className="sr-only">Search assignments</span>
+              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                value={assignmentSearch}
+                onChange={(event) => setAssignmentSearch(event.target.value)}
+                placeholder="Search assignments..."
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-xs text-slate-800 outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              />
             </label>
+
+            <select
+              value={assignmentStatusFilter}
+              onChange={(event) => setAssignmentStatusFilter(event.target.value)}
+              aria-label="Filter by publication status"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+            >
+              <option value="All">All statuses</option>
+              <option value="Published">Published</option>
+              <option value="Draft">Draft</option>
+            </select>
+
+            <select
+              value={assignmentGradingFilter}
+              onChange={(event) => setAssignmentGradingFilter(event.target.value)}
+              aria-label="Filter by grading progress"
+              className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+            >
+              <option value="All">All grading states</option>
+              <option value="Needs review">Needs review</option>
+              <option value="Completed">Grading completed</option>
+              <option value="No submissions">No submissions</option>
+            </select>
           </div>
         </section>
 
-        {/* Selected Workspace Block */}
-        {activeAssignment ? (
-          <section className="space-y-6">
-            {/* Dynamic Metadata & Management Bar */}
-            <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-serif text-lg font-bold text-slate-950">
-                    {activeAssignment.title || "Untitled Assignment"}
-                  </h3>
-                  <span
-                    className={`inline-flex rounded px-2 py-0.5 font-mono text-[9px] font-bold uppercase ${getStatusStyles(
-                      activeAssignmentStatus
-                    )}`}
-                  >
-                    {activeAssignmentStatus}
-                  </span>
-                </div>
-
-                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                  <div className="flex items-center gap-1">
-                    <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                    <span>Due: {getDueDateLabel(activeAssignment)}</span>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Users className="h-3.5 w-3.5 text-slate-400" />
-                    {(() => {
-                      const metrics =
-                        getAssignmentSubmissionMetrics(
-                          activeAssignment,
-                          submissions
-                        );
-
-                      return (
-                        <span>
-                          {metrics.students} student{metrics.students === 1 ? "" : "s"} · {metrics.attempts} attempt{metrics.attempts === 1 ? "" : "s"}
-                        </span>
-                      );
-                    })()}
-                  </div>
-                </div>
-              </div>
-
-              {/* Assignment Operations */}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedAssignment(activeAssignment);
-                    setView("details");
-                  }}
-                  disabled={shouldLockDraftActions}
-                  title={shouldLockDraftActions ? "Complete assignment setup first, then Details will unlock." : "Open assignment details"}
-                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                    shouldLockDraftActions
-                      ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-                  }`}
-                >
-                  <Eye className="h-3.5 w-3.5" />
-                  Details
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedAssignment(activeAssignment);
-                    setView("edit");
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Edit
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleToggleAssignmentStatus(activeAssignment)}
-                  disabled={shouldLockDraftActions || Boolean(statusChangeAssignmentId)}
-                  title={shouldLockDraftActions ? "Complete assignment setup first, then Publish will unlock." : activeAssignmentStatus === "Published" ? "Unpublish assignment" : "Publish assignment"}
-                  className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-bold transition-all ${
-                    shouldLockDraftActions
-                      ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
-                      : activeAssignmentStatus === "Published"
-                        ? "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-white hover:text-blue-700"
-                        : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  {String(statusChangeAssignmentId) === String(activeAssignment.id)
-                    ? "Saving..."
-                    : activeAssignmentStatus === "Published" ? "Unpublish" : "Publish"}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const confirmed = window.confirm(
-                      "Are you sure you want to delete this assignment?"
-                    );
-                    if (confirmed) {
-                      deleteAssignment(activeAssignment.id);
-                      setSelectedAssignmentId("");
-                      setSubmissionStatusFilter("All");
-                    }
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-bold text-red-700 transition-all hover:bg-red-100"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete
-                </button>
-              </div>
-              {statusChangeMessage && (
-                <p
-                  role="status"
-                  className={`text-xs font-semibold ${
-                    /could not|complete all|required|refresh/i.test(statusChangeMessage)
-                      ? "text-red-700"
-                      : "text-emerald-700"
-                  }`}
-                >
-                  {statusChangeMessage}
-                </p>
-              )}
-            </div>
-
-            {/* Pass current active assignment to eliminate duplicate controls */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <Suspense fallback={<WorkspaceLoading />}>
-                <TeacherSubmissions
-                  activeCourse={selectedClass}
-                  activeAssignment={activeAssignment}
-                  requestedStatusFilter={submissionStatusFilter}
-                />
-              </Suspense>
-            </div>
-          </section>
-        ) : (
-          /* Empty Selection State */
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-12 text-center">
-            <AlertCircle className="mx-auto h-10 w-10 text-slate-300" />
-            <h3 className="mt-3 font-serif text-lg font-bold text-slate-900">
-              {!selectedClass
-                ? "Select a Course"
-                : "Select an Assignment"}
-            </h3>
-            <p className="mt-1 text-sm text-slate-400">
-              {!selectedClass
-                ? "Choose a course first. No student submissions are displayed automatically."
-                : "Choose one assignment to display only its student submissions."}
-            </p>
-          </div>
+        {statusChangeMessage && (
+          <p
+            role="status"
+            className={`rounded-xl border bg-white px-4 py-3 text-xs font-semibold ${
+              /could not|complete all|required|refresh/i.test(statusChangeMessage)
+                ? "border-red-200 text-red-700"
+                : "border-emerald-200 text-emerald-700"
+            }`}
+          >
+            {statusChangeMessage}
+          </p>
         )}
+
+        <section>
+            {activeClasses.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-12 text-center">
+                <AlertCircle className="mx-auto h-10 w-10 text-slate-300" />
+                <h3 className="mt-3 text-lg font-bold text-slate-900">
+                  No active courses
+                </h3>
+                <p className="mt-1 text-sm text-slate-400">
+                  Create or restore a course before adding assignments.
+                </p>
+              </div>
+            ) : filteredAssignments.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-blue-200 bg-blue-50/50 p-12 text-center">
+                <BookOpen className="mx-auto h-10 w-10 text-blue-300" />
+                <h3 className="mt-3 text-lg font-bold text-slate-900">
+                  No matching assignments
+                </h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Try changing the filters or create a new assignment.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {filteredAssignments.map((assignment) => {
+                  const assignmentStatus = normalizeAssignmentStatus(assignment);
+                  const isDraft = assignmentStatus !== "Published";
+                  const lockDraftActions =
+                    isDraft && !isAssignmentComplete(assignment);
+                  const relatedClass = activeClasses.find((course) =>
+                    assignmentMatchesClass(assignment, course)
+                  );
+                  const courseStudentCount = Math.max(
+                    Array.isArray(relatedClass?.members)
+                      ? relatedClass.members.length
+                      : 0,
+                    Array.isArray(relatedClass?.enrollments)
+                      ? relatedClass.enrollments.length
+                      : 0
+                  );
+                  const metrics = getAssignmentSubmissionMetrics(
+                    assignment,
+                    submissions,
+                    courseStudentCount
+                  );
+
+                  const openReview = () => {
+                    setSelectedAssignmentId(String(assignment.id));
+                    setSubmissionStatusFilter("All");
+                    setSelectedAssignment(assignment);
+                    setSubmissionFilterAssignment(assignment);
+                  };
+
+                  return (
+                    <article
+                      key={assignment.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={openReview}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openReview();
+                        }
+                      }}
+                      className="group flex cursor-pointer flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 xl:flex-row xl:items-center"
+                      aria-label={`Open ${assignment.title || "assignment"} student progress`}
+                    >
+                      <div className="flex min-w-0 items-start justify-between gap-4 xl:w-[32%]">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate text-base font-bold text-slate-900">
+                              {assignment.title || "Untitled Assignment"}
+                            </h3>
+                            <span
+                              className={`rounded px-2 py-0.5 font-mono text-[9px] font-bold uppercase ${getStatusStyles(
+                                assignmentStatus
+                              )}`}
+                            >
+                              {assignmentStatus}
+                            </span>
+                          </div>
+                          <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+                            <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                            Due {getDueDateLabel(assignment)}
+                          </p>
+                          {activeClasses.length > 1 && relatedClass && (
+                            <p className="mt-1 truncate text-[10px] font-semibold text-blue-600">
+                              {relatedClass.name}
+                            </p>
+                          )}
+                        </div>
+                        <div
+                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white"
+                          title="View student progress"
+                          aria-label="View student progress"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </div>
+                      </div>
+
+                      <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-3">
+                        <AssignmentCount label="Students" value={metrics.students} tone="slate" />
+                        <AssignmentCount label="Submitted" value={metrics.submitted} tone="blue" />
+                        <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-3 xl:w-[270px] xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+                        <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedAssignment(assignment);
+                              setView("details");
+                            }}
+                            disabled={lockDraftActions}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            Details
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setSelectedAssignment(assignment);
+                              setView("edit");
+                            }}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleToggleAssignmentStatus(assignment);
+                            }}
+                            disabled={lockDraftActions || Boolean(statusChangeAssignmentId)}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            {assignmentStatus === "Published" ? "Unpublish" : "Publish"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setAssignmentPendingDelete(assignment);
+                            }}
+                            className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-600 transition-colors hover:bg-red-100"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+        </section>
       </div>
+
+      {assignmentPendingDelete &&
+        createPortal(
+          <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4">
+            <button
+              type="button"
+              aria-label="Cancel assignment deletion"
+              onClick={() => {
+                if (!isDeletingAssignment) setAssignmentPendingDelete(null);
+              }}
+              className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm"
+            />
+
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-assignment-title"
+              className="relative z-10 w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-red-200 bg-red-50 text-red-600">
+                  <AlertCircle className="h-5 w-5" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-red-600">
+                    Delete assignment
+                  </p>
+                  <h2 id="delete-assignment-title" className="mt-1 text-lg font-bold text-slate-950">
+                    Delete this assignment?
+                  </h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    <span className="font-bold text-slate-800">
+                      {assignmentPendingDelete.title || "Untitled assignment"}
+                    </span>{" "}
+                    will be permanently removed. This action cannot be undone.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={() => setAssignmentPendingDelete(null)}
+                  disabled={isDeletingAssignment}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Keep assignment
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmAssignmentDelete}
+                  disabled={isDeletingAssignment}
+                  className="rounded-xl bg-red-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition-colors hover:bg-red-700 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {isDeletingAssignment ? "Deleting…" : "Delete assignment"}
+                </button>
+              </div>
+            </section>
+          </div>,
+          document.body
+        )}
+
+      {activeAssignment &&
+        createPortal(
+          <div className="fixed inset-0 z-[2147483646] flex items-center justify-center overflow-y-auto p-3 sm:p-5">
+            <button
+              type="button"
+              aria-label="Close student progress"
+              className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
+              onClick={() => {
+                setSelectedAssignmentId("");
+                setSubmissionStatusFilter("All");
+                setSelectedAssignment(null);
+                setSubmissionFilterAssignment(null);
+              }}
+            />
+
+            <div className="relative z-10 my-4 flex max-h-[94vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F8FAFC] shadow-2xl">
+              <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold text-blue-600">
+                    Student progress
+                  </p>
+                  <h2 className="truncate text-lg font-bold text-slate-900">
+                    {activeAssignment.title || "Assignment"}
+                  </h2>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedAssignmentId("");
+                    setSubmissionStatusFilter("All");
+                    setSelectedAssignment(null);
+                    setSubmissionFilterAssignment(null);
+                  }}
+                  className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to list
+                </button>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <Suspense fallback={<WorkspaceLoading />}>
+                    <TeacherSubmissions
+                      activeCourse={activeReviewClass}
+                      activeAssignment={activeAssignment}
+                      requestedStatusFilter={submissionStatusFilter}
+                    />
+                  </Suspense>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* Details View Portal Overlay */}
       {view === "details" &&
@@ -1013,6 +1210,7 @@ export default function TeacherAssignments({
             <div className="relative z-10 my-4 max-h-[92vh] w-full max-w-[1450px] overflow-y-auto rounded-3xl border border-slate-200 bg-[#F8FAFC] p-4 shadow-2xl sm:p-6">
               <Suspense fallback={<WorkspaceLoading />}>
                 <TeacherAssignmentDetails
+                  key={detailsAssignment.id}
                   modalMode
                   assignment={detailsAssignment}
                   onClose={() => {
@@ -1026,5 +1224,28 @@ export default function TeacherAssignments({
           document.body
         )}
     </>
+  );
+}
+
+function AssignmentCount({ label, value, tone = "slate" }) {
+  const tones = {
+    slate: "border-slate-200 bg-slate-50 text-slate-700",
+    blue: "border-blue-200 bg-blue-50 text-blue-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+    violet: "border-violet-200 bg-violet-50 text-violet-700",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  };
+
+  return (
+    <div
+      className={`flex min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-2 ${
+        tones[tone] || tones.slate
+      }`}
+    >
+      <p className="text-sm font-black leading-none">{value}</p>
+      <p className="text-[9px] font-bold leading-tight text-slate-500">
+        {label}
+      </p>
+    </div>
   );
 }

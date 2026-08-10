@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   Link2,
@@ -44,6 +44,28 @@ export default function RubricSetupStep({
   removeBand,
 }) {
   const [sourceExpanded, setSourceExpanded] = useState(!rubricMode);
+  const [isDraggingRubric, setIsDraggingRubric] = useState(false);
+  const [rubricReadingStage, setRubricReadingStage] = useState(0);
+  const rubricReadingMessages = [
+    "Opening the document",
+    "Finding criteria and score levels",
+    "Organizing the rubric for review",
+  ];
+
+  useEffect(() => {
+    if (!isParsingRubric) {
+      setRubricReadingStage(0);
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setRubricReadingStage(
+        (current) => (current + 1) % rubricReadingMessages.length
+      );
+    }, 2400);
+
+    return () => window.clearInterval(intervalId);
+  }, [isParsingRubric]);
   const selectedSavedRubric = savedRubricOptions.find(
     (rubric) => String(rubric.id) === String(selectedRubricId)
   );
@@ -102,11 +124,43 @@ export default function RubricSetupStep({
 
           <label
             className={`mt-3 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-8 text-center transition-all sm:min-h-48 ${
-              rubricMode === "uploaded"
+              isDraggingRubric
+                ? "scale-[1.01] border-blue-500 bg-blue-100/70 ring-4 ring-blue-500/15"
+                : rubricMode === "uploaded"
                 ? "border-blue-400 bg-blue-50 ring-4 ring-blue-500/10"
                 : "border-slate-300 bg-white hover:border-blue-400 hover:bg-blue-50/30"
             } ${isParsingRubric ? "pointer-events-none opacity-80" : ""}`}
             onClick={() => setRubricMode("uploaded")}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsDraggingRubric(true);
+            }}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              event.dataTransfer.dropEffect = "copy";
+              setIsDraggingRubric(true);
+            }}
+            onDragLeave={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                setIsDraggingRubric(false);
+              }
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsDraggingRubric(false);
+
+              const file = event.dataTransfer.files?.[0];
+              if (!file) return;
+
+              setRubricMode("uploaded");
+              handleFileUpload(file);
+              setSourceExpanded(false);
+            }}
           >
             <input
               type="file"
@@ -129,6 +183,8 @@ export default function RubricSetupStep({
             <p className="mt-4 text-lg font-bold text-slate-800 sm:text-xl">
               {isParsingRubric
                 ? "Reading your rubric..."
+                : isDraggingRubric
+                ? "Drop the rubric to upload it"
                 : "Drop your rubric PDF or Word document here, or click to browse"}
             </p>
 
@@ -321,23 +377,21 @@ export default function RubricSetupStep({
           {canShowRubricDetails && (
             <>
               {rubricMode !== "saved" ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="grid grid-cols-1 lg:grid-cols-[1fr_250px] gap-4">
-                    <div className="space-y-1.5">
-                      <label className="block text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                        Rubric Title
-                      </label>
+                <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                  <div className="grid grid-cols-1 items-center gap-3 lg:grid-cols-[110px_minmax(0,1fr)_250px]">
+                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Rubric title
+                    </label>
 
-                      <input
-                        value={rubricTitle}
-                        onChange={(e) => setRubricTitle(e.target.value)}
-                        className="w-full bg-[#F8FAFC] text-slate-900 border border-slate-200 text-xs rounded-xl p-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-                        placeholder="Example: Definition Paragraph Rubric"
-                        required
-                      />
-                    </div>
+                    <input
+                      value={rubricTitle}
+                      onChange={(e) => setRubricTitle(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                      placeholder="Example: Definition Paragraph Rubric"
+                      required
+                    />
 
-                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-3 flex items-start gap-2">
+                    <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
                       <Link2 className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
 
                       <p className="text-[11px] text-blue-800 leading-relaxed">
@@ -373,15 +427,38 @@ export default function RubricSetupStep({
           {rubricMode === "uploaded" &&
             isParsingRubric &&
             !criteria.length && (
-              <div className="rounded-2xl border border-blue-100 bg-blue-50 p-6 flex items-start gap-3">
-                <Loader2 className="w-5 h-5 text-blue-700 animate-spin mt-0.5 shrink-0" />
+              <div
+                role="status"
+                aria-live="polite"
+                className="overflow-hidden rounded-2xl border border-blue-200 bg-blue-50/80 p-5"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-blue-700 shadow-sm ring-1 ring-blue-100">
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  </div>
 
-                <div>
-                  <h4 className="font-serif text-sm font-bold text-slate-950">
-                    Reading your rubric...
-                  </h4>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="text-sm font-bold text-slate-950">
+                        Reading your rubric
+                      </h4>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                        In progress
+                      </span>
+                    </div>
 
-                  
+                    <p className="mt-1 text-xs text-blue-800">
+                      {rubricReadingMessages[rubricReadingStage]}…
+                    </p>
+
+                    <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-blue-100">
+                      <div className="h-full w-full animate-pulse rounded-full bg-gradient-to-r from-blue-300 via-blue-600 to-blue-300" />
+                    </div>
+
+                    <p className="mt-2 text-[10px] text-slate-500">
+                      Keep this window open. Praxis is still working on your file.
+                    </p>
+                  </div>
                 </div>
               </div>
             )}

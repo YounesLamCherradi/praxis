@@ -236,7 +236,7 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
   await expect(page.getByText("Annotate selection", { exact: true })).toBeVisible();
   await page.getByTitle("GOOD  -  Good").click();
 
-  await page.getByRole("button", { name: "Save Review", exact: true }).click();
+  await page.getByRole("button", { name: "Submit Grade", exact: true }).click();
   await expect.poll(() => {
     const saved = savedReviewPayload?.teacher_review || {};
     return {

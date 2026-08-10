@@ -17,13 +17,13 @@ import {
   ClipboardList,
   Eye,
   FileCheck,
+  FileDown,
   Highlighter,
   Info,
   Loader2,
   Lock,
   MessageSquare,
   ShieldCheck,
-  Sparkles,
   X,
 } from "lucide-react";
 
@@ -165,6 +165,141 @@ function getLatestAiFeedback(feedbackHistory = []) {
       source === "ai"
     );
   });
+}
+
+function wrapPdfText(value, maxLength = 88) {
+  const words = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const lines = [];
+  let line = "";
+
+  words.forEach((word) => {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length <= maxLength) {
+      line = next;
+      return;
+    }
+    if (line) lines.push(line);
+    line = word;
+  });
+
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+function downloadGradeReportPdf({ assignment, submission, rubric }) {
+  if (!submission) return;
+
+  const criteria = safeArray(rubric?.criteria);
+  const rubricScores = submission.rubricScores || {};
+  const total =
+    Number(submission.rubricTotal || rubric?.totalPoints || 0) ||
+    criteria.reduce((sum, criterion) => sum + Number(criterion.points || 0), 0) ||
+    100;
+  const lines = [
+    "PRAXIS GRADE REPORT",
+    "",
+    `Assignment: ${assignment?.title || submission.assignmentTitle || "Assignment"}`,
+    `Attempt: ${Number(submission.attemptNumber || 1)}`,
+    `Submitted: ${formatDateTime(submission.submittedAt) || "Not recorded"}`,
+    `Reviewed: ${formatDateTime(submission.reviewedAt) || "Not recorded"}`,
+    `Final grade: ${submission.score} / ${total}`,
+    "",
+    "INSTRUCTOR FEEDBACK",
+    ...wrapPdfText(submission.feedback || "No overall feedback was provided."),
+  ];
+
+  if (criteria.length) {
+    lines.push("", "RUBRIC RESULTS");
+    criteria.forEach((criterion) => {
+      const entry = getRubricScoreEntry(rubricScores, criterion.id);
+      lines.push(
+        "",
+        `${criterion.name}: ${entry.score ?? "-"} / ${criterion.points}`,
+        ...wrapPdfText(
+          [entry.bandLabel, entry.comment].filter(Boolean).join(" - ") ||
+            "No criterion-specific feedback was provided."
+        )
+      );
+    });
+  }
+
+  const annotations = safeArray(submission.annotations);
+  if (annotations.length) {
+    lines.push("", "HIGHLIGHTED NOTES");
+    annotations.forEach((annotation, index) => {
+      lines.push(
+        "",
+        ...wrapPdfText(
+          `${index + 1}. ${annotation.selectedText ? `\"${annotation.selectedText}\" - ` : ""}${
+            annotation.comment || annotation.feedback || annotation.note || "Instructor note"
+          }`
+        )
+      );
+    });
+  }
+
+  const ascii = (value) =>
+    String(value || "")
+      .normalize("NFKD")
+      .replace(/[^\x20-\x7E]/g, "?")
+      .replace(/\\/g, "\\\\")
+      .replace(/\(/g, "\\(")
+      .replace(/\)/g, "\\)");
+  const pages = [];
+  for (let index = 0; index < lines.length; index += 48) {
+    pages.push(lines.slice(index, index + 48));
+  }
+
+  const objects = [];
+  const pageRefs = pages.map((_, index) => 4 + index * 2);
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = `<< /Type /Pages /Kids [${pageRefs.map((ref) => `${ref} 0 R`).join(" ")}] /Count ${pages.length} >>`;
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+
+  pages.forEach((pageLines, index) => {
+    const pageRef = 4 + index * 2;
+    const contentRef = pageRef + 1;
+    const stream = [
+      "BT",
+      "/F1 10 Tf",
+      "50 790 Td",
+      "14 TL",
+      ...pageLines.map((line) => `(${ascii(line)}) Tj T*`),
+      "ET",
+    ].join("\n");
+    objects[pageRef] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentRef} 0 R >>`;
+    objects[contentRef] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let index = 1; index < objects.length; index += 1) {
+    offsets[index] = pdf.length;
+    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
+  for (let index = 1; index < objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+
+  const blobUrl = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+  const link = document.createElement("a");
+  const safeTitle = String(assignment?.title || "assignment")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+  link.href = blobUrl;
+  link.download = `${safeTitle || "assignment"}-grade.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
 }
 
 /* =====================================================
@@ -1172,7 +1307,6 @@ export default function Step4FinalSummary({
     submitAssignment,
     saveDraftProgress,
     goToStudentStep,
-    closeStudentAssignment,
     rememberStudentStep,
   } = useStudentWorkspace();
 
@@ -1616,10 +1750,6 @@ export default function Step4FinalSummary({
   const canSubmit =
     Boolean(activeAssignment) &&
     Boolean(finalText) &&
-    !belowMinWords &&
-    !aboveMaxWords &&
-    (!selfGradeRequired ||
-      selfGradeComplete) &&
     attested &&
     submitLockRef.current === false;
 
@@ -1792,37 +1922,6 @@ export default function Step4FinalSummary({
       return;
     }
 
-    if (belowMinWords) {
-      setSubmitMessage(
-        `Your submission has ${wordCount} words. Minimum required is ${minWords}.`
-      );
-      submitLockRef.current = false;
-      setIsSubmitting(false);
-      return;
-    }
-
-    if (aboveMaxWords) {
-      setSubmitMessage(
-        `Your submission has ${wordCount} words. Maximum allowed is ${maxWords}.`
-      );
-      submitLockRef.current = false;
-      setIsSubmitting(false);
-      return;
-    }
-
-    if (
-      selfGradeRequired &&
-      !selfGradeComplete
-    ) {
-      setSubmitMessage(
-        "Please complete your rubric self-assessment before submitting."
-      );
-      setShowSelfGrade(true);
-      submitLockRef.current = false;
-      setIsSubmitting(false);
-      return;
-    }
-
     if (!attested) {
       setSubmitMessage(
         "Please confirm the Academic Honor statement before submitting."
@@ -1876,66 +1975,43 @@ export default function Step4FinalSummary({
 
   if (isSubmitted) {
     return (
-      <div className="flex h-full min-h-0 flex-col gap-3">
-        <SubmittedStatusCard
-          submission={activeSubmission}
-          hasGrade={hasGrade}
-          statusLabel={getStatusLabel(
-            submissionStatus
-          )}
-          rubricTotal={rubricTotal || 100}
-          attemptNumber={
-            currentAttemptNumber
-          }
-          isRevisionAwaitingReview={
-            isCurrentRevisionAwaitingReview
-          }
-          hasPreviousTeacherReview={
-            hasPreviousTeacherReview
-          }
-        />
+      <div className="relative h-full min-h-0 overflow-hidden rounded-2xl border border-slate-200/80 bg-slate-50">
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_right,rgba(37,99,235,0.035)_1px,transparent_1px),linear-gradient(to_bottom,rgba(37,99,235,0.035)_1px,transparent_1px)] bg-[size:32px_32px]" />
+        <div aria-hidden="true" className="pointer-events-none absolute -left-28 top-8 h-80 w-80 rounded-full bg-emerald-100/60 blur-3xl" />
+        <div aria-hidden="true" className="pointer-events-none absolute -right-24 top-1/3 h-80 w-80 rounded-full bg-blue-100/70 blur-3xl" />
 
-        <TeacherReviewLauncher
-          hasTeacherReview={
-            hasTeacherReview
-          }
-          hasGrade={
-            reviewHasGrade
-          }
-          grade={
-            reviewSubmissionToShow?.score
-          }
-          rubricTotal={
-            reviewRubricTotal
-          }
-          annotationCount={
-            reviewAnnotationsToShow.length
-          }
-          reviewAttemptNumber={
-            reviewAttemptNumber
-          }
-          currentAttemptNumber={
-            currentAttemptNumber
-          }
-          currentAttemptPending={
-            isCurrentRevisionAwaitingReview
-          }
-          onOpen={() =>
-            setShowTeacherFeedback(true)
-          }
-        />
+        <div className="relative z-10 h-full overflow-y-auto px-4 py-8 sm:px-6 lg:px-8">
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
+          <SubmissionConfirmation
+            submission={activeSubmission}
+            attemptNumber={currentAttemptNumber}
+            hasGrade={reviewHasGrade}
+            grade={reviewSubmissionToShow?.score}
+            rubricTotal={reviewRubricTotal}
+          />
 
-        <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <button
-            type="button"
-            onClick={() => {
-              closeStudentAssignment();
-            }}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-2.5 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-          >
-            <CheckCircle2 className="h-4 w-4" />
-            Back to Assignments
-          </button>
+          <TeacherReviewLauncher
+            hasTeacherReview={hasTeacherReview}
+            hasGrade={reviewHasGrade}
+            grade={reviewSubmissionToShow?.score}
+            rubricTotal={reviewRubricTotal}
+            annotationCount={reviewAnnotationsToShow.length}
+            reviewAttemptNumber={reviewAttemptNumber}
+            currentAttemptNumber={currentAttemptNumber}
+            currentAttemptPending={isCurrentRevisionAwaitingReview}
+            onOpen={() => setShowTeacherFeedback(true)}
+            onDownloadGrade={
+              reviewHasGrade
+                ? () =>
+                    downloadGradeReportPdf({
+                      assignment: activeAssignment,
+                      submission: reviewSubmissionToShow,
+                      rubric: currentRubric,
+                    })
+                : undefined
+            }
+          />
+          </div>
         </div>
 
         <TeacherFeedbackModal
@@ -1992,7 +2068,6 @@ export default function Step4FinalSummary({
           />
 
           <FinalCheckPanel
-            currentRubric={currentRubric}
             completedSelfCriteria={
               completedSelfCriteria
             }
@@ -2010,14 +2085,10 @@ export default function Step4FinalSummary({
             onOpenSelfGrade={() =>
               setShowSelfGrade(true)
             }
-            wordCount={wordCount}
-            minWords={minWords}
-            maxWords={maxWords}
             belowMinWords={belowMinWords}
             aboveMaxWords={aboveMaxWords}
-            hasAiFeedback={Boolean(aiFeedback)}
             attested={attested}
-            setAttested={setAttested}
+            onToggleAttested={setAttested}
             canSubmit={canSubmit}
             isSubmitting={isSubmitting}
             canResubmit={canResubmit}
@@ -2063,11 +2134,10 @@ export default function Step4FinalSummary({
           onSave={saveSelfAssessment}
           isSaving={isSavingSelfGrade}
           backLabel={
-            rubricBackStep === 2
-              ? "Back to Draft"
-              : "Back to AI Feedback"
+            "Back to Draft"
           }
       />
+
     </div>
   );
 }
@@ -2076,69 +2146,76 @@ export default function Step4FinalSummary({
    SUBMITTED VIEW
 ===================================================== */
 
-function SubmittedStatusCard({
+function SubmissionConfirmation({
   submission,
-  hasGrade,
-  statusLabel,
-  rubricTotal,
   attemptNumber,
-  isRevisionAwaitingReview,
-  hasPreviousTeacherReview,
+  hasGrade,
+  grade,
+  rubricTotal,
 }) {
   return (
-    <div className="shrink-0 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-white text-emerald-700">
-            <CheckCircle2 className="h-5 w-5" />
+    <section className="relative shrink-0 overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-blue-50 shadow-sm">
+      <div aria-hidden="true" className="absolute -right-12 -top-16 h-44 w-44 rounded-full bg-blue-100/50 blur-2xl" />
+      <div aria-hidden="true" className="absolute -bottom-20 left-12 h-40 w-40 rounded-full bg-emerald-100/60 blur-2xl" />
+
+      <div className="relative grid gap-6 p-6 sm:p-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="flex items-start gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-emerald-200 bg-white text-emerald-600 shadow-sm ring-4 ring-emerald-100/70">
+            <CheckCircle2 className="h-7 w-7" />
           </div>
 
           <div>
-            <h3 className="font-serif text-lg font-bold text-slate-950">
-              Assignment {statusLabel}
+            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-100/80 px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-wider text-emerald-700">
+              {hasGrade ? "Review complete" : "Successfully submitted"}
+            </span>
+
+            <h3 className="mt-2 font-serif text-2xl font-bold text-slate-950">
+              Your assignment has been submitted
             </h3>
 
-            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-600">
               {hasGrade
-                ? `Your instructor has completed the review for Attempt ${attemptNumber}. Open the feedback to see comments and highlighted notes.`
-                : isRevisionAwaitingReview
-                ? hasPreviousTeacherReview
-                  ? `Attempt ${attemptNumber} was received. Instructor feedback for this new attempt will be available after review; feedback from Attempt ${Math.max(
-                      1,
-                      attemptNumber - 1
-                    )} remains available below.`
-                  : `Attempt ${attemptNumber} was received. Instructor feedback will be available after review.`
-                : "Your work is locked and currently available to your instructor."}
+                ? "Your instructor has finished grading. Your complete review is ready below."
+                : `Attempt ${attemptNumber} is with your instructor and ready for grading.`}
             </p>
 
-            {submission?.submittedAt && (
-              <p className="mt-1 text-[10px] font-mono text-slate-400">
-                Submitted{" "}
-                {formatDateTime(
-                  submission.submittedAt
-                )}
+            {!hasGrade && (
+              <p className="mt-3 inline-flex items-center gap-2 rounded-xl border border-blue-100 bg-white/80 px-3 py-2 text-[11px] text-slate-500">
+                <Info className="h-3.5 w-3.5 text-blue-600" />
+                You can return here when your instructor publishes the review.
               </p>
             )}
           </div>
         </div>
 
-        {hasGrade && (
-          <div className="rounded-2xl border border-emerald-200 bg-white px-5 py-3 text-right">
-            <p className="text-[9px] font-mono font-black uppercase tracking-wider text-emerald-700">
-              Grade
+        <div className="grid min-w-[250px] grid-cols-2 overflow-hidden rounded-2xl border border-white/80 bg-white/80 shadow-sm backdrop-blur-sm">
+          <div className="border-r border-slate-100 px-4 py-3.5">
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+              Attempt
             </p>
-
-            <p className="mt-1 text-2xl font-mono font-black text-emerald-900">
-              {submission.score}
-              <span className="text-sm text-emerald-600">
-                {" "}
-                / {rubricTotal}
-              </span>
+            <p className="mt-1 text-lg font-bold text-slate-900">#{attemptNumber}</p>
+          </div>
+          <div className="px-4 py-3.5">
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+              Status
+            </p>
+            <p className={`mt-1 text-sm font-bold ${hasGrade ? "text-blue-700" : "text-emerald-700"}`}>
+              {hasGrade ? "Graded" : "Submitted"}
             </p>
           </div>
-        )}
+          <div className="col-span-2 border-t border-slate-100 px-4 py-3.5">
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+              {hasGrade ? "Final grade" : "Submitted on"}
+            </p>
+            <p className={`mt-1 font-mono font-black ${hasGrade ? "text-2xl text-blue-700" : "text-xs text-slate-700"}`}>
+              {hasGrade
+                ? `${grade} / ${rubricTotal}`
+                : formatDateTime(submission?.submittedAt) || "Recorded"}
+            </p>
+          </div>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -2152,24 +2229,29 @@ function TeacherReviewLauncher({
   currentAttemptNumber,
   currentAttemptPending,
   onOpen,
+  onDownloadGrade,
 }) {
   return (
-    <section className="shrink-0 rounded-2xl border border-blue-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+    <section className="shrink-0 overflow-hidden rounded-3xl border border-blue-200 bg-white shadow-sm">
+      <div className="h-1 bg-gradient-to-r from-blue-600 via-indigo-500 to-violet-500" />
+      <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-            <MessageSquare className="h-5 w-5" />
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-700">
+            {hasTeacherReview ? <Award className="h-6 w-6" /> : <MessageSquare className="h-5 w-5" />}
           </div>
 
           <div>
-            <h3 className="font-serif text-base font-bold text-slate-950">
+            <p className="font-mono text-[9px] font-black uppercase tracking-wider text-blue-600">
+              {hasTeacherReview ? "Ready to review" : "Next step"}
+            </p>
+            <h3 className="mt-1 font-serif text-lg font-bold text-slate-950">
               {currentAttemptPending &&
               hasTeacherReview
                 ? `Attempt ${reviewAttemptNumber} Instructor Review`
                 : "Instructor Review"}
             </h3>
 
-            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+            <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-slate-500">
               {currentAttemptPending &&
               hasTeacherReview
                 ? `Attempt ${currentAttemptNumber} feedback is not available yet. You can still review the completed feedback from Attempt ${reviewAttemptNumber}.`
@@ -2188,18 +2270,31 @@ function TeacherReviewLauncher({
           </div>
         </div>
 
-        <button
-          type="button"
-          disabled={!hasTeacherReview}
-          onClick={onOpen}
-          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
-        >
-          <Eye className="h-4 w-4" />
-          {currentAttemptPending &&
-          hasTeacherReview
-            ? `View Attempt ${reviewAttemptNumber} Feedback`
-            : "Check Instructor Feedback"}
-        </button>
+        <div className="grid shrink-0 gap-2 sm:min-w-[210px]">
+          {onDownloadGrade && (
+            <button
+              type="button"
+              onClick={onDownloadGrade}
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100"
+            >
+              <FileDown className="h-4 w-4" />
+              Download Grade PDF
+            </button>
+          )}
+
+          <button
+            type="button"
+            disabled={!hasTeacherReview}
+            onClick={onOpen}
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+          >
+            <Eye className="h-4 w-4" />
+            {currentAttemptPending &&
+            hasTeacherReview
+              ? `View Attempt ${reviewAttemptNumber} Feedback`
+              : "Check Instructor Feedback"}
+          </button>
+        </div>
       </div>
     </section>
   );
@@ -2274,7 +2369,6 @@ function FinalDraftPreview({
 }
 
 function FinalCheckPanel({
-  currentRubric,
   completedSelfCriteria,
   rubricCriteriaCount,
   selfRubricTotal,
@@ -2282,14 +2376,10 @@ function FinalCheckPanel({
   selfGradeComplete,
   selfGradeRequired,
   onOpenSelfGrade,
-  wordCount,
-  minWords,
-  maxWords,
   belowMinWords,
   aboveMaxWords,
-  hasAiFeedback,
   attested,
-  setAttested,
+  onToggleAttested,
   canSubmit,
   isSubmitting,
   canResubmit,
@@ -2297,17 +2387,12 @@ function FinalCheckPanel({
   handleSubmit,
   onBack,
 }) {
+  const [showOwnWorkMeaning, setShowOwnWorkMeaning] = useState(false);
   const wordCountReady =
     !belowMinWords && !aboveMaxWords;
-  const submitDisabledReason = belowMinWords
-    ? `Add ${Number(minWords) - wordCount} more words before submitting.`
-    : aboveMaxWords
-      ? `Remove ${wordCount - Number(maxWords)} words before submitting.`
-      : selfGradeRequired && !selfGradeComplete
-        ? "Complete and save every rubric criterion before submitting."
-        : !attested
-          ? "Confirm that this is your own work to unlock Submit."
-          : "";
+  const submitDisabledReason = attested
+    ? "Add some writing before submitting."
+    : "";
 
   return (
     <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -2331,41 +2416,68 @@ function FinalCheckPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
+        <div className={`rounded-xl border p-3.5 ${attested ? "border-emerald-200 bg-emerald-50/70" : "border-blue-200 bg-blue-50/70"}`}>
+          <p className="mb-2 font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
+            Before you submit
+          </p>
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={attested}
+              onChange={(event) => onToggleAttested(event.target.checked)}
+              className="sr-only"
+            />
+            <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border-2 transition-colors ${attested ? "border-emerald-600 bg-emerald-600 text-white" : "border-slate-300 bg-white text-transparent"}`}>
+              <Check className="h-4 w-4" />
+            </span>
+            <span>
+              <span className="block text-xs font-bold text-slate-900">Confirm your work</span>
+              <span className="mt-1 block text-[11px] font-medium leading-[1.15rem] text-slate-600">
+                I confirm this is my own work. I planned and wrote it, the choices are mine, and I only used AI in the ways allowed for this assignment.
+              </span>
+            </span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowOwnWorkMeaning((current) => !current)}
+            aria-expanded={showOwnWorkMeaning}
+            className="ml-9 mt-2 inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 hover:text-blue-900"
+          >
+            What does &ldquo;my own work&rdquo; mean?
+          </button>
+
+          <OwnWorkDefinition
+            open={showOwnWorkMeaning}
+            onClose={() => setShowOwnWorkMeaning(false)}
+          />
+        </div>
+
         {selfGradeRequired && (
           <button
             type="button"
             onClick={onOpenSelfGrade}
-            className={`flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-all ${
-              selfGradeComplete
-                ? "border-emerald-200 bg-emerald-50"
-                : "border-blue-100 bg-blue-50 hover:bg-blue-100"
-            }`}
+            className="flex w-full items-center justify-between gap-3 border-y border-slate-100 bg-white px-1 py-2 text-left transition-all hover:bg-slate-50"
           >
             <div className="flex items-center gap-2">
               <ClipboardList
                 className={`h-4 w-4 shrink-0 ${
                   selfGradeComplete
-                    ? "text-emerald-700"
-                    : "text-blue-700"
+                    ? "text-emerald-600"
+                    : "text-slate-500"
                 }`}
               />
 
               <div>
                 <p className="text-xs font-bold text-slate-900">
-                  Rubric Self-Assessment
+                  Optional rubric reflection
                 </p>
 
                 <p className="mt-0.5 text-[10px] text-slate-500">
                   {selfGradeComplete
                     ? `Saved ${selfRubricTotal}/${rubricTotal}`
-                    : `${completedSelfCriteria}/${rubricCriteriaCount} criteria completed`}
+                    : `${completedSelfCriteria}/${rubricCriteriaCount} criteria completed · optional`}
                 </p>
 
-                {currentRubric?.title && (
-                  <p className="mt-0.5 max-w-[220px] truncate text-[9px] font-mono text-slate-400">
-                    {currentRubric.title}
-                  </p>
-                )}
               </div>
             </div>
 
@@ -2376,69 +2488,6 @@ function FinalCheckPanel({
             )}
           </button>
         )}
-
-
-
-        <div className="overflow-hidden rounded-xl border border-slate-200 bg-[#F8FAFC]">
-          <SubmissionReadinessRow
-            label="Draft"
-            value={
-              aboveMaxWords
-                ? `${wordCount} / ${maxWords} max`
-                : belowMinWords
-                  ? `${wordCount} / ${minWords} min`
-                  : `${wordCount} words · ready`
-            }
-            ready={wordCountReady}
-          />
-          <SubmissionReadinessRow
-            label="AI feedback"
-            value={hasAiFeedback ? "Reviewed" : "Not used"}
-            ready={true}
-            optional={!hasAiFeedback}
-          />
-          {selfGradeRequired && (
-            <SubmissionReadinessRow
-              label="Rubric check"
-              value={selfGradeComplete ? "Complete" : `${completedSelfCriteria}/${rubricCriteriaCount} complete`}
-              ready={selfGradeComplete}
-            />
-          )}
-        </div>
-
-        <button
-          type="button"
-          onClick={() => setAttested(!attested)}
-          aria-pressed={attested}
-          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-2 text-left transition-all ${
-            attested
-              ? "border-emerald-200 bg-emerald-50"
-              : "border-amber-200 bg-amber-50 hover:bg-amber-100/70"
-          }`}
-        >
-          <span
-            aria-hidden="true"
-            className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 ${
-              attested
-                ? "border-emerald-600 bg-emerald-600 text-white"
-                : "border-amber-500 bg-white text-transparent"
-            }`}
-          >
-            <Check className="h-3.5 w-3.5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-slate-900">
-              {attested ? "Academic honor confirmed" : "Confirm this is your own work"}
-            </p>
-            <p className="mt-0.5 text-[10px] leading-snug text-slate-600">
-              I reviewed the final draft and am ready to submit it to my instructor.
-            </p>
-          </div>
-          <span className="sr-only">
-            {attested ? "Confirmed" : "Not confirmed"}
-          </span>
-        </button>
-
         {submitMessage && (
           <div
             className={`rounded-xl border px-3 py-1.5 text-[11px] font-semibold ${
@@ -2500,16 +2549,243 @@ function FinalCheckPanel({
   );
 }
 
-function SubmissionReadinessRow({ label, value, ready, optional = false }) {
+function OwnWorkDefinition({ open, onClose }) {
+  if (!open) return null;
+
+  const principles = [
+    ["You did the thinking.", "The ideas and the plan are yours."],
+    ["You wrote the text.", "The final words are yours. They were not copied from someone else or generated by AI for you to hand in as your own."],
+    ["You made the choices.", "When you used help, including AI, you decided what to accept, change, or reject."],
+    ["You can explain it.", "You understand your writing and could talk about why you made your choices."],
+  ];
+
+  return createPortal(
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <button type="button" className="absolute inset-0" onClick={onClose} aria-label="Close own-work explanation" />
+      <section role="dialog" aria-modal="true" aria-labelledby="own-work-title" className="relative w-full max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <header className="flex items-start justify-between gap-4 border-b border-blue-100 bg-gradient-to-r from-blue-50 via-white to-emerald-50 px-6 py-5">
+          <div className="flex items-start gap-3">
+            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-600/20"><ShieldCheck className="h-5 w-5" /></span>
+            <div>
+              <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">Before you submit</p>
+              <h2 id="own-work-title" className="mt-1 font-serif text-xl font-black text-slate-950">Your work, your voice</h2>
+              <p className="mt-1 text-xs leading-5 text-slate-600">Here is exactly what Praxis means by &ldquo;my own work.&rdquo;</p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-900" aria-label="Close"><X className="h-4 w-4" /></button>
+        </header>
+
+        <div className="max-h-[65vh] overflow-y-auto px-6 py-5">
+          <div className="grid gap-3 sm:grid-cols-2">
+            {principles.map(([title, text]) => (
+              <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-start gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700"><Check className="h-4 w-4" /></span>
+                  <div><h3 className="text-xs font-bold text-slate-900">{title}</h3><p className="mt-1 text-[11px] leading-5 text-slate-600">{text}</p></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+            <p className="text-xs leading-5 text-blue-900"><strong>Using AI is allowed in Praxis.</strong> You can use the Coach to help you think and AI feedback on your draft when your teacher allows it. That is normal and encouraged.</p>
+            <p className="mt-3 border-t border-blue-200 pt-3 text-xs font-bold leading-5 text-blue-950">AI can support your work, but it should not do the work for you. The thinking, decisions, and final writing must be yours.</p>
+          </div>
+        </div>
+
+        <footer className="border-t border-slate-200 bg-slate-50 px-6 py-4">
+          <button type="button" onClick={onClose} className="w-full rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-sm hover:bg-blue-700">I understand</button>
+        </footer>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
+export function HonorAgreementModal({ open, onClose, onAccept }) {
+  const scrollRef = useRef(null);
+  const [readToEnd, setReadToEnd] = useState(false);
+  const [accepted, setAccepted] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+
+    setReadToEnd(false);
+    setAccepted(false);
+    setProgress(0);
+
+    const frame = window.requestAnimationFrame(() => {
+      const element = scrollRef.current;
+      if (!element) return;
+      if (element.scrollHeight <= element.clientHeight + 2) {
+        setProgress(100);
+        setReadToEnd(true);
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [open]);
+
+  if (!open) return null;
+
+  const handleScroll = (event) => {
+    const element = event.currentTarget;
+    const available = element.scrollHeight - element.clientHeight;
+    const nextProgress = available > 0
+      ? Math.min(100, Math.round((element.scrollTop / available) * 100))
+      : 100;
+    setProgress(nextProgress);
+
+    if (element.scrollTop + element.clientHeight >= element.scrollHeight - 8) {
+      setReadToEnd(true);
+      setProgress(100);
+    }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Close honor agreement"
+        onClick={onClose}
+        className="absolute inset-0"
+      />
+
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="honor-agreement-title"
+        className="relative flex max-h-[min(760px,94vh)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+      >
+        <header className="shrink-0 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 sm:px-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-blue-200 bg-white text-blue-700 shadow-sm">
+                <ShieldCheck className="h-5 w-5" />
+              </span>
+              <div>
+                <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
+                  Before you submit
+                </p>
+                <h2 id="honor-agreement-title" className="mt-1 font-serif text-xl font-bold text-slate-950">
+                  Academic Honor Agreement
+                </h2>
+                <p className="mt-1 text-xs text-slate-600">
+                  Please read the complete agreement before accepting it.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:text-slate-900"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+
+        <div className="shrink-0 bg-slate-100">
+          <div
+            className="h-1 bg-blue-600 transition-[width] duration-150"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7"
+        >
+          <div className="space-y-5 text-sm leading-7 text-slate-700">
+            <p>
+              By submitting this assignment, I confirm that the work represents my own learning and effort. I understand that academic honesty protects the value of my work and the learning community.
+            </p>
+
+            <AgreementItem number="1" title="My own work">
+              I wrote and reviewed this submission myself. I have not presented another person’s work as my own.
+            </AgreementItem>
+            <AgreementItem number="2" title="Sources and collaboration">
+              I have acknowledged sources, quotations, ideas, and permitted collaboration according to my instructor’s requirements.
+            </AgreementItem>
+            <AgreementItem number="3" title="Responsible use of AI">
+              Any AI assistance followed the rules for this assignment. I remain responsible for the accuracy, originality, and final wording of what I submit.
+            </AgreementItem>
+            <AgreementItem number="4" title="Accurate submission">
+              This is the version I intend my instructor to grade. I understand that my instructor may review the writing process and supporting activity connected to this assignment.
+            </AgreementItem>
+
+            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-xs leading-6 text-blue-900">
+              I understand that submitting work that does not follow these commitments may be handled under my institution’s academic-integrity policies.
+            </div>
+          </div>
+        </div>
+
+        <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+          {!readToEnd && (
+            <p className="mb-3 flex items-center justify-center gap-2 text-[10px] font-semibold text-amber-700">
+              <ChevronDown className="h-3.5 w-3.5" />
+              Scroll to the end to unlock acceptance
+            </p>
+          )}
+
+          <label
+            className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
+              readToEnd
+                ? "cursor-pointer border-emerald-200 bg-white"
+                : "cursor-not-allowed border-slate-200 bg-slate-100 opacity-60"
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={accepted}
+              disabled={!readToEnd}
+              onChange={(event) => setAccepted(event.target.checked)}
+              className="mt-0.5 h-4 w-4 accent-emerald-600"
+            />
+            <span className="text-xs font-semibold leading-5 text-slate-700">
+              I have read and agree to the Academic Honor Agreement.
+            </span>
+          </label>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 hover:bg-slate-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!accepted}
+              onClick={onAccept}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              Accept Agreement
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>,
+    document.body
+  );
+}
+
+function AgreementItem({ number, title, children }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-slate-200 px-3 py-1.5 last:border-b-0">
-      <span className="shrink-0 text-[11px] font-bold text-slate-700">{label}</span>
-      <span className={`inline-flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap text-right text-[10px] font-bold ${
-        ready ? "text-emerald-700" : "text-amber-700"
-      }`}>
-        {ready ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" /> : <AlertTriangle className="h-3.5 w-3.5 shrink-0" />}
-        {value}{optional ? " · optional" : ""}
+    <div className="flex items-start gap-3">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 font-mono text-[10px] font-black text-white">
+        {number}
       </span>
+      <div>
+        <h3 className="text-sm font-bold text-slate-900">{title}</h3>
+        <p className="mt-0.5 text-sm leading-6 text-slate-600">{children}</p>
+      </div>
     </div>
   );
 }
@@ -2542,6 +2818,9 @@ function HorizontalRubricCriteria({
             (band) => String(band.id) === String(selected?.bandId)
           );
           const isActive = index === activeIndex;
+          const isCompleted = Boolean(
+            selected?.bandId || selected?.score !== undefined
+          );
 
           return (
             <button
@@ -2550,7 +2829,9 @@ function HorizontalRubricCriteria({
               aria-pressed={isActive}
               onClick={() => onOpenCriterion(criterionKey)}
               className={`min-w-[190px] flex-1 rounded-xl border px-3 py-2 text-left transition-all ${
-                isActive
+                isCompleted
+                  ? "border-emerald-300 bg-emerald-50 shadow-sm"
+                  : isActive
                   ? "border-blue-300 bg-blue-50 shadow-sm ring-2 ring-blue-500/10"
                   : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
               }`}
@@ -2753,13 +3034,6 @@ function SelfGradeDrawer({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400 hover:text-slate-900"
-          >
-            <X className="h-4 w-4" />
-          </button>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC] p-3">
@@ -2823,8 +3097,8 @@ function SelfGradeDrawer({
               className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"
             >
               {completedSelfCriteria === rubricCriteria.length
-                ? "Close Rubric"
-                : backLabel || "Back to AI Feedback"}
+                ? "Back to Draft"
+                : backLabel || "Back to Draft"}
             </button>
 
             <button

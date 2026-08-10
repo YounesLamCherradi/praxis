@@ -1,236 +1,74 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowLeft,
-  BarChart3,
   BookOpen,
   Bot,
   Calendar,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   ClipboardCheck,
-  ClipboardList,
-  Clock,
   FileText,
   Hash,
-  Lock,
-  ListChecks,
   MessageSquareText,
   Pencil,
-  PlayCircle,
+  Save,
   ShieldCheck,
   Timer,
+  X,
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
-function boolFromAssignment(...values) {
-  for (const value of values) {
-    if (value !== undefined && value !== null) {
-      return Boolean(value);
-    }
-  }
-
-  return false;
+function firstValue(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== "") ?? "";
 }
 
-function valueFromAssignment(...values) {
-  for (const value of values) {
-    if (value !== undefined && value !== null && value !== "") {
-      return value;
-    }
-  }
-
-  return "";
-}
-
-function getStatus(assignment) {
-  const value = String(
-    assignment?.status ||
-      assignment?.publicationStatus ||
-      assignment?.state ||
-      ""
+function getStatus(assignment = {}) {
+  const status = String(
+    assignment.status || assignment.publicationStatus || assignment.state || ""
   ).toLowerCase();
-
-  if (
-    value === "published" ||
-    value === "active" ||
-    assignment?.isPublished === true ||
-    assignment?.published === true
-  ) {
-    return "Published";
-  }
-
-  return "Draft";
+  return status === "published" || status === "active" || assignment.isPublished === true
+    ? "Published"
+    : "Draft";
 }
 
-function getStatusStyles(status) {
-  return status === "Published"
-    ? "border-blue-200 bg-blue-50 text-blue-700"
-    : "border-slate-200 bg-slate-50 text-slate-600";
+function dateParts(assignment = {}) {
+  const raw = String(firstValue(assignment.dueDate, assignment.deadline, assignment.dueAt));
+  const match = raw.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}))?/);
+  return {
+    date: match?.[1] || "",
+    time: String(firstValue(assignment.dueTime, assignment.deadlineTime, match?.[2], "23:59")),
+  };
 }
 
-function formatPastePolicy(value) {
-  const clean = String(value || "warn").toLowerCase();
-
-  if (clean === "allow") return "Allow paste";
-  if (clean === "block") return "Block paste";
-
-  return "Warn students";
+function createForm(assignment = {}) {
+  const due = dateParts(assignment);
+  const aiSettings = assignment.aiSupportSettings || {};
+  return {
+    title: String(assignment.title || ""),
+    description: String(firstValue(assignment.description, assignment.instructions, assignment.prompt)),
+    dueDate: due.date,
+    dueTime: due.time,
+    minWords: String(firstValue(assignment.minWords, assignment.wordCountMin, assignment.minimumWords, "")),
+    maxWords: String(firstValue(assignment.maxWords, assignment.wordCountMax, assignment.maximumWords, "")),
+    coachEnabled: Boolean(firstValue(aiSettings.aiIdeasCoach, assignment.aiIdeasCoach, assignment.allowAI, false)),
+    coachMinutes: String(firstValue(aiSettings.chatTimeLimit, assignment.chatTimeLimit, assignment.coachTimeLimitMinutes, 0)),
+    autoOutline: Boolean(firstValue(aiSettings.autoOutlineFromChat, assignment.autoOutlineFromChat, assignment.autoBuildOutlineFromCoach, false)),
+    feedbackChecks: String(firstValue(aiSettings.feedbackRequestLimit, assignment.feedbackRequestLimit, assignment.feedbackChecks, 0)),
+  };
 }
 
-function getPastePolicyTone(value) {
-  const clean = String(value || "warn").toLowerCase();
-
-  if (clean === "block") return "amber";
-  if (clean === "allow") return "slate";
-
-  return "blue";
-}
-
-function assignmentMatchesSubmission(assignment, submission) {
-  return String(submission.assignmentId) === String(assignment.id);
-}
-
-function getSubmissionText(submission = {}) {
-  return String(
-    submission.submittedText ||
-      submission.submissionText ||
-      submission.finalText ||
-      submission.content ||
-      submission.draftText ||
-      ""
-  ).trim();
-}
-
-function hasSubmissionEvidence(submission = {}) {
-  return Boolean(
-    submission.submittedAt ||
-      submission.resubmittedAt ||
-      getSubmissionText(submission)
-  );
-}
-
-function getStudentKey(submission = {}) {
-  return String(
-    submission.studentEmail ||
-      submission.userEmail ||
-      submission.id ||
-      "student"
-  )
-    .trim()
-    .toLowerCase();
-}
-
-function formatCoachLimit(value, allowAI) {
-  if (!allowAI) return "Disabled";
-
-  const numeric = Number(value);
-
-  if (numeric < 0) return "Disabled";
-  if (numeric === 0) return "Unlimited";
-
-  return `${numeric} minute${numeric === 1 ? "" : "s"}`;
-}
-
-function formatAssignmentDeadline(assignment = {}) {
-  const rawDate = String(
-    assignment.dueDate ||
-      assignment.deadline ||
-      assignment.dueAt ||
-      ""
-  ).trim();
-
-  if (!rawDate) return "No due date";
-
-  const explicitTime = String(
-    assignment.dueTime ||
-      assignment.deadlineTime ||
-      assignment.timeDue ||
-      ""
-  ).trim();
-
-  const match = rawDate.match(
-    /^(\d{4})-(\d{2})-(\d{2})(?:[T\s](\d{2}):(\d{2}))?/
-  );
-
-  if (!match) {
-    return formatDisplayDate(rawDate);
-  }
-
-  const [, year, month, day, embeddedHour, embeddedMinute] = match;
-  const date = new Date(
-    Number(year),
-    Number(month) - 1,
-    Number(day)
-  );
-
-  const dateLabel = new Intl.DateTimeFormat(
-    undefined,
-    {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }
-  ).format(date);
-
-  const timeText =
-    explicitTime ||
-    (embeddedHour !== undefined
-      ? `${embeddedHour}:${embeddedMinute}`
-      : "");
-
-  if (!timeText) return dateLabel;
-
-  const [hourText, minuteText = "00"] =
-    timeText.split(":");
-
-  const time = new Date(
-    2000,
-    0,
-    1,
-    Number(hourText),
-    Number(minuteText)
-  );
-
-  const timeLabel = new Intl.DateTimeFormat(
-    undefined,
-    {
-      hour: "numeric",
-      minute: "2-digit",
-    }
-  ).format(time);
-
-  return `${dateLabel} · ${timeLabel}`;
-}
-
-function getRubricSourceLabel(source) {
-  if (source === "uploaded") return "Uploaded";
-  if (source === "saved") return "Reused";
-  if (source === "generated") return "AI-generated";
-  if (source === "manual") return "Manual";
-
-  return "Attached";
-}
-
-function formatDisplayDate(value) {
-  if (!value || value === "Not available" || value === "Not published") {
-    return value || "Not available";
-  }
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
+function formatDeadline(assignment = {}) {
+  const { date, time } = dateParts(assignment);
+  if (!date) return "No due date";
+  const parsed = new Date(`${date}T${time || "23:59"}`);
+  if (Number.isNaN(parsed.getTime())) return date;
   return new Intl.DateTimeFormat(undefined, {
     year: "numeric",
     month: "short",
     day: "numeric",
-    hour: value.includes?.("T") ? "2-digit" : undefined,
-    minute: value.includes?.("T") ? "2-digit" : undefined,
-  }).format(date);
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
 }
 
 export default function TeacherAssignmentDetails({
@@ -242,668 +80,301 @@ export default function TeacherAssignmentDetails({
     selectedAssignment,
     setSelectedAssignment,
     setView,
-    submissions = [],
+    updateAssignment,
+    classes = [],
   } = useTeacherWorkspace();
-
-  const [rubricExpanded, setRubricExpanded] = useState(false);
-  const [openRubricCriterionKey, setOpenRubricCriterionKey] = useState(null);
-
-  // The create flow can update the local assignment selection one render
-  // before the shared workspace selection settles.  Accept the assignment
-  // owned by the modal so that transition can never render an empty dialog.
   const assignment = assignmentProp || selectedAssignment;
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState(() => createForm(assignment));
 
-  const submissionMetrics = useMemo(() => {
-    if (!assignment) {
-      return {
-        students: 0,
-        attempts: 0,
-        pending: 0,
-      };
-    }
-
-    const assignmentSubmissions = submissions.filter(
-      (submission) =>
-        assignmentMatchesSubmission(
-          assignment,
-          submission
-        )
+  const courseName = useMemo(() => {
+    const course = classes.find((item) =>
+      [assignment?.classId, assignment?.courseId, assignment?.classCode, assignment?.courseCode]
+        .filter(Boolean)
+        .some((value) => [item.id, item.code].map(String).includes(String(value)))
     );
-
-    const students = new Set();
-    let pending = 0;
-
-    assignmentSubmissions.forEach((submission) => {
-      if (hasSubmissionEvidence(submission)) {
-        students.add(getStudentKey(submission));
-      }
-
-      const status = String(
-        submission.status || ""
-      )
-        .trim()
-        .toLowerCase();
-
-      if (
-        submission.isCurrent !== false &&
-        ["submitted", "late"].includes(status) &&
-        hasSubmissionEvidence(submission)
-      ) {
-        pending += 1;
-      }
-    });
-
-    return {
-      students: students.size,
-      attempts: assignmentSubmissions.length,
-      pending,
-    };
-  }, [assignment, submissions]);
+    return firstValue(assignment?.className, assignment?.courseName, course?.name, assignment?.classCode, assignment?.courseCode, "Course");
+  }, [assignment, classes]);
 
   if (!assignment) return null;
 
+  const minWords = firstValue(assignment.minWords, assignment.wordCountMin, assignment.minimumWords);
+  const maxWords = firstValue(assignment.maxWords, assignment.wordCountMax, assignment.maximumWords);
+  const wordCount = minWords && maxWords ? `${minWords}–${maxWords} words` : minWords ? `${minWords}+ words` : maxWords ? `Up to ${maxWords} words` : "No word limit";
+  const instructions = firstValue(assignment.description, assignment.instructions, assignment.prompt, "No student instructions added yet.");
   const status = getStatus(assignment);
-  const isPublished = status === "Published";
-
-  const aiSupportSettings = assignment.aiSupportSettings || {};
-
-  const minWords = valueFromAssignment(
-    assignment.minWords,
-    assignment.wordCountMin,
-    assignment.minimumWords,
-    0
-  );
-
-  const maxWords = valueFromAssignment(
-    assignment.maxWords,
-    assignment.wordCountMax,
-    assignment.maximumWords,
-    0
-  );
-
-  const allowAI = boolFromAssignment(
-    aiSupportSettings.aiIdeasCoach,
-    assignment.aiIdeasCoach,
-    assignment.allowAI,
-    assignment.ideationAI
-  );
-
-  const coachTimeLimitMinutes = valueFromAssignment(
-    aiSupportSettings.chatTimeLimit,
-    assignment.chatTimeLimit,
-    aiSupportSettings.coachTimeLimitMinutes,
-    assignment.coachTimeLimitMinutes,
-    assignment.aiCoachTimeLimitMinutes,
-    0
-  );
-
-  const feedbackChecks = Number(
-    valueFromAssignment(
-      aiSupportSettings.feedbackRequestLimit,
-      assignment.feedbackRequestLimit,
-      assignment.feedbackChecks,
-      assignment.maxFeedbackChecks,
-      0
-    )
-  );
-
-  const aiFeedback = feedbackChecks > 0;
-
-  const autoBuildOutlineFromCoach = Boolean(
-    allowAI &&
-      boolFromAssignment(
-        aiSupportSettings.autoOutlineFromChat,
-        assignment.autoOutlineFromChat,
-        aiSupportSettings.autoBuildOutlineFromCoach,
-        assignment.autoBuildOutlineFromCoach,
-        assignment.generateOutlineFromCoach
-      )
-  );
-
+  const aiSettings = assignment.aiSupportSettings || {};
+  const coachEnabled = Boolean(firstValue(aiSettings.aiIdeasCoach, assignment.aiIdeasCoach, assignment.allowAI, false));
+  const coachMinutes = Number(firstValue(aiSettings.chatTimeLimit, assignment.chatTimeLimit, assignment.coachTimeLimitMinutes, 0));
+  const feedbackChecks = Number(firstValue(aiSettings.feedbackRequestLimit, assignment.feedbackRequestLimit, assignment.feedbackChecks, 0));
+  const autoOutline = Boolean(firstValue(aiSettings.autoOutlineFromChat, assignment.autoOutlineFromChat, assignment.autoBuildOutlineFromCoach, false));
   const rubricSchema = assignment.rubricSchema || null;
+  const rubricCriteria = rubricSchema?.criteria || assignment.rubricCriteria || (Array.isArray(assignment.rubric) ? assignment.rubric : assignment.rubric?.criteria) || [];
+  const rubricAttached = assignment.rubricSkipped !== true && assignment.rubricSource !== "skip" && Boolean(rubricSchema || rubricCriteria.length || assignment.rubricId);
 
-  const rubricCriteria =
-    rubricSchema?.criteria ||
-    assignment.rubricCriteria ||
-    (Array.isArray(assignment.rubric)
-      ? assignment.rubric
-      : assignment.rubric?.criteria) ||
-    [];
+  const close = () => {
+    if (onClose) return onClose();
+    setSelectedAssignment?.(null);
+    setView?.("list");
+  };
 
-  const rubricAttached = Boolean(
-    assignment.rubricSkipped !== true &&
-      assignment.rubricSource !== "skip" &&
-      (
-        rubricSchema ||
-        rubricCriteria.length > 0 ||
-        assignment.rubricId
-      )
-  );
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
 
-  const rubricCriteriaCount = rubricCriteria.length;
+  const cancelEdit = () => {
+    setForm(createForm(assignment));
+    setEditing(false);
+    setError("");
+  };
 
-  const rubricPoints =
-    rubricSchema?.totalPoints ||
-    assignment.rubricTotal ||
-    assignment.rubricPoints ||
-    "";
-
-  const instructions =
-    assignment.instructions ||
-    assignment.description ||
-    assignment.prompt ||
-    "No assignment instructions provided.";
-
-  const createdAt = formatDisplayDate(
-    valueFromAssignment(assignment.createdAt, "Not available")
-  );
-
-  const updatedAt = formatDisplayDate(
-    valueFromAssignment(
-      assignment.updatedAt,
-      assignment.lastUpdated,
-      assignment.createdAt,
-      "Not available"
-    )
-  );
-
-  const publishedAt = isPublished
-    ? formatDisplayDate(
-        valueFromAssignment(assignment.publishedAt, updatedAt)
-      )
-    : "Not published";
-
-  function goBackToAssignments() {
-    setSelectedAssignment(null);
-
-    if (onClose) {
-      onClose();
+  const save = async () => {
+    if (!form.title.trim()) {
+      setError("Add an assignment title before saving.");
       return;
     }
-
-    setView("list");
-  }
-
-  return (
-    <div className={modalMode ? "space-y-5" : "space-y-5 animate-fade-in-up"}>
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <button
-          type="button"
-          onClick={goBackToAssignments}
-          className="group inline-flex items-center gap-2 text-xs font-bold text-slate-500 transition-colors hover:text-blue-700"
-        >
-          <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-          {modalMode ? "Close details" : "Back to assignments"}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setView("edit")}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          Edit assignment
-        </button>
-      </div>
-
-      <div className="space-y-5 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-        <header className="flex flex-col gap-4 border-b border-slate-100 pb-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-4xl space-y-2">
-            <div className="inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest text-blue-700">
-              <ClipboardList className="h-3 w-3" />
-              Assignment overview
-            </div>
-
-            <h1 className="font-serif text-2xl font-black text-slate-950 sm:text-3xl">
-              {assignment.title || "Untitled Assignment"}
-            </h1>
-
-            <p className="max-w-3xl text-xs leading-relaxed text-slate-500">
-              Review the student-facing task, AI support, integrity rules,
-              rubric, and assignment activity.
-            </p>
-          </div>
-
-          <span
-            className={`inline-flex shrink-0 rounded border px-2.5 py-1 font-mono text-[9px] font-bold uppercase tracking-wider ${getStatusStyles(
-              status
-            )}`}
-          >
-            {status}
-          </span>
-        </header>
-
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-7">
-          <InfoCard
-            icon={BookOpen}
-            label="Course"
-            value={`${assignment.classCode || "No code"}${
-              assignment.className ? `  -  ${assignment.className}` : ""
-            }`}
-          />
-
-          <InfoCard
-            icon={Calendar}
-            label="Due date"
-            value={formatAssignmentDeadline(assignment)}
-          />
-
-          <InfoCard
-            icon={Hash}
-            label="Word count"
-            value={`${minWords || 0}–${maxWords || 0} words`}
-          />
-
-          <InfoCard
-            icon={CheckCircle2}
-            label="Feedback checks"
-            value={`${feedbackChecks} allowed`}
-          />
-
-          <InfoCard
-            icon={BarChart3}
-            label="Students"
-            value={submissionMetrics.students}
-          />
-
-          <InfoCard
-            icon={ListChecks}
-            label="Attempts"
-            value={submissionMetrics.attempts}
-          />
-
-          <InfoCard
-            icon={ClipboardCheck}
-            label="Pending review"
-            value={submissionMetrics.pending}
-          />
-        </div>
-
-        <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-          <SectionHeading
-            icon={FileText}
-            title="Assignment Instructions"
-            description="Student-facing instructions shown in the writing workflow."
-          />
-
-          <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-              {instructions}
-            </p>
-          </div>
-        </section>
-
-        <section className="space-y-4 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-5">
-          <SectionHeading
-            icon={Bot}
-            title="Student Support"
-            description="Original Praxis assignment-level support controls."
-          />
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
-            <SettingRow
-              icon={MessageSquareText}
-              label="Coach"
-              description="Conversational brainstorming and planning support."
-              enabled={allowAI}
-            />
-
-            <MetricRow
-              icon={Timer}
-              label="Coach active-time limit"
-              value={formatCoachLimit(coachTimeLimitMinutes, allowAI)}
-            />
-
-            <SettingRow
-              icon={BookOpen}
-              label="Auto-build outline"
-              description="Convert Coach chat into editable notes."
-              enabled={autoBuildOutlineFromCoach}
-            />
-
-            <MetricRow
-              icon={ShieldCheck}
-              label="AI feedback requests"
-              value={
-                aiFeedback
-                  ? `${feedbackChecks} request${feedbackChecks === 1 ? "" : "s"}`
-                  : "Disabled"
-              }
-            />
-          </div>
-        </section>
-
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-          <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-            <SectionHeading
-              icon={ClipboardCheck}
-              title="Rubric"
-              description="Rubric attached to this assignment."
-            />
-
-            {rubricAttached ? (
-              <div className="overflow-hidden rounded-xl border border-blue-100 bg-blue-50">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setRubricExpanded((current) => {
-                      const next = !current;
-
-                      if (
-                        next &&
-                        openRubricCriterionKey === null &&
-                        rubricCriteria.length > 0
-                      ) {
-                        const firstCriterion = rubricCriteria[0];
-                        setOpenRubricCriterionKey(
-                          String(firstCriterion.id || "criterion-0")
-                        );
-                      }
-
-                      return next;
-                    })
-                  }
-                  className="flex w-full items-center justify-between gap-4 p-4 text-left"
-                >
-                  <div>
-                    <p className="text-sm font-bold text-slate-950">
-                      {assignment.rubricTitle ||
-                        rubricSchema?.title ||
-                        "Attached rubric"}
-                    </p>
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <SmallBadge label={`${rubricCriteriaCount} criteria`} />
-
-                      {rubricPoints !== "" && (
-                        <SmallBadge label={`${rubricPoints} pts`} />
-                      )}
-
-                      <SmallBadge
-                        label={getRubricSourceLabel(
-                          assignment.rubricSource || rubricSchema?.source
-                        )}
-                      />
-                    </div>
-                  </div>
-
-                  <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-2 text-[10px] font-bold text-blue-700">
-                    {rubricExpanded ? "Hide criteria" : "View criteria"}
-                    {rubricExpanded ? (
-                      <ChevronUp className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    )}
-                  </span>
-                </button>
-
-                {rubricExpanded && (
-                  <div className="space-y-2 border-t border-blue-100 bg-white p-3">
-                    {rubricCriteria.map((criterion, index) => {
-                      const criterionKey = String(
-                        criterion.id || `criterion-${index}`
-                      );
-                      const isOpen =
-                        openRubricCriterionKey === criterionKey ||
-                        (openRubricCriterionKey === null && index === 0);
-
-                      return (
-                        <div
-                          key={criterion.id || `${criterion.name}-${index}`}
-                          className="overflow-hidden rounded-xl border border-slate-200 bg-[#F8FAFC]"
-                        >
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenRubricCriterionKey((current) =>
-                                current === criterionKey ? null : criterionKey
-                              )
-                            }
-                            className="flex w-full items-start justify-between gap-4 px-4 py-3 text-left"
-                            aria-expanded={isOpen}
-                          >
-                            <div>
-                              <p className="text-xs font-bold text-slate-900">
-                                {criterion.name || `Criterion ${index + 1}`}
-                              </p>
-
-                              {criterion.description && (
-                                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                                  {criterion.description}
-                                </p>
-                              )}
-                            </div>
-
-                            <div className="flex shrink-0 items-center gap-2">
-                              <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[10px] font-bold text-slate-700">
-                                {criterion.points ?? criterion.maxScore ?? 0} pts
-                              </span>
-                              {isOpen ? (
-                                <ChevronUp className="h-4 w-4 text-slate-400" />
-                              ) : (
-                                <ChevronDown className="h-4 w-4 text-slate-400" />
-                              )}
-                            </div>
-                          </button>
-
-                          {isOpen && (
-                            <div className="border-t border-slate-200 bg-white p-3">
-                              {Array.isArray(criterion.bands) &&
-                              criterion.bands.length > 0 ? (
-                                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                                  {criterion.bands.map((band, bandIndex) => (
-                                    <div
-                                      key={band.id || `${criterion.id || index}-band-${bandIndex}`}
-                                      className="rounded-lg border border-slate-200 bg-white p-2.5"
-                                    >
-                                      <div className="flex items-center justify-between gap-2">
-                                        <p className="text-[11px] font-bold text-slate-900">
-                                          {band.label || band.name || `Band ${bandIndex + 1}`}
-                                        </p>
-                                        <span className="shrink-0 rounded-md border border-blue-100 bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-blue-700">
-                                          {band.points ?? band.score ?? 0}
-                                        </span>
-                                      </div>
-
-                                      {band.description && (
-                                        <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
-                                          {band.description}
-                                        </p>
-                                      )}
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <p className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-500">
-                                  No score bands were defined for this criterion.
-                                </p>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-                <p className="text-xs font-bold text-slate-700">
-                  No rubric attached
-                </p>
-
-                <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                  This assignment does not contain a rubric.
-                </p>
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
-            <SectionHeading
-              icon={Clock}
-              title="Activity"
-              description="Publishing and update information."
-            />
-
-            <div className="space-y-2.5">
-              <ActivityRow label="Created" value={createdAt} />
-              <ActivityRow label="Last updated" value={updatedAt} />
-              <ActivityRow label="Published" value={publishedAt} />
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SectionHeading({ icon: Icon, title, description }) {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-        <Icon className="h-4 w-4" />
-      </div>
-
-      <div>
-        <h2 className="font-serif text-base font-bold text-slate-950">
-          {title}
-        </h2>
-
-        <p className="mt-1 text-xs leading-relaxed text-slate-500">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function InfoCard({ icon: Icon, label, value }) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 transition-all hover:border-blue-200 hover:shadow-sm">
-      <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700">
-        <Icon className="h-4 w-4 stroke-[1.8]" />
-      </div>
-
-      <div className="min-w-0 space-y-0.5">
-        <span className="block truncate font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
-          {label}
-        </span>
-
-        <p className="break-words font-mono text-xs font-bold text-slate-800">
-          {value}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function SettingRow({ enabled, icon: Icon, label, description }) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">
-      <div
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
-          enabled
-            ? "border-blue-100 bg-blue-50 text-blue-700"
-            : "border-slate-200 bg-slate-50 text-slate-400"
-        }`}
-      >
-        <Icon className="h-4 w-4" />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <p className="text-xs font-bold text-slate-900">{label}</p>
-          <StatusBadge enabled={enabled} />
-        </div>
-
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-          {description}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function MetricRow({ icon: Icon, label, value }) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700">
-        <Icon className="h-4 w-4" />
-      </div>
-
-      <div>
-        <p className="text-xs font-bold text-slate-900">{label}</p>
-        <p className="mt-1 font-mono text-sm font-bold text-blue-700">
-          {value}
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function CompactSetting({ label, enabled }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3">
-      <span className="text-xs font-bold text-slate-700">{label}</span>
-      <StatusBadge enabled={enabled} />
-    </div>
-  );
-}
-
-function PolicyRow({ label, value, tone = "blue" }) {
-  const toneStyles = {
-    blue: "border-blue-200 bg-blue-50 text-blue-700",
-    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    amber: "border-amber-200 bg-amber-50 text-amber-700",
-    slate: "border-slate-200 bg-slate-50 text-slate-600",
+    setSaving(true);
+    setError("");
+    try {
+      const dueValue = form.dueDate
+        ? `${form.dueDate}T${form.dueTime || "23:59"}`
+        : "";
+      const updated = await updateAssignment({
+        ...assignment,
+        title: form.title.trim(),
+        description: form.description.trim(),
+        instructions: form.description.trim(),
+        dueDate: dueValue,
+        deadline: dueValue,
+        dueTime: form.dueTime,
+        minWords: form.minWords === "" ? "" : Number(form.minWords),
+        maxWords: form.maxWords === "" ? "" : Number(form.maxWords),
+        wordCountMin: form.minWords === "" ? "" : Number(form.minWords),
+        wordCountMax: form.maxWords === "" ? "" : Number(form.maxWords),
+        aiSupportSettings: {
+          ...(assignment.aiSupportSettings || {}),
+          aiIdeasCoach: form.coachEnabled,
+          chatTimeLimit: Number(form.coachMinutes || 0),
+          autoOutlineFromChat: form.coachEnabled && form.autoOutline,
+          feedbackRequestLimit: Number(form.feedbackChecks || 0),
+        },
+        aiIdeasCoach: form.coachEnabled,
+        allowAI: form.coachEnabled,
+        chatTimeLimit: Number(form.coachMinutes || 0),
+        coachTimeLimitMinutes: Number(form.coachMinutes || 0),
+        autoOutlineFromChat: form.coachEnabled && form.autoOutline,
+        autoBuildOutlineFromCoach: form.coachEnabled && form.autoOutline,
+        feedbackRequestLimit: Number(form.feedbackChecks || 0),
+        feedbackChecks: Number(form.feedbackChecks || 0),
+      });
+      if (updated) setSelectedAssignment?.(updated);
+      setEditing(false);
+    } catch (saveError) {
+      setError(saveError?.message || "We could not save these changes. Please try again.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3">
-      <span className="text-xs font-bold text-slate-700">{label}</span>
+    <div className={modalMode ? "w-full" : "mx-auto w-full max-w-7xl p-4 sm:p-6"}>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <button type="button" onClick={close} className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-blue-700">
+          <ArrowLeft className="h-4 w-4" />
+          Close details
+        </button>
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={cancelEdit} disabled={saving} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50">
+              <X className="h-4 w-4" /> Cancel
+            </button>
+            <button type="button" onClick={save} disabled={saving} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60">
+              <Save className="h-4 w-4" /> {saving ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setEditing(true)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700">
+            <Pencil className="h-4 w-4" /> Edit details
+          </button>
+        )}
+      </div>
 
-      <span
-        className={`shrink-0 rounded border px-2 py-1 font-mono text-[9px] font-bold uppercase tracking-wide ${
-          toneStyles[tone] || toneStyles.blue
-        }`}
-      >
-        {value}
-      </span>
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <header className="border-b border-slate-200 px-6 py-6 sm:px-8">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-blue-600">Assignment details</p>
+              {editing ? (
+                <input value={form.title} onChange={(event) => update("title", event.target.value)} className="mt-3 w-full rounded-xl border border-slate-300 px-4 py-3 font-serif text-2xl font-bold text-slate-950 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" aria-label="Assignment title" />
+              ) : (
+                <h1 className="mt-2 font-serif text-2xl font-black text-slate-950 sm:text-3xl">{assignment.title}</h1>
+              )}
+              <p className="mt-2 text-sm text-slate-500">The core information students see before they begin.</p>
+            </div>
+            <span className={`rounded-lg border px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-wide ${status === "Published" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-50 text-slate-600"}`}>
+              {status}
+            </span>
+          </div>
+        </header>
+
+        <div className="grid gap-3 border-b border-slate-200 bg-slate-50/70 p-5 sm:grid-cols-3 sm:p-6">
+          <Detail icon={BookOpen} label="Course" value={courseName} />
+          {editing ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 sm:col-span-1">
+              <Label icon={Calendar}>Due date</Label>
+              <div className="mt-2 grid grid-cols-[1fr_auto] gap-2">
+                <input type="date" value={form.dueDate} onChange={(event) => update("dueDate", event.target.value)} className="min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <input type="time" value={form.dueTime} onChange={(event) => update("dueTime", event.target.value)} className="rounded-lg border border-slate-300 px-2 py-2 text-sm" />
+              </div>
+            </div>
+          ) : <Detail icon={Calendar} label="Due date" value={formatDeadline(assignment)} />}
+          {editing ? (
+            <div className="rounded-xl border border-slate-200 bg-white p-4">
+              <Label icon={Hash}>Word count</Label>
+              <div className="mt-2 flex items-center gap-2">
+                <input type="number" min="0" placeholder="Min" value={form.minWords} onChange={(event) => update("minWords", event.target.value)} className="w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                <span className="text-slate-400">–</span>
+                <input type="number" min="0" placeholder="Max" value={form.maxWords} onChange={(event) => update("maxWords", event.target.value)} className="w-full min-w-0 rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+              </div>
+            </div>
+          ) : <Detail icon={Hash} label="Word count" value={wordCount} />}
+        </div>
+
+        <div className="p-6 sm:p-8">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><FileText className="h-4 w-4" /></div>
+            <div>
+              <h2 className="font-serif text-lg font-bold text-slate-950">Student instructions</h2>
+              <p className="text-xs text-slate-500">Exactly what students need to complete this assignment.</p>
+            </div>
+          </div>
+          {editing ? (
+            <textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={10} className="mt-5 w-full resize-y rounded-xl border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" aria-label="Student instructions" />
+          ) : (
+            <div className="mt-5 whitespace-pre-wrap rounded-xl border border-slate-200 bg-slate-50 px-5 py-4 text-sm leading-7 text-slate-700">{instructions}</div>
+          )}
+          {error && <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">{error}</p>}
+        </div>
+
+        <div className="grid gap-5 border-t border-slate-200 bg-slate-50/60 p-6 sm:p-8 lg:grid-cols-2">
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 lg:col-span-2">
+              <SectionTitle icon={Bot} title="Student support" description="Tools available while students write." />
+              {editing ? (
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <SupportToggle icon={MessageSquareText} label="Outline coach" description="Let students brainstorm and plan with the coach." checked={form.coachEnabled} onChange={(checked) => update("coachEnabled", checked)} />
+                  <SupportNumber icon={Timer} label="Coach time limit" description="Use 0 for unlimited active time." value={form.coachMinutes} suffix="minutes" disabled={!form.coachEnabled} onChange={(value) => update("coachMinutes", value)} />
+                  <SupportToggle icon={BookOpen} label="Auto-build outline" description="Turn coach notes into an editable outline." checked={form.autoOutline} disabled={!form.coachEnabled} onChange={(checked) => update("autoOutline", checked)} />
+                  <SupportNumber icon={ShieldCheck} label="Feedback checks" description="Use 0 to disable AI feedback requests." value={form.feedbackChecks} suffix="requests" onChange={(value) => update("feedbackChecks", value)} />
+                </div>
+              ) : (
+                <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                  <CompactSetting icon={MessageSquareText} label="Outline coach" value={coachEnabled ? "Available" : "Off"} active={coachEnabled} />
+                  <CompactSetting icon={Timer} label="Coach time" value={!coachEnabled ? "Off" : coachMinutes === 0 ? "Unlimited" : `${coachMinutes} min`} active={coachEnabled} />
+                  <CompactSetting icon={BookOpen} label="Auto-build outline" value={autoOutline ? "On" : "Off"} active={autoOutline} />
+                  <CompactSetting icon={ShieldCheck} label="Feedback checks" value={feedbackChecks > 0 ? `${feedbackChecks} allowed` : "Off"} active={feedbackChecks > 0} />
+                </div>
+              )}
+            </section>
+
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 lg:col-span-2">
+              <SectionTitle icon={ClipboardCheck} title="Rubric" description="The grading guide attached to this assignment." />
+              {rubricAttached ? (
+                <div className="mt-4 overflow-hidden rounded-xl border border-blue-100 bg-blue-50">
+                  <div className="px-4 py-3">
+                    <div>
+                      <p className="text-sm font-bold text-slate-900">{assignment.rubricTitle || rubricSchema?.title || "Attached rubric"}</p>
+                      <p className="mt-1 text-xs text-slate-500">{rubricCriteria.length} {rubricCriteria.length === 1 ? "criterion" : "criteria"}{firstValue(rubricSchema?.totalPoints, assignment.rubricTotal, assignment.rubricPoints) !== "" ? ` · ${firstValue(rubricSchema?.totalPoints, assignment.rubricTotal, assignment.rubricPoints)} points` : ""}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3 border-t border-blue-100 bg-white p-3">
+                    {rubricCriteria.map((criterion, index) => (
+                      <div key={criterion.id || index} className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+                        <div className="flex items-start justify-between gap-3 p-3">
+                          <div>
+                            <p className="text-xs font-bold text-slate-900">{criterion.name || `Criterion ${index + 1}`}</p>
+                            {criterion.description && <p className="mt-1 text-[11px] leading-5 text-slate-500">{criterion.description}</p>}
+                          </div>
+                          <span className="shrink-0 rounded-md bg-white px-2 py-1 font-mono text-[10px] font-bold text-blue-700">{criterion.points ?? criterion.maxScore ?? 0} pts</span>
+                        </div>
+                        {Array.isArray(criterion.bands) && criterion.bands.length > 0 && (
+                          <div className="grid gap-2 border-t border-slate-200 bg-white p-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                            {criterion.bands.map((band, bandIndex) => (
+                              <div key={band.id || `${index}-${bandIndex}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[11px] font-bold text-slate-900">{band.label || band.name || `Band ${bandIndex + 1}`}</p>
+                                  <span className="rounded-md bg-blue-50 px-1.5 py-0.5 font-mono text-[10px] font-bold text-blue-700">{band.points ?? band.score ?? 0}</span>
+                                </div>
+                                {band.description && <p className="mt-1.5 text-[10px] leading-5 text-slate-500">{band.description}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-500">No rubric is attached.</p>
+              )}
+            </section>
+          </div>
+
+        {editing && (
+          <footer className="flex items-center gap-2 border-t border-emerald-100 bg-emerald-50 px-6 py-4 text-sm text-emerald-800 sm:px-8">
+            <CheckCircle2 className="h-4 w-4" /> You are editing only the student-facing assignment details.
+          </footer>
+        )}
+      </section>
     </div>
   );
 }
 
-function StatusBadge({ enabled }) {
-  return (
-    <span
-      className={`shrink-0 rounded border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide ${
-        enabled
-          ? "border-blue-200 bg-blue-50 text-blue-700"
-          : "border-slate-200 bg-slate-100 text-slate-400"
-      }`}
-    >
-      {enabled ? "Active" : "Off"}
-    </span>
-  );
+function Label({ icon: Icon, children }) {
+  return <p className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-wide text-slate-500"><Icon className="h-4 w-4 text-blue-600" />{children}</p>;
 }
 
-function SmallBadge({ label }) {
+function Detail({ icon, label, value }) {
   return (
-    <span className="inline-flex rounded-lg border border-blue-100 bg-white px-2 py-1 font-mono text-[10px] font-bold text-blue-700">
-      {label}
-    </span>
-  );
-}
-
-function ActivityRow({ label, value }) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3">
-      <span className="text-xs font-bold text-slate-600">{label}</span>
-
-      <span className="text-right font-mono text-[11px] font-bold text-slate-800">
-        {value}
-      </span>
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <Label icon={icon}>{label}</Label>
+      <p className="mt-2 text-sm font-bold leading-5 text-slate-900">{value}</p>
     </div>
+  );
+}
+
+function SectionTitle({ icon: Icon, title, description }) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600"><Icon className="h-4 w-4" /></div>
+      <div><h2 className="font-serif text-base font-bold text-slate-950">{title}</h2><p className="mt-0.5 text-xs text-slate-500">{description}</p></div>
+    </div>
+  );
+}
+
+function CompactSetting({ icon: Icon, label, value, active }) {
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-3">
+      <Icon className={`h-4 w-4 shrink-0 ${active ? "text-emerald-600" : "text-slate-400"}`} />
+      <div className="min-w-0"><p className="text-xs font-bold text-slate-700">{label}</p><p className={`mt-0.5 text-[11px] font-semibold ${active ? "text-emerald-700" : "text-slate-500"}`}>{value}</p></div>
+    </div>
+  );
+}
+
+function SupportToggle({ icon: Icon, label, description, checked, disabled = false, onChange }) {
+  return (
+    <label className={`flex items-start justify-between gap-3 rounded-xl border border-slate-200 p-3 ${disabled ? "bg-slate-50 opacity-60" : "bg-white"}`}>
+      <span className="flex min-w-0 items-start gap-3"><Icon className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><span><span className="block text-xs font-bold text-slate-800">{label}</span><span className="mt-1 block text-[11px] leading-4 text-slate-500">{description}</span></span></span>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} className="mt-1 h-4 w-4 shrink-0 accent-blue-600" />
+    </label>
+  );
+}
+
+function SupportNumber({ icon: Icon, label, description, value, suffix, disabled = false, onChange }) {
+  return (
+    <label className={`rounded-xl border border-slate-200 p-3 ${disabled ? "bg-slate-50 opacity-60" : "bg-white"}`}>
+      <span className="flex items-center gap-2 text-xs font-bold text-slate-800"><Icon className="h-4 w-4 text-blue-600" />{label}</span>
+      <span className="mt-1 block text-[11px] leading-4 text-slate-500">{description}</span>
+      <span className="mt-2 flex items-center gap-2"><input type="number" min="0" value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)} className="w-24 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-xs font-semibold text-slate-500">{suffix}</span></span>
+    </label>
   );
 }

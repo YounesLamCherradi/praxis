@@ -1325,7 +1325,7 @@ export function TeacherWorkspaceProvider({ children }) {
 
     const intervalId = window.setInterval(
       refreshSubmissionFeed,
-      2000
+      60000
     );
     window.addEventListener("focus", refreshSubmissionFeed);
 

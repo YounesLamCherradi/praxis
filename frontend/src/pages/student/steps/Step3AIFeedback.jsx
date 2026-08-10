@@ -159,16 +159,6 @@ function getLineNumberFromText(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
-function normalizeSeverity(value) {
-  const clean = getText(value).toLowerCase();
-
-  if (clean === "major" || clean === "minor") {
-    return clean;
-  }
-
-  return "medium";
-}
-
 function normalizeIssue(issue, index) {
   if (typeof issue === "string") {
     const feedbackText = getText(issue);
@@ -179,7 +169,6 @@ function normalizeIssue(issue, index) {
       excerpt: extractQuotedExcerpt(feedbackText),
       problem: feedbackText,
       suggestion: "",
-      severity: "medium",
     };
   }
 
@@ -213,7 +202,6 @@ function normalizeIssue(issue, index) {
     ),
     problem: feedbackText,
     suggestion: "",
-    severity: normalizeSeverity(issue?.severity),
   };
 }
 
@@ -493,8 +481,7 @@ function buildDraftFeedbackRequest({
   {
     "lineNumber": 2,
     "excerpt": "exact words copied from the student's draft",
-    "comment": "Explain the problem without rewriting the sentence.",
-    "severity": "major"
+    "comment": "Explain what the student should review without rewriting the sentence."
   }
 ]`;
 
@@ -509,7 +496,6 @@ Every object must contain:
 - lineNumber: the visible line or sentence number.
 - excerpt: an exact 3-to-160 character phrase copied verbatim from the student's draft.
 - comment: a short explanation of what the student should review.
-- severity: "major", "medium", or "minor".
 
 Rules:
 - The excerpt MUST appear exactly in the submitted draft. Never paraphrase it.
@@ -654,35 +640,12 @@ function buildFeedbackHistoryEntry({
   };
 }
 
-function getIssueTone(issue = {}) {
-  const severity = String(issue.severity || "medium").toLowerCase();
-
-  if (severity === "major") {
-    return {
-      mark:
-        "bg-red-200 text-red-950 decoration-red-600 hover:bg-red-300 focus:bg-red-300",
-      badge: "border-red-200 bg-red-50 text-red-700",
-      border: "border-red-200",
-      title: "Major revision",
-    };
-  }
-
-  if (severity === "minor") {
-    return {
-      mark:
-        "bg-sky-200 text-sky-950 decoration-sky-600 hover:bg-sky-300 focus:bg-sky-300",
-      badge: "border-sky-200 bg-sky-50 text-sky-700",
-      border: "border-sky-200",
-      title: "Small improvement",
-    };
-  }
-
+function getIssueTone() {
   return {
-    mark:
-      "bg-amber-200 text-amber-950 decoration-amber-600 hover:bg-amber-300 focus:bg-amber-300",
-    badge: "border-amber-200 bg-amber-50 text-amber-800",
-    border: "border-amber-200",
-    title: "Revision note",
+    mark: "bg-amber-100 text-slate-900 decoration-amber-500 hover:bg-amber-200 focus:bg-amber-200",
+    badge: "border-blue-200 bg-blue-50 text-blue-700",
+    border: "border-blue-200",
+    title: "Take another look",
   };
 }
 
@@ -723,7 +686,7 @@ function InlineFeedbackMark({
   const markRef = useRef(null);
   const hideTimerRef = useRef(null);
   const [tooltip, setTooltip] = useState(null);
-  const tone = getIssueTone(issue);
+  const tone = getIssueTone();
 
   useEffect(() => {
     return () => {
@@ -1009,6 +972,209 @@ function ReviewProgressBox({ progressMessage }) {
   );
 }
 
+function InlineFeedbackEditor({
+  value,
+  issues,
+  assignment,
+  feedbackVersion,
+  onChange,
+  onSelectIssue,
+}) {
+  const editableRef = useRef(null);
+  const caretScrollFrameRef = useRef(null);
+  const [hoveredFeedback, setHoveredFeedback] = useState(null);
+
+  useEffect(() => {
+    const editor = editableRef.current;
+    if (!editor) return;
+
+    const previousScrollTop = editor.scrollTop;
+    const text = String(value || "");
+    const ranges = findHighlightRanges(text, issues, assignment);
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+
+    ranges.forEach((range, index) => {
+      if (range.start > cursor) {
+        fragment.appendChild(
+          document.createTextNode(text.slice(cursor, range.start))
+        );
+      }
+
+      const highlightedText = text.slice(range.start, range.end);
+      const mark = document.createElement("mark");
+      mark.textContent = highlightedText;
+      mark.dataset.feedbackIssueId = String(range.issue?.id || `issue-${index}`);
+      mark.dataset.feedbackExcerpt = highlightedText;
+      mark.dataset.feedbackNumber = String(index + 1);
+      mark.tabIndex = 0;
+      mark.className =
+        "cursor-pointer rounded bg-amber-100 px-0.5 text-inherit underline decoration-amber-500 decoration-2 underline-offset-2 outline-none hover:bg-amber-200 focus:ring-2 focus:ring-blue-400";
+      fragment.appendChild(mark);
+      cursor = range.end;
+    });
+
+    if (ranges.length > 0 && cursor < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+
+    if (!ranges.length) {
+      fragment.appendChild(document.createTextNode(text));
+    }
+
+    editor.replaceChildren(fragment);
+    window.requestAnimationFrame(() => {
+      editor.scrollTop = previousScrollTop;
+    });
+    // The editable DOM must only be rebuilt for a newly generated feedback
+    // result. Rebuilding after normal context updates moves the caret.
+  }, [feedbackVersion]);
+
+  useEffect(() => {
+    return () => {
+      if (caretScrollFrameRef.current) {
+        window.cancelAnimationFrame(caretScrollFrameRef.current);
+      }
+    };
+  }, []);
+
+  function keepCaretComfortablyVisible() {
+    if (caretScrollFrameRef.current) {
+      window.cancelAnimationFrame(caretScrollFrameRef.current);
+    }
+
+    caretScrollFrameRef.current = window.requestAnimationFrame(() => {
+      caretScrollFrameRef.current = null;
+      const editor = editableRef.current;
+      const selection = window.getSelection();
+      if (!editor || !selection?.rangeCount || !selection.isCollapsed) return;
+      if (!editor.contains(selection.focusNode)) return;
+
+      const range = selection.getRangeAt(0).cloneRange();
+      range.collapse(true);
+      const caretRect = range.getBoundingClientRect();
+      const editorRect = editor.getBoundingClientRect();
+      if (!caretRect || (!caretRect.top && !caretRect.bottom)) return;
+
+      const comfortableEdge = 52;
+      if (caretRect.bottom > editorRect.bottom - comfortableEdge) {
+        editor.scrollBy({
+          top: caretRect.bottom - editorRect.bottom + comfortableEdge,
+          behavior: "smooth",
+        });
+      } else if (caretRect.top < editorRect.top + comfortableEdge) {
+        editor.scrollBy({
+          top: caretRect.top - editorRect.top - comfortableEdge,
+          behavior: "smooth",
+        });
+      }
+    });
+  }
+
+  function handleInput() {
+    const editor = editableRef.current;
+    if (!editor) return;
+
+    editor.querySelectorAll("mark[data-feedback-excerpt]").forEach((mark) => {
+      if (mark.textContent !== mark.dataset.feedbackExcerpt) {
+        mark.removeAttribute("data-feedback-issue-id");
+        mark.removeAttribute("data-feedback-excerpt");
+        mark.removeAttribute("data-feedback-number");
+        mark.removeAttribute("title");
+        mark.removeAttribute("tabindex");
+        mark.className = "bg-transparent p-0 text-inherit no-underline";
+      }
+    });
+
+    onChange(editor.innerText.replace(/\u00a0/g, " "));
+    keepCaretComfortablyVisible();
+  }
+
+  function handleIssueOpen(event) {
+    const mark = event.target.closest("mark[data-feedback-issue-id]");
+    if (!mark) return;
+    const issue = safeArray(issues).find(
+      (item, index) =>
+        String(item?.id || `issue-${index}`) === mark.dataset.feedbackIssueId
+    );
+    if (issue) {
+      setHoveredFeedback(null);
+      onSelectIssue(issue);
+    }
+  }
+
+  function handleFeedbackHover(event) {
+    const mark = event.target.closest("mark[data-feedback-issue-id]");
+    if (!mark) {
+      setHoveredFeedback(null);
+      return;
+    }
+    const issue = safeArray(issues).find(
+      (item, index) =>
+        String(item?.id || `issue-${index}`) === mark.dataset.feedbackIssueId
+    );
+    if (!issue) return;
+    const rect = mark.getBoundingClientRect();
+    const width = Math.min(320, Math.max(240, window.innerWidth - 32));
+    setHoveredFeedback({
+      issue,
+      number: mark.dataset.feedbackNumber,
+      width,
+      left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)),
+      top: Math.min(window.innerHeight - 120, rect.bottom + 8),
+    });
+  }
+
+  return (
+    <>
+    <div
+      ref={editableRef}
+      id="final-editor"
+      role="textbox"
+      aria-label="Draft editor with inline AI feedback"
+      aria-multiline="true"
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder="Revise your draft in your own words."
+      onInput={handleInput}
+      onClick={handleIssueOpen}
+      onMouseOver={handleFeedbackHover}
+      onMouseLeave={() => setHoveredFeedback(null)}
+      onKeyDown={(event) => {
+        if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark[data-feedback-issue-id]")) {
+          event.preventDefault();
+          handleIssueOpen(event);
+        }
+      }}
+      className="min-h-[360px] flex-1 scroll-smooth overflow-y-auto overscroll-contain whitespace-pre-wrap bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all [scrollbar-color:rgb(148_163_184)_transparent] [scrollbar-gutter:stable] [scrollbar-width:thin] empty:before:pointer-events-none empty:before:text-slate-400 empty:before:content-[attr(data-placeholder)] focus:bg-white"
+    />
+    {hoveredFeedback &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-none fixed z-[2147483647] rounded-xl border border-amber-200 bg-white px-3 py-2.5 shadow-xl shadow-slate-950/10"
+            style={{
+              left: `${hoveredFeedback.left}px`,
+              top: `${hoveredFeedback.top}px`,
+              width: `${hoveredFeedback.width}px`,
+            }}
+          >
+            <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
+              Feedback note {hoveredFeedback.number}
+            </p>
+            <p className="mt-1 text-[11px] leading-5 text-slate-700">
+              {hoveredFeedback.issue.problem}
+            </p>
+            <p className="mt-1 text-[9px] text-slate-400">
+              Click the highlight to keep this note open.
+            </p>
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
 export default function Step3AIFeedback() {
   const {
     activeAssignment,
@@ -1024,11 +1190,9 @@ export default function Step3AIFeedback() {
   const [feedback, setFeedback] = useState(null);
   const [reviewError, setReviewError] = useState("");
   const [progressMessage, setProgressMessage] = useState("");
-  const [viewMode, setViewMode] = useState("edit");
-  const [selectionMessage, setSelectionMessage] = useState("");
   const [showGeneralNotes, setShowGeneralNotes] = useState(false);
   const [selectedIssueId, setSelectedIssueId] = useState("");
-  const editorRef = useRef(null);
+  const automaticRequestHandledRef = useRef(false);
 
   const assignmentId =
     activeAssignment?.id ||
@@ -1152,10 +1316,6 @@ export default function Step3AIFeedback() {
     );
 
     setFeedback(savedFeedback || null);
-    // This component is opened from the shared "AI Feedback" tab. Always
-    // keep that tab active; without a saved review it presents the existing
-    // request-feedback action instead of mounting a second draft screen.
-    setViewMode("feedback");
     setShowGeneralNotes(false);
     setSelectedIssueId("");
   }, [
@@ -1177,10 +1337,7 @@ export default function Step3AIFeedback() {
     }
   }, [assignmentId, activeSubmission?.id]);
 
-  function handleFinalTextChange(event) {
-    const nextText = event.target.value;
-
-    setSelectionMessage("");
+  function handleFinalTextChange(nextText) {
     setTypedText(nextText);
 
     if (assignmentId && typeof saveDraftProgress === "function") {
@@ -1341,7 +1498,6 @@ export default function Step3AIFeedback() {
       };
 
       setFeedback(feedbackToSave);
-      setViewMode("feedback");
       setShowGeneralNotes(false);
       setSelectedIssueId("");
       saveFeedbackToProgress(feedbackToSave);
@@ -1364,7 +1520,6 @@ export default function Step3AIFeedback() {
       };
 
       setFeedback(fallbackFeedback);
-      setViewMode("feedback");
       setShowGeneralNotes(false);
       setSelectedIssueId("");
       saveFeedbackToProgress(fallbackFeedback);
@@ -1378,6 +1533,21 @@ export default function Step3AIFeedback() {
       setIsChecking(false);
     }
   }
+
+  useEffect(() => {
+    if (!assignmentId || automaticRequestHandledRef.current) return;
+    const feedbackRequestKey = `praxis-request-inline-feedback:${assignmentId}`;
+    let shouldRequest;
+    try {
+      shouldRequest = window.sessionStorage.getItem(feedbackRequestKey) === "1";
+      window.sessionStorage.removeItem(feedbackRequestKey);
+    } catch {
+      return;
+    }
+    if (!shouldRequest) return;
+    automaticRequestHandledRef.current = true;
+    handleCheckDraft();
+  }, [assignmentId]);
 
   function handleContinueToFinalSubmission() {
     if (feedbackTransitionNoticeOpen) return;
@@ -1438,7 +1608,7 @@ export default function Step3AIFeedback() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="text-sm font-bold text-slate-900">
-                  Draft & Feedback
+                  Draft Editor
                 </h3>
 
                 <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-mono font-bold text-blue-700">
@@ -1469,7 +1639,7 @@ export default function Step3AIFeedback() {
               </div>
 
               <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                Edit one paragraph, then open AI Feedback to see the same paragraph with highlighted notes.
+                Write and revise in one place. AI feedback appears as clickable highlights directly in your draft.
               </p>
 
               {lastFeedbackTime && (
@@ -1480,37 +1650,6 @@ export default function Step3AIFeedback() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="grid grid-cols-2 rounded-xl border border-slate-200 bg-slate-50 p-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedIssueId("");
-                    goToStudentStep(2, {
-                      draftText,
-                      currentText: draftText,
-                    });
-                  }}
-                  className={`rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
-                    "text-slate-500 hover:bg-white hover:text-blue-700"
-                  }`}
-                >
-                  Draft
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setViewMode("feedback")}
-                  disabled={!feedback}
-                  className={`rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
-                    viewMode === "feedback"
-                      ? "bg-white text-blue-700 shadow-sm"
-                      : "text-slate-500 hover:text-slate-900"
-                  } disabled:cursor-not-allowed disabled:text-slate-300`}
-                >
-                  AI Feedback
-                </button>
-              </div>
-
               <button
                 type="button"
                 onClick={handleCheckDraft}
@@ -1533,17 +1672,11 @@ export default function Step3AIFeedback() {
                 {isChecking
                   ? "Checking..."
                   : feedback
-                  ? "Request Another Check"
-                  : "Get AI Feedback"}
+                  ? "Request New AI Feedback"
+                  : "Request AI Feedback"}
               </button>
             </div>
           </div>
-
-          {selectionMessage && viewMode === "edit" && (
-            <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold text-blue-800">
-              {selectionMessage}
-            </div>
-          )}
 
           {reviewError && (
             <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[11px] font-semibold text-red-700">
@@ -1561,91 +1694,57 @@ export default function Step3AIFeedback() {
           )}
         </div>
 
-        {viewMode === "edit" ? (
-          <textarea
-            ref={editorRef}
-            id="final-editor"
-            aria-label="Final revision editor"
-            value={draftText}
-            onChange={handleFinalTextChange}
-            placeholder="Revise your final paragraph in your own words."
-            className="min-h-0 flex-1 w-full resize-none bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:bg-white"
-          />
-        ) : (
-          <div className="flex min-h-0 flex-1 bg-[#F8FAFC]">
-            <article className="relative flex min-h-0 flex-1 flex-col bg-[#F8FAFC]">
-              <div className="relative z-10 shrink-0 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-5">
-                <div>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h4 className="text-sm font-bold text-slate-900">
-                        Your paragraph with AI highlights
-                      </h4>
+        <InlineFeedbackEditor
+          value={draftText}
+          issues={issues}
+          assignment={activeAssignment || {}}
+          feedbackVersion={feedback?.createdAt || "no-feedback"}
+          onChange={handleFinalTextChange}
+          onSelectIssue={handleSelectIssue}
+        />
 
-                      <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[9px] font-mono font-bold text-amber-800">
-                        {highlightedCount} highlighted note
-                        {highlightedCount === 1 ? "" : "s"}
-                      </span>
-                    </div>
-
-                    <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                      Hover over a highlight for a quick explanation. Click it to keep the feedback details open.
-                    </p>
-                  </div>
-
-                </div>
+        {selectedIssueId && (
+          <div className="shrink-0 border-t border-amber-200 bg-amber-50 px-5 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
+                  Feedback on this highlight
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-amber-950">
+                  {issues.find((issue) => String(issue?.id || "") === selectedIssueId)?.problem}
+                </p>
               </div>
-
-              <div
-                className="min-h-0 w-full flex-1 overflow-y-scroll overscroll-contain scroll-smooth px-5 py-5 [scrollbar-color:rgb(148_163_184)_transparent] [scrollbar-gutter:stable] [scrollbar-width:thin] sm:px-7 sm:py-6"
+              <button
+                type="button"
+                onClick={() => setSelectedIssueId("")}
+                aria-label="Close inline feedback"
+                className="rounded-lg p-1 text-amber-700 hover:bg-amber-100"
               >
-                <div className="w-full">
-                  <HighlightedDraftPreview
-                    reviewedText={reviewedText}
-                    issues={issues}
-                    assignment={activeAssignment || {}}
-                    activeIssueId={selectedIssueId}
-                    onSelectIssue={handleSelectIssue}
-                  />
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
-                  {generalIssues.length > 0 && (
-                    <div className="mt-7 border-t border-slate-100 pt-4">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setShowGeneralNotes((current) => !current)
-                        }
-                        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
-                      >
-                        {showGeneralNotes ? "Hide" : "View"}{" "}
-                        {generalIssues.length} general note
-                        {generalIssues.length === 1 ? "" : "s"}
-                      </button>
-
-                      {showGeneralNotes && (
-                        <div className="mt-3 space-y-2">
-                          {generalIssues.map((issue, index) => (
-                            <div
-                              key={issue.id || `general-note-${index}`}
-                              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"
-                            >
-                              <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
-                                General note {index + 1}
-                              </p>
-
-                              <p className="mt-1 text-xs leading-relaxed text-amber-950">
-                                {issue.problem}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+        {generalIssues.length > 0 && (
+          <div className="shrink-0 border-t border-slate-100 bg-white px-5 py-3">
+            <button
+              type="button"
+              onClick={() => setShowGeneralNotes((current) => !current)}
+              className="text-[10px] font-bold text-amber-800"
+            >
+              {showGeneralNotes ? "Hide" : "Show"} {generalIssues.length} general note
+              {generalIssues.length === 1 ? "" : "s"}
+            </button>
+            {showGeneralNotes && (
+              <div className="mt-2 space-y-2">
+                {generalIssues.map((issue, index) => (
+                  <p key={issue.id || `general-note-${index}`} className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-amber-950">
+                    {issue.problem}
+                  </p>
+                ))}
               </div>
-
-            </article>
+            )}
           </div>
         )}
       </section>
@@ -1653,7 +1752,7 @@ export default function Step3AIFeedback() {
       <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[11px] leading-relaxed text-slate-500">
-            Use AI Feedback to locate issues, then return to Draft and revise in your own words.
+            Click a highlighted phrase to understand the issue, then revise it directly in your draft.
           </p>
 
           <div className="flex items-center justify-between gap-2 sm:justify-end">

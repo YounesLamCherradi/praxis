@@ -2179,18 +2179,11 @@ const APPEND_DELTA_FIELDS = [
   ['keystroke_log_append', 'keystroke_log_base', 'keystroke_log'],
 ];
 
-async function applyAppendDeltas(reqBody, submissionId, client, payload) {
+async function applyAppendDeltas(reqBody, submission, payload) {
   const active = APPEND_DELTA_FIELDS.filter(([appendKey]) => Array.isArray(reqBody?.[appendKey]));
   if (!active.length) return { ok: true };
-  const { data, error } = await client
-    .from('submissions')
-    .select('writing_events, keystroke_log')
-    .eq('id', submissionId)
-    .maybeSingle();
-  if (error) throw error;
-  const current = data || {};
   for (const [appendKey, baseKey, col] of active) {
-    const existing = Array.isArray(current[col]) ? current[col] : [];
+    const existing = Array.isArray(submission?.[col]) ? submission[col] : [];
     const base = Number(reqBody[baseKey] ?? 0);
     if (existing.length !== base) return { conflict: true };
     payload[col] = existing.concat(reqBody[appendKey]);
@@ -2200,7 +2193,7 @@ async function applyAppendDeltas(reqBody, submissionId, client, payload) {
 
 async function buildStudentPatchPayload(reqBody, submission, readClient) {
   let payload = { ...sanitizeStudentSubmissionPayload(reqBody), updated_at: new Date().toISOString() };
-  const appended = await applyAppendDeltas(reqBody, submission.id, readClient, payload);
+  const appended = await applyAppendDeltas(reqBody, submission, payload);
   if (!appended.conflict) {
     payload = mergeAppendOnlyProcessHistory(payload, submission);
   }
@@ -4158,6 +4151,88 @@ app.post('/api/classes/:classId/members', async (req, res) => {
   }
 });
 
+// Email a course invitation without enrolling the recipient automatically.
+app.post('/api/classes/:classId/invitations', async (req, res) => {
+  try {
+    const { user, profile, error: teacherError, status } =
+      await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+
+    const studentEmail = String(req.body?.studentEmail || '')
+      .trim()
+      .toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(studentEmail)) {
+      return res.status(400).json({ error: 'Enter a valid student email address.' });
+    }
+
+    const readClient = getRequestScopedSupabase(req);
+    const ownedClass = await ensureTeacherOwnsClass(
+      req.params.classId,
+      user.id,
+      readClient
+    );
+    if (!ownedClass) {
+      return res.status(403).json({ error: 'You can only invite students to your own courses.' });
+    }
+
+    const { data: course, error: courseError } = await readClient
+      .from('classes')
+      .select('id, name, invite_code, semester, is_published, archived')
+      .eq('id', req.params.classId)
+      .single();
+    if (courseError) throw courseError;
+    if (course.archived === true) {
+      return res.status(400).json({ error: 'Restore this course before inviting students.' });
+    }
+    if (course.is_published === false) {
+      return res.status(400).json({ error: 'Publish this course before inviting students.' });
+    }
+
+    const courseName = course.name || 'your course';
+    const instructorName = profile?.name || 'Your instructor';
+    const accessCode = String(course.invite_code || '').trim().toUpperCase();
+    const joinUrl = `${getRequestBaseUrl(req)}/join?code=${encodeURIComponent(accessCode)}`;
+    const safeCourseName = escapeHtmlEmail(courseName);
+    const safeInstructorName = escapeHtmlEmail(instructorName);
+    const safeAccessCode = escapeHtmlEmail(accessCode);
+    const safeJoinUrl = escapeHtmlEmail(joinUrl);
+    const emailResult = await sendEmail({
+      to: studentEmail,
+      subject: `You're invited to join ${courseName} on Praxis`,
+      text: [
+        `You are invited to join ${courseName} on Praxis.`,
+        '',
+        `Instructor: ${instructorName}`,
+        `Access code: ${accessCode}`,
+        `Join here: ${joinUrl}`,
+        '',
+        'Sign in to your Praxis account, or create an account, then follow the link to join the course.',
+      ].join('\n'),
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#0f172a;line-height:1.6;">
+          <h1 style="font-size:24px;margin-bottom:8px;">You're invited to join ${safeCourseName}</h1>
+          <p>${safeInstructorName} invited you to join a course on Praxis.</p>
+          <div style="margin:24px 0;padding:18px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff;">
+            <p style="margin:0 0 6px;"><strong>Course:</strong> ${safeCourseName}</p>
+            <p style="margin:0;"><strong>Access code:</strong> ${safeAccessCode}</p>
+          </div>
+          <a href="${safeJoinUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#2563eb;color:white;text-decoration:none;font-weight:700;">Join course on Praxis</a>
+          <p style="margin-top:22px;font-size:13px;color:#64748b;">Sign in or create a student account, then Praxis will continue your invitation.</p>
+        </div>
+      `,
+      idempotencyKey: `course-invite:${course.id}:${studentEmail}:${Date.now()}`,
+    });
+
+    if (emailResult?.skipped) {
+      return res.status(503).json({ error: 'Email delivery is not configured on this server.' });
+    }
+
+    return res.json({ ok: true, recipient: studentEmail });
+  } catch (error) {
+    return res.status(500).json({ error: error.message || 'The invitation could not be sent.' });
+  }
+});
+
 app.delete('/api/classes/:classId', async (req, res) => {
   try {
     const { user, error: teacherError, status } = await requireTeacherProfile(req);
@@ -4989,7 +5064,11 @@ app.delete('/api/assignments/:id', async (req, res) => {
 
 // ── Submissions endpoints ────────────────────────────────────
 
-async function querySubmissionsForAssignments(assignmentIds, client = supabase) {
+async function querySubmissionsForAssignments(
+  assignmentIds,
+  client = supabase,
+  { includeAttempts = true } = {}
+) {
   const { data, error } = await client
     .from('submissions')
     .select([
@@ -5013,6 +5092,16 @@ async function querySubmissionsForAssignments(assignmentIds, client = supabase) 
     .in('assignment_id', assignmentIds);
   if (error) return { data: [], error };
 
+  if (!includeAttempts) {
+    return {
+      data: (data || []).map((submission) => ({
+        ...submission,
+        detail_loaded: false,
+      })),
+      error: null,
+    };
+  }
+
   const submissionIds = (data || []).map((submission) => submission.id).filter(Boolean);
   let revisions = [];
   if (submissionIds.length) {
@@ -5020,6 +5109,7 @@ async function querySubmissionsForAssignments(assignmentIds, client = supabase) 
       .from('submission_revisions')
       .select('submission_id, revision_number, snapshot, change_type, created_at')
       .in('submission_id', submissionIds)
+      .in('change_type', ['submitted', 'reviewed'])
       .order('revision_number', { ascending: true });
     if (revisionError) return { data: [], error: revisionError };
     revisions = revisionRows || [];
@@ -5100,7 +5190,8 @@ app.get('/api/teacher/submissions', async (req, res) => {
     // the polling response contains a valid student_id but profiles: null.
     const { data, error } = await querySubmissionsForAssignments(
       assignmentIds,
-      supabase
+      supabase,
+      { includeAttempts: false }
     );
     if (error) return res.status(400).json({ error: error.message });
 
@@ -5186,6 +5277,30 @@ app.get('/api/student/submissions', async (req, res) => {
     const assignmentIds = Array.from(new Set((assignments || []).map((assignment) => assignment.id).filter(Boolean)));
     if (!assignmentIds.length) return res.json({ submissions: [] });
 
+    if (String(req.query.summary || '') === '1') {
+      const { data: summaryRows, error: summaryError } = await readClient
+        .from('submissions')
+        .select([
+          'id',
+          'assignment_id',
+          'student_id',
+          'status',
+          'teacher_review',
+          'submitted_at',
+          'updated_at',
+          'version',
+        ].join(','))
+        .eq('student_id', user.id)
+        .in('assignment_id', assignmentIds);
+      if (summaryError) return res.status(400).json({ error: summaryError.message });
+      return res.json({
+        submissions: (summaryRows || []).map((submission) => ({
+          ...normalizeStudentVisibleSubmission(submission),
+          detail_loaded: false,
+        })),
+      });
+    }
+
     const { data, error } = await readClient
       .from('submissions')
       .select([
@@ -5221,6 +5336,7 @@ app.get('/api/student/submissions', async (req, res) => {
         .from('submission_revisions')
         .select('submission_id, revision_number, snapshot, change_type, created_at')
         .in('submission_id', submissionIds)
+        .in('change_type', ['submitted', 'reviewed'])
         .order('revision_number', { ascending: true });
       if (revisionError) return res.status(400).json({ error: revisionError.message });
       revisions = revisionRows || [];
@@ -5649,12 +5765,15 @@ app.patch('/api/submissions/:id', async (req, res) => {
       });
     }
 
+    const responseSelection = isStudentOwner
+      ? 'id, assignment_id, student_id, status, version, updated_at, submitted_at'
+      : '*, profiles(id, name)';
     const { data, error } = await submissionWriteWithFallback(req, (client) => client
       .from('submissions')
       .update(payload)
       .eq('id', req.params.id)
       .eq('version', Number(submission.version || 1))
-      .select('*, profiles(id, name)')
+      .select(responseSelection)
       .maybeSingle());
     if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
     if (!data) {
@@ -5663,7 +5782,13 @@ app.patch('/api/submissions/:id', async (req, res) => {
         conflict: true,
       });
     }
-    await saveSubmissionRevision(data, user.id, isStudentOwner ? 'autosaved' : 'reviewed');
+    // The current submissions row and the browser recovery copy preserve every
+    // autosave. Historical snapshots are reserved for meaningful milestones;
+    // duplicating the growing process log on every keystroke pause caused
+    // revision storage and read egress to grow quadratically.
+    if (!isStudentOwner) {
+      await saveSubmissionRevision(data, user.id, 'reviewed');
+    }
     if (ownedAssignment) {
       if (teacherReviewWasNewlySaved(submission.teacher_review, data.teacher_review)) {
         await enqueueDomainEvent({

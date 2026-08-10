@@ -301,6 +301,11 @@ export async function getStudentSubmissions(assignmentIds = []) {
   return (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission);
 }
 
+export async function getStudentSubmissionSummaries() {
+  const data = await request("/api/student/submissions?summary=1");
+  return (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission);
+}
+
 export async function getTeacherSubmissionsForClass(classId) {
   const data = await request(`/api/classes/${encodeURIComponent(classId)}/submissions`);
   return (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission);
@@ -492,14 +497,64 @@ export async function getOrCreateMySubmission(assignmentId) {
   return normalizeSubmission(data.submission);
 }
 
-export async function saveMySubmission(submission) {
+function valuesMatch(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function buildIncrementalSubmissionPayload(submission, baseline = {}) {
+  const payload = submissionPayload(submission);
+  const baselinePayload = submissionPayload(baseline);
+  const currentPayload = { ...payload };
+
+  for (const key of Object.keys(payload)) {
+    if (key !== "expected_updated_at" && valuesMatch(payload[key], baselinePayload[key])) {
+      delete payload[key];
+    }
+  }
+
+  const appendOnlyFields = [
+    ["writing_events", "writing_events_append", "writing_events_base"],
+    ["keystroke_log", "keystroke_log_append", "keystroke_log_base"],
+  ];
+  for (const [field, appendField, baseField] of appendOnlyFields) {
+    const current = Array.isArray(currentPayload[field])
+      ? currentPayload[field]
+      : [];
+    const previous = Array.isArray(baselinePayload[field]) ? baselinePayload[field] : [];
+    const prefixMatches = previous.every((entry, index) => valuesMatch(entry, current[index]));
+    if (current.length >= previous.length && prefixMatches) {
+      delete payload[field];
+      if (current.length > previous.length) {
+        payload[appendField] = current.slice(previous.length);
+        payload[baseField] = previous.length;
+      }
+    }
+  }
+
+  return payload;
+}
+
+export async function saveMySubmission(submission, baseline = {}) {
   if (!submission?.id) {
     throw new Error("A database submission id is required before autosave.");
   }
-  const data = await request(`/api/submissions/${encodeURIComponent(submission.id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(submissionPayload(submission)),
-  });
+  const path = `/api/submissions/${encodeURIComponent(submission.id)}`;
+  let data;
+  try {
+    data = await request(path, {
+      method: "PATCH",
+      body: JSON.stringify(buildIncrementalSubmissionPayload(submission, baseline)),
+    });
+  } catch (error) {
+    if (!error?.conflict) throw error;
+    data = await request(path, {
+      method: "PATCH",
+      body: JSON.stringify(submissionPayload({
+        ...submission,
+        updatedAt: error.updatedAt || submission.updatedAt,
+      })),
+    });
+  }
   return normalizeSubmission(data.submission);
 }
 

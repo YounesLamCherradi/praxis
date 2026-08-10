@@ -1,5 +1,17 @@
 const { test, expect } = require("@playwright/test");
 
+async function acceptHonorAgreement(page) {
+  await page.getByRole("button", { name: /Confirm this is your own work/ }).click();
+  await expect(page.getByRole("heading", { name: "Academic Honor Agreement" })).toBeVisible();
+  const agreement = page.getByRole("dialog", { name: "Academic Honor Agreement" });
+  await agreement.locator("div.overflow-y-auto").evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  await page.getByRole("checkbox", { name: /I have read and agree/ }).check();
+  await page.getByRole("button", { name: "Accept Agreement", exact: true }).click();
+}
+
 function buildStudentWorkflowFixture() {
   const bands = [
     { id: "excellent", label: "Excellent", points: 4, description: "Fully meets expectations." },
@@ -350,7 +362,7 @@ test.describe("Local student assignment workflow", () => {
     await page.getByRole("button", { name: /Continue Assignment/ }).click();
     await expect(page.getByText("Step 4: Submit Assignment", { exact: true })).toBeVisible();
     const submitButton = page.getByRole("button", { name: "Submit", exact: true }).last();
-    await page.getByRole("button", { name: /Confirm this is your own work/ }).click();
+    await acceptHonorAgreement(page);
     await expect(submitButton).toBeEnabled();
     await submitButton.click();
 
@@ -554,21 +566,21 @@ test.describe("Local student assignment workflow", () => {
     await page.getByRole("button", { name: "Stay in Draft", exact: true }).click();
     await expect(page.getByText("Draft Editor", { exact: true })).toBeVisible();
 
-    await page.getByRole("button", { name: "AI Feedback", exact: true }).click();
-    await expect(page.getByText("Your paragraph with AI highlights", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "AI Feedback", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Request AI Feedback", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Draft editor with inline AI feedback" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Request .*AI Feedback/ })).toBeVisible();
 
     await page.getByRole("button", { name: "Continue to Rubric Check", exact: true }).click();
     await expect(page.getByRole("button", { name: "Continue to Rubric", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Stay in AI Feedback", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stay in Draft", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Continue to Rubric", exact: true }).click();
 
     await expect(page.getByRole("heading", { name: "Rubric Self-Assessment" })).toBeVisible();
     await expect(page.getByText("Step 3: Rubric Check", { exact: true })).toBeVisible();
     await expect(page.getByText("Submit Assignment", { exact: true })).not.toBeVisible();
 
-    await page.getByRole("button", { name: "Back to AI Feedback", exact: true }).click();
-    await expect(page.getByText("Your paragraph with AI highlights", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Back to Draft", exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Draft editor with inline AI feedback" })).toBeVisible();
 
     await page.getByRole("button", { name: "Rubric", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Rubric Self-Assessment" })).toBeVisible();
@@ -626,16 +638,19 @@ test.describe("Local student assignment workflow", () => {
     const submitButton = page.getByRole("button", { name: "Submit", exact: true }).last();
     await expect(submitButton).toBeDisabled();
 
-    await page.getByRole("button", { name: /Confirm this is your own work/ }).click();
+    await acceptHonorAgreement(page);
     await expect(submitButton).toBeEnabled();
     await submitButton.click();
-    await expect(page.getByRole("heading", { name: "Assignment Submitted" })).toBeVisible();
-    await expect(page.getByText("This assignment has been submitted. Editing is locked.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your assignment has been submitted" })).toBeVisible();
+    await expect(page.getByText(/was sent to your instructor for grading/i)).toBeVisible();
+    await expect(page.getByText("Assignment Brief", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("This assignment has been submitted. Editing is locked.", { exact: true })).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Back to Assignments", exact: true })).not.toBeVisible();
 
-    await page.getByRole("button", { name: "Back to Assignments", exact: true }).click();
+    await page.getByRole("button", { name: "Back to Dashboard", exact: true }).click();
     await expect(page.getByRole("button", { name: "View Submission", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "View Submission", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Assignment Submitted" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Your assignment has been submitted" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Coach", exact: true })).toBeDisabled();
 
     expect(errors).toEqual([]);
