@@ -1,3 +1,4 @@
+const Sentry = require('./instrument');
 require('dotenv').config();
 const path = require('node:path');
 const express = require('express');
@@ -69,7 +70,7 @@ app.use((req, res, next) => {
     res.set("Access-Control-Allow-Credentials", "true");
     res.set(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
+      "Content-Type, Authorization, sentry-trace, baggage"
     );
     res.set(
       "Access-Control-Allow-Methods",
@@ -6695,6 +6696,11 @@ app.post("/api/teacher/ai-review-submission", async (req, res) => {
     aiRequestsInFlight -= 1;
   }
 });
+
+// Register Sentry after every route so handled Express failures are reported.
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
