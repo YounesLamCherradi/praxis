@@ -12,6 +12,12 @@ if (process.env.SENTRY_DSN) {
       httpBodies: [],
     },
   });
+
+  if (process.env.SENTRY_VERIFY_ON_STARTUP === "true") {
+    Sentry.captureException(
+      new Error("Praxis Node Sentry verification test")
+    );
+  }
 }
 
 module.exports = Sentry;
