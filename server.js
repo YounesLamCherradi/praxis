@@ -7149,43 +7149,178 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
       updated_at: new Date().toISOString(),
     });
 
-    const submissionClient = readClient;
-    let { data, error } = await submissionClient
-      .from('submissions')
-      .select('id, status, teacher_review')
-      .eq('assignment_id', assignmentId)
-      .eq('student_id', studentId)
-      .maybeSingle();
+    let data;
+    let error = null;
 
-    if (error) return res.status(400).json({ error: error.message });
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT id, status, teacher_review
+             FROM public.submissions
+            WHERE assignment_id = $1
+              AND student_id = $2
+            LIMIT 1`,
+          [assignmentId, studentId]
+        );
+
+        data = rows[0] || null;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const submissionClient = readClient;
+
+      const result = await submissionClient
+        .from('submissions')
+        .select('id, status, teacher_review')
+        .eq('assignment_id', assignmentId)
+        .eq('student_id', studentId)
+        .maybeSingle();
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
 
     if (data?.id) {
-      const { data: updated, error: updateError } = await submissionWriteWithFallback(req, (client) => client
-        .from('submissions')
-        .update(payload)
-        .eq('id', data.id)
-        .select('*, profiles(id, name)')
-        .single());
-      if (updateError) return res.status(400).json({ error: updateError.message });
+      let updated;
+      let updateError = null;
+
+      if (USE_POSTGRES_APP_DB) {
+        try {
+          const entries =
+            buildPostgresStudentSubmissionEntries(payload);
+
+          if (!entries.length) {
+            return res.status(400).json({
+              error: 'No supported submission changes were provided.',
+            });
+          }
+
+          const setSql = entries
+            .map(([key], index) => `${key} = $${index + 1}`)
+            .join(', ');
+
+          const values = entries.map(([, value]) => value);
+          values.push(data.id);
+
+          const { rows } = await db.query(
+            `UPDATE public.submissions
+                SET ${setSql}
+              WHERE id = $${values.length}
+            RETURNING id`,
+            values
+          );
+
+          if (!rows[0]) {
+            return res.status(404).json({
+              error: 'Submission not found.',
+            });
+          }
+
+          updated = await getPostgresSubmissionWithProfile(data.id);
+        } catch (writeError) {
+          updateError = writeError;
+        }
+      } else {
+        const result = await submissionWriteWithFallback(
+          req,
+          (client) => client
+            .from('submissions')
+            .update(payload)
+            .eq('id', data.id)
+            .select('*, profiles(id, name)')
+            .single()
+        );
+
+        updated = result.data;
+        updateError = result.error;
+      }
+
+      if (updateError) {
+        return res.status(400).json({
+          error: updateError.message,
+        });
+      }
+
       await enqueueSubmissionStatusNotifications(data, updated);
+
       processNotificationOutbox().catch((notifyError) => {
-        console.error('Student review outbox processing failed:', notifyError);
+        console.error(
+          'Student review outbox processing failed:',
+          notifyError
+        );
       });
+
       return res.json({ submission: updated });
     }
 
-    const { data: created, error: createError } = await submissionWriteWithFallback(req, (client) => client
-      .from('submissions')
-      .insert({
-        assignment_id: assignmentId,
-        student_id: studentId,
-        started_at: payload.started_at || null,
-        ...payload,
-      })
-      .select('*, profiles(id, name)')
-      .single());
+    let created;
+    let createError = null;
 
-    if (createError) return res.status(400).json({ error: createError.message });
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const entries =
+          buildPostgresStudentSubmissionEntries(payload);
+
+        const columns = [
+          'assignment_id',
+          'student_id',
+          ...entries.map(([key]) => key),
+        ];
+
+        const values = [
+          assignmentId,
+          studentId,
+          ...entries.map(([, value]) => value),
+        ];
+
+        const placeholders = values
+          .map((_, index) => `$${index + 1}`)
+          .join(', ');
+
+        const { rows } = await db.query(
+          `INSERT INTO public.submissions
+            (${columns.join(', ')})
+           VALUES (${placeholders})
+           RETURNING id`,
+          values
+        );
+
+        created = await getPostgresSubmissionWithProfile(
+          rows[0].id
+        );
+      } catch (writeError) {
+        createError = writeError;
+      }
+    } else {
+      const result = await submissionWriteWithFallback(
+        req,
+        (client) => client
+          .from('submissions')
+          .insert({
+            assignment_id: assignmentId,
+            student_id: studentId,
+            started_at: payload.started_at || null,
+            ...payload,
+          })
+          .select('*, profiles(id, name)')
+          .single()
+      );
+
+      created = result.data;
+      createError = result.error;
+    }
+
+    if (createError) {
+      return res.status(400).json({
+        error: createError.message,
+      });
+    }
+
     await enqueueSubmissionStatusNotifications(null, created);
     processNotificationOutbox().catch((notifyError) => {
       console.error('Student review outbox processing failed:', notifyError);
