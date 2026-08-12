@@ -6817,6 +6817,62 @@ app.get('/api/debug/submission-state', async (req, res) => {
   }
 });
 
+const POSTGRES_STUDENT_SUBMISSION_COLUMNS = new Set([
+  'idea_responses',
+  'draft_text',
+  'final_text',
+  'reflections',
+  'outline',
+  'chat_history',
+  'writing_events',
+  'feedback_history',
+  'focus_annotations',
+  'self_assessment',
+  'chat_started_at',
+  'chat_skipped_at',
+  'chat_expired_at',
+  'chat_elapsed_ms',
+  'started_at',
+  'keystroke_log',
+  'fluency_summary',
+  'final_unlocked',
+  'status',
+  'submitted_at',
+  'teacher_review',
+  'updated_at',
+  'version',
+]);
+
+function buildPostgresStudentSubmissionEntries(payload = {}) {
+  return Object.entries(payload).filter(
+    ([key, value]) =>
+      POSTGRES_STUDENT_SUBMISSION_COLUMNS.has(key) &&
+      value !== undefined
+  );
+}
+
+async function getPostgresSubmissionWithProfile(submissionId) {
+  const { rows } = await db.query(
+    `SELECT
+       s.*,
+       CASE
+         WHEN p.id IS NULL THEN NULL
+         ELSE jsonb_build_object(
+           'id', p.id,
+           'name', p.name
+         )
+       END AS profiles
+     FROM public.submissions s
+     LEFT JOIN public.profiles p
+       ON p.id = s.student_id
+     WHERE s.id = $1
+     LIMIT 1`,
+    [submissionId]
+  );
+
+  return rows[0] || null;
+}
+
 // Submit student's own work atomically
 app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
   try {
@@ -6845,25 +6901,103 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
       updated_at: new Date().toISOString(),
     };
 
-    const submissionClient = readClient;
-    const { data: existing, error: existingError } = await submissionClient
-      .from('submissions')
-      .select('id, version, writing_events, keystroke_log')
-      .eq('assignment_id', req.params.assignmentId)
-      .eq('student_id', user.id)
-      .maybeSingle();
-    if (existingError) return res.status(isRlsDenial(existingError) ? 403 : 400).json({ error: existingError.message });
+    let existing;
+    let existingError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             id,
+             version,
+             writing_events,
+             keystroke_log
+           FROM public.submissions
+           WHERE assignment_id = $1
+             AND student_id = $2
+           LIMIT 1`,
+          [req.params.assignmentId, user.id]
+        );
+
+        existing = rows[0] || null;
+      } catch (error) {
+        existingError = error;
+      }
+    } else {
+      const submissionClient = readClient;
+
+      const result = await submissionClient
+        .from('submissions')
+        .select('id, version, writing_events, keystroke_log')
+        .eq('assignment_id', req.params.assignmentId)
+        .eq('student_id', user.id)
+        .maybeSingle();
+
+      existing = result.data;
+      existingError = result.error;
+    }
+
+    if (existingError) {
+      return res
+        .status(isRlsDenial(existingError) ? 403 : 400)
+        .json({ error: existingError.message });
+    }
 
     if (existing?.id) {
       nextPayload = preserveProcessHistoryOnSubmit(nextPayload, existing);
       nextPayload.version = Number(existing.version || 1) + 1;
-      const { data, error } = await submissionWriteWithFallback(req, (client) => client
-        .from('submissions')
-        .update(nextPayload)
-        .eq('id', existing.id)
-        .select('*, profiles(id, name)')
-        .single());
-      if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+      let data;
+      let error = null;
+
+      if (USE_POSTGRES_APP_DB) {
+        try {
+          const entries = buildPostgresStudentSubmissionEntries(nextPayload);
+
+          const setSql = entries
+            .map(([key], index) => `${key} = $${index + 1}`)
+            .join(', ');
+
+          const values = entries.map(([, value]) => value);
+          values.push(existing.id);
+
+          const { rows } = await db.query(
+            `UPDATE public.submissions
+                SET ${setSql}
+              WHERE id = $${values.length}
+            RETURNING id`,
+            values
+          );
+
+          if (!rows[0]) {
+            return res.status(404).json({
+              error: 'Submission not found.',
+            });
+          }
+
+          data = await getPostgresSubmissionWithProfile(existing.id);
+        } catch (writeError) {
+          error = writeError;
+        }
+      } else {
+        const result = await submissionWriteWithFallback(
+          req,
+          (client) => client
+            .from('submissions')
+            .update(nextPayload)
+            .eq('id', existing.id)
+            .select('*, profiles(id, name)')
+            .single()
+        );
+
+        data = result.data;
+        error = result.error;
+      }
+
+      if (error) {
+        return res
+          .status(isRlsDenial(error) ? 403 : 400)
+          .json({ error: error.message });
+      }
       await saveSubmissionRevision(data, user.id, 'submitted');
       await enqueueDomainEvent({
         eventType: 'submission_received',
@@ -6893,17 +7027,77 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
       return res.json(responseBody);
     }
 
-    const { data, error } = await submissionWriteWithFallback(req, (client) => client
-      .from('submissions')
-      .insert({
-        assignment_id: req.params.assignmentId,
-        student_id: user.id,
-        started_at: nextPayload.started_at || new Date().toISOString(),
-        ...nextPayload,
-      })
-      .select('*, profiles(id, name)')
-      .single());
-    if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const insertPayload = {
+          ...nextPayload,
+          started_at:
+            nextPayload.started_at ||
+            new Date().toISOString(),
+        };
+
+        const entries =
+          buildPostgresStudentSubmissionEntries(insertPayload);
+
+        const columns = [
+          'assignment_id',
+          'student_id',
+          ...entries.map(([key]) => key),
+        ];
+
+        const values = [
+          req.params.assignmentId,
+          user.id,
+          ...entries.map(([, value]) => value),
+        ];
+
+        const placeholders = values
+          .map((_, index) => `$${index + 1}`)
+          .join(', ');
+
+        const { rows } = await db.query(
+          `INSERT INTO public.submissions
+            (${columns.join(', ')})
+           VALUES (${placeholders})
+           RETURNING id`,
+          values
+        );
+
+        data = await getPostgresSubmissionWithProfile(
+          rows[0].id
+        );
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await submissionWriteWithFallback(
+        req,
+        (client) => client
+          .from('submissions')
+          .insert({
+            assignment_id: req.params.assignmentId,
+            student_id: user.id,
+            started_at:
+              nextPayload.started_at ||
+              new Date().toISOString(),
+            ...nextPayload,
+          })
+          .select('*, profiles(id, name)')
+          .single()
+      );
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res
+        .status(isRlsDenial(error) ? 403 : 400)
+        .json({ error: error.message });
+    }
     await saveSubmissionRevision(data, user.id, 'submitted');
     await enqueueDomainEvent({
       eventType: 'submission_received',
