@@ -6103,145 +6103,501 @@ app.get('/api/classes/:classId/members', async (req, res) => {
 // Send a teacher-authored email to one or all approved students in a course.
 app.post('/api/classes/:classId/messages', async (req, res) => {
   try {
-    const { user, profile, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    if (!canSendNotificationEmails()) {
-      return res.status(503).json({
-        error: 'Email delivery is not configured. Set SMTP credentials or RESEND_API_KEY and NOTIFY_FROM_EMAIL.',
+    const {
+      user,
+      profile,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
       });
     }
 
-    const recipientMode = req.body?.recipientMode === 'individual' ? 'individual' : 'all';
-    const { data: classRow, error: classError } = await supabase
-      .from('classes')
-      .select('id, name, teacher_id, is_published, archived')
-      .eq('id', req.params.classId)
-      .eq('teacher_id', user.id)
-      .maybeSingle();
-    if (classError) return res.status(400).json({ error: classError.message });
-    if (!classRow) return res.status(403).json({ error: 'You can only message students in your own course.' });
-    const studentId = String(req.body?.studentId || '').trim();
-    const subject = String(req.body?.subject || '').trim();
-    const body = String(req.body?.body || '').trim();
-    const requestId = String(req.body?.requestId || crypto.randomUUID())
+    if (!canSendNotificationEmails()) {
+      return res.status(503).json({
+        error:
+          'Email delivery is not configured. Set SMTP credentials or RESEND_API_KEY and NOTIFY_FROM_EMAIL.',
+      });
+    }
+
+    const recipientMode =
+      req.body?.recipientMode === 'individual'
+        ? 'individual'
+        : 'all';
+
+    let classRow;
+    let classError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             id,
+             name,
+             teacher_id,
+             is_published,
+             archived
+           FROM public.classes
+           WHERE id = $1
+             AND teacher_id = $2
+           LIMIT 1`,
+          [
+            req.params.classId,
+            user.id,
+          ]
+        );
+
+        classRow = rows[0] || null;
+      } catch (error) {
+        classError = error;
+      }
+    } else {
+      const result = await supabase
+        .from('classes')
+        .select(
+          'id, name, teacher_id, is_published, archived'
+        )
+        .eq('id', req.params.classId)
+        .eq('teacher_id', user.id)
+        .maybeSingle();
+
+      classRow = result.data;
+      classError = result.error;
+    }
+
+    if (classError) {
+      return res.status(400).json({
+        error: classError.message,
+      });
+    }
+
+    if (!classRow) {
+      return res.status(403).json({
+        error:
+          'You can only message students in your own course.',
+      });
+    }
+
+    const studentId =
+      String(req.body?.studentId || '').trim();
+
+    const subject =
+      String(req.body?.subject || '').trim();
+
+    const body =
+      String(req.body?.body || '').trim();
+
+    const requestId = String(
+      req.body?.requestId || crypto.randomUUID()
+    )
       .replace(/[^A-Za-z0-9_-]/g, '')
       .slice(0, 120);
 
-    const { data: existingMessage, error: existingMessageError } = await supabase
-      .from('course_messages')
-      .select('*')
-      .eq('teacher_id', user.id)
-      .eq('provider_request_id', requestId)
-      .maybeSingle();
-    if (existingMessageError) throw existingMessageError;
+    let existingMessage;
+    let existingMessageError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT *
+             FROM public.course_messages
+            WHERE teacher_id = $1
+              AND provider_request_id = $2
+            LIMIT 1`,
+          [
+            user.id,
+            requestId,
+          ]
+        );
+
+        existingMessage =
+          rows[0] || null;
+      } catch (error) {
+        existingMessageError = error;
+      }
+    } else {
+      const result = await supabase
+        .from('course_messages')
+        .select('*')
+        .eq('teacher_id', user.id)
+        .eq(
+          'provider_request_id',
+          requestId
+        )
+        .maybeSingle();
+
+      existingMessage = result.data;
+      existingMessageError = result.error;
+    }
+
+    if (existingMessageError) {
+      throw existingMessageError;
+    }
+
     if (existingMessage) {
-      return res.status(existingMessage.status === 'queued' || existingMessage.status === 'sending' ? 202 : 200).json({
-        ok: true,
-        queued: existingMessage.status === 'queued' || existingMessage.status === 'sending',
-        replayed: true,
-        message: existingMessage,
-        courseId: existingMessage.class_id,
-        recipientMode: existingMessage.recipient_mode,
-        recipientCount: Array.isArray(existingMessage.recipient_emails)
-          ? existingMessage.recipient_emails.length
-          : 0,
-        deliveredCount: existingMessage.delivered_count || 0,
-        failedCount: existingMessage.failed_count || 0,
-        sentAt: existingMessage.sent_at || null,
-      });
+      const queued =
+        existingMessage.status === 'queued' ||
+        existingMessage.status === 'sending';
+
+      return res
+        .status(queued ? 202 : 200)
+        .json({
+          ok: true,
+          queued,
+          replayed: true,
+          message: existingMessage,
+          courseId:
+            existingMessage.class_id,
+          recipientMode:
+            existingMessage.recipient_mode,
+          recipientCount:
+            Array.isArray(
+              existingMessage.recipient_emails
+            )
+              ? existingMessage
+                  .recipient_emails.length
+              : 0,
+          deliveredCount:
+            existingMessage
+              .delivered_count || 0,
+          failedCount:
+            existingMessage.failed_count || 0,
+          sentAt:
+            existingMessage.sent_at || null,
+        });
     }
 
     if (!subject || subject.length > 180) {
-      return res.status(400).json({ error: 'Enter a subject of 180 characters or fewer.' });
-    }
-    if (!body || body.length > 20000) {
-      return res.status(400).json({ error: 'Enter a message of 20,000 characters or fewer.' });
-    }
-    if (recipientMode === 'individual' && !studentId) {
-      return res.status(400).json({ error: 'Select an enrolled student.' });
-    }
-    let membershipQuery = supabase
-      .from('class_members')
-      .select('student_id, status, profiles(id, name, email)')
-      .eq('class_id', classRow.id)
-      .eq('status', 'approved');
-    if (recipientMode === 'individual') {
-      membershipQuery = membershipQuery.eq('student_id', studentId);
-    }
-
-    const membershipResult = await membershipQuery;
-    if (membershipResult.error) {
-      return res.status(400).json({ error: membershipResult.error.message });
-    }
-    const memberships = membershipResult.data || [];
-    if (!memberships.length) {
       return res.status(400).json({
-        error: recipientMode === 'individual'
-          ? 'That student is not enrolled in this course.'
-          : 'This course has no enrolled students with approved access.',
+        error:
+          'Enter a subject of 180 characters or fewer.',
       });
     }
+
+    if (!body || body.length > 20000) {
+      return res.status(400).json({
+        error:
+          'Enter a message of 20,000 characters or fewer.',
+      });
+    }
+
+    if (
+      recipientMode === 'individual' &&
+      !studentId
+    ) {
+      return res.status(400).json({
+        error: 'Select an enrolled student.',
+      });
+    }
+
+    let memberships = [];
+    let membershipError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const values = [
+          classRow.id,
+        ];
+
+        let studentSql = '';
+
+        if (recipientMode === 'individual') {
+          values.push(studentId);
+          studentSql =
+            ' AND cm.student_id = $2';
+        }
+
+        const { rows } = await db.query(
+          `SELECT
+             cm.student_id,
+             cm.status,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'id', p.id,
+                 'name', p.name,
+                 'email', p.email
+               )
+             END AS profiles
+           FROM public.class_members cm
+           LEFT JOIN public.profiles p
+             ON p.id = cm.student_id
+           WHERE cm.class_id = $1
+             AND cm.status = 'approved'
+             ${studentSql}`,
+          values
+        );
+
+        memberships = rows;
+      } catch (error) {
+        membershipError = error;
+      }
+    } else {
+      let membershipQuery = supabase
+        .from('class_members')
+        .select(
+          'student_id, status, profiles(id, name, email)'
+        )
+        .eq('class_id', classRow.id)
+        .eq('status', 'approved');
+
+      if (recipientMode === 'individual') {
+        membershipQuery =
+          membershipQuery.eq(
+            'student_id',
+            studentId
+          );
+      }
+
+      const result =
+        await membershipQuery;
+
+      memberships =
+        result.data || [];
+
+      membershipError =
+        result.error;
+    }
+
+    if (membershipError) {
+      return res.status(400).json({
+        error: membershipError.message,
+      });
+    }
+
+    if (!memberships.length) {
+      return res.status(400).json({
+        error:
+          recipientMode === 'individual'
+            ? 'That student is not enrolled in this course.'
+            : 'This course has no enrolled students with approved access.',
+      });
+    }
+
     if (memberships.length > 200) {
-      return res.status(400).json({ error: 'Course messages are limited to 200 recipients at a time.' });
+      return res.status(400).json({
+        error:
+          'Course messages are limited to 200 recipients at a time.',
+      });
     }
 
     const missingEmailIds = memberships
-      .filter((entry) => !normalizeEmail(entry.profiles?.email))
-      .map((entry) => entry.student_id);
-    const authEmailMap = missingEmailIds.length
-      ? await getAuthUserEmailMap(missingEmailIds)
-      : new Map();
+      .filter(
+        (entry) =>
+          !normalizeEmail(
+            entry.profiles?.email
+          )
+      )
+      .map(
+        (entry) =>
+          entry.student_id
+      );
+
+    const authEmailMap =
+      missingEmailIds.length
+        ? await getAuthUserEmailMap(
+            missingEmailIds
+          )
+        : new Map();
+
     const recipients = memberships
       .map((entry) => ({
         id: entry.student_id,
-        name: entry.profiles?.name || 'Student',
-        email: normalizeEmail(entry.profiles?.email || authEmailMap.get(entry.student_id)),
+        name:
+          entry.profiles?.name ||
+          'Student',
+        email: normalizeEmail(
+          entry.profiles?.email ||
+            authEmailMap.get(
+              entry.student_id
+            )
+        ),
       }))
-      .filter((entry) => entry.email);
+      .filter(
+        (entry) =>
+          entry.email
+      );
 
     if (!recipients.length) {
-      return res.status(400).json({ error: 'No deliverable student email addresses were found.' });
+      return res.status(400).json({
+        error:
+          'No deliverable student email addresses were found.',
+      });
     }
 
-    const messageRecord = {
-      teacher_id: user.id,
-      class_id: classRow.id,
-      recipient_mode: recipientMode,
-      recipient_student_id: recipientMode === 'individual' ? recipients[0].id : null,
-      recipient_emails: recipients.map((recipient) => recipient.email),
-      subject,
-      body,
-      status: 'queued',
-      delivered_count: 0,
-      failed_count: 0,
-      provider_request_id: requestId,
-      updated_at: new Date().toISOString(),
-    };
-    const { data: storedMessage, error: messageStoreError } =
-      await writeWithRequestScopedFallback(req, (client) =>
-        client.from('course_messages')
-          .upsert(messageRecord, { onConflict: 'teacher_id,provider_request_id' })
-          .select()
-          .single()
+    const recipientEmails =
+      recipients.map(
+        (recipient) =>
+          recipient.email
       );
+
+    let storedMessage;
+    let messageStoreError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.course_messages
+            (
+              teacher_id,
+              class_id,
+              recipient_mode,
+              recipient_student_id,
+              recipient_emails,
+              subject,
+              body,
+              status,
+              delivered_count,
+              failed_count,
+              provider_request_id,
+              updated_at
+            )
+           VALUES
+            (
+              $1,
+              $2,
+              $3,
+              $4,
+              $5::jsonb,
+              $6,
+              $7,
+              'queued',
+              0,
+              0,
+              $8,
+              NOW()
+            )
+           ON CONFLICT
+             (teacher_id, provider_request_id)
+           DO NOTHING
+           RETURNING *`,
+          [
+            user.id,
+            classRow.id,
+            recipientMode,
+            recipientMode ===
+            'individual'
+              ? recipients[0].id
+              : null,
+            JSON.stringify(
+              recipientEmails
+            ),
+            subject,
+            body,
+            requestId,
+          ]
+        );
+
+        storedMessage =
+          rows[0] || null;
+
+        if (!storedMessage) {
+          const replay =
+            await db.query(
+              `SELECT *
+                 FROM public.course_messages
+                WHERE teacher_id = $1
+                  AND provider_request_id = $2
+                LIMIT 1`,
+              [
+                user.id,
+                requestId,
+              ]
+            );
+
+          storedMessage =
+            replay.rows[0] || null;
+        }
+      } catch (error) {
+        messageStoreError = error;
+      }
+    } else {
+      const messageRecord = {
+        teacher_id: user.id,
+        class_id: classRow.id,
+        recipient_mode:
+          recipientMode,
+        recipient_student_id:
+          recipientMode ===
+          'individual'
+            ? recipients[0].id
+            : null,
+        recipient_emails:
+          recipientEmails,
+        subject,
+        body,
+        status: 'queued',
+        delivered_count: 0,
+        failed_count: 0,
+        provider_request_id:
+          requestId,
+        updated_at:
+          new Date().toISOString(),
+      };
+
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('course_messages')
+              .upsert(
+                messageRecord,
+                {
+                  onConflict:
+                    'teacher_id,provider_request_id',
+                }
+              )
+              .select()
+              .single()
+        );
+
+      storedMessage =
+        result.data;
+
+      messageStoreError =
+        result.error;
+    }
+
     if (messageStoreError) {
       throw messageStoreError;
+    }
+
+    if (!storedMessage) {
+      throw new Error(
+        'Course message could not be stored.'
+      );
     }
 
     await enqueueDomainEvent({
       eventType: 'course_message',
       aggregateType: 'course_message',
-      aggregateId: storedMessage.id,
-      idempotencyKey: `course-message:${user.id}:${requestId}`,
+      aggregateId:
+        storedMessage.id,
+      idempotencyKey:
+        `course-message:${user.id}:${requestId}`,
       payload: {
         recipients,
-        teacherName: profile?.name || 'Your instructor',
-        courseName: classRow.name || 'your course',
+        teacherName:
+          profile?.name ||
+          'Your instructor',
+        courseName:
+          classRow.name ||
+          'your course',
       },
     });
-    processNotificationOutbox().catch((deliveryError) => {
-      console.error('Course message outbox processing failed:', deliveryError);
-    });
+
+    processNotificationOutbox().catch(
+      (deliveryError) => {
+        console.error(
+          'Course message outbox processing failed:',
+          deliveryError
+        );
+      }
+    );
 
     res.status(202).json({
       ok: true,
@@ -6249,79 +6605,386 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       message: storedMessage,
       courseId: classRow.id,
       recipientMode,
-      recipientCount: recipients.length,
+      recipientCount:
+        recipients.length,
       deliveredCount: 0,
       failedCount: 0,
-      queuedAt: new Date().toISOString(),
-      recipient: recipientMode === 'individual'
-        ? { id: recipients[0].id, name: recipients[0].name }
-        : null,
+      queuedAt:
+        new Date().toISOString(),
+      recipient:
+        recipientMode === 'individual'
+          ? {
+              id: recipients[0].id,
+              name:
+                recipients[0].name,
+            }
+          : null,
     });
   } catch (error) {
-    console.error('Teacher course message failed:', errorClassForLog(error));
-    res.status(500).json({ error: 'The course message could not be sent.' });
+    console.error(
+      'Teacher course message failed:',
+      errorClassForLog(error)
+    );
+
+    res.status(500).json({
+      error:
+        'The course message could not be sent.',
+    });
   }
 });
 
 app.get('/api/course-messages', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    const client = getRequestScopedSupabase(req);
-    const { data, error: readError } = await client
-      .from('course_messages')
-      .select('*, classes(name, invite_code)')
-      .eq('teacher_id', user.id)
-      .order('created_at', { ascending: false });
-    if (readError) return res.status(400).json({ error: readError.message });
-    res.json({ messages: data || [] });
+    const {
+      user,
+      error,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (error) {
+      return res
+        .status(status)
+        .json({ error });
+    }
+
+    let data = [];
+    let readError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             m.*,
+             CASE
+               WHEN c.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'name', c.name,
+                 'invite_code', c.invite_code
+               )
+             END AS classes
+           FROM public.course_messages m
+           LEFT JOIN public.classes c
+             ON c.id = m.class_id
+           WHERE m.teacher_id = $1
+           ORDER BY m.created_at DESC`,
+          [user.id]
+        );
+
+        data = rows;
+      } catch (error) {
+        readError = error;
+      }
+    } else {
+      const client =
+        getRequestScopedSupabase(req);
+
+      const result = await client
+        .from('course_messages')
+        .select(
+          '*, classes(name, invite_code)'
+        )
+        .eq('teacher_id', user.id)
+        .order('created_at', {
+          ascending: false,
+        });
+
+      data = result.data;
+      readError = result.error;
+    }
+
+    if (readError) {
+      return res.status(400).json({
+        error: readError.message,
+      });
+    }
+
+    res.json({
+      messages: data || [],
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 app.post('/api/course-messages/drafts', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    const classId = String(req.body?.classId || '').trim();
-    const ownedClass = await ensureTeacherOwnsClass(classId, user.id, getRequestScopedSupabase(req));
-    if (!ownedClass) return res.status(403).json({ error: 'You can only save messages for your own course.' });
-    const payload = {
-      teacher_id: user.id,
-      class_id: classId,
-      recipient_mode: req.body?.recipientMode === 'individual' ? 'individual' : 'all',
-      recipient_student_id: req.body?.studentId || null,
-      recipient_emails: Array.isArray(req.body?.recipientEmails) ? req.body.recipientEmails : [],
-      subject: String(req.body?.subject || ''),
-      body: String(req.body?.body || ''),
-      status: 'draft',
-      updated_at: new Date().toISOString(),
-    };
-    const draftId = String(req.body?.id || '').trim();
-    const result = draftId
-      ? await writeWithRequestScopedFallback(req, (client) => client.from('course_messages')
-          .update(payload).eq('id', draftId).eq('teacher_id', user.id).eq('status', 'draft').select().single())
-      : await writeWithRequestScopedFallback(req, (client) => client.from('course_messages')
-          .insert(payload).select().single());
-    if (result.error) return res.status(400).json({ error: result.error.message });
-    res.json({ message: result.data });
+    const {
+      user,
+      error,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (error) {
+      return res
+        .status(status)
+        .json({ error });
+    }
+
+    const classId =
+      String(
+        req.body?.classId || ''
+      ).trim();
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        classId,
+        user.id,
+        getRequestScopedSupabase(req)
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only save messages for your own course.',
+      });
+    }
+
+    const recipientMode =
+      req.body?.recipientMode === 'individual'
+        ? 'individual'
+        : 'all';
+
+    const recipientStudentId =
+      req.body?.studentId || null;
+
+    const recipientEmails =
+      Array.isArray(
+        req.body?.recipientEmails
+      )
+        ? req.body.recipientEmails
+        : [];
+
+    const subject =
+      String(
+        req.body?.subject || ''
+      );
+
+    const body =
+      String(
+        req.body?.body || ''
+      );
+
+    const draftId =
+      String(
+        req.body?.id || ''
+      ).trim();
+
+    let data;
+    let writeError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        if (draftId) {
+          const { rows } =
+            await db.query(
+              `UPDATE public.course_messages
+                  SET class_id = $3,
+                      recipient_mode = $4,
+                      recipient_student_id = $5,
+                      recipient_emails = $6::jsonb,
+                      subject = $7,
+                      body = $8,
+                      updated_at = NOW()
+                WHERE id = $1
+                  AND teacher_id = $2
+                  AND status = 'draft'
+              RETURNING *`,
+              [
+                draftId,
+                user.id,
+                classId,
+                recipientMode,
+                recipientStudentId,
+                JSON.stringify(
+                  recipientEmails
+                ),
+                subject,
+                body,
+              ]
+            );
+
+          data =
+            rows[0] || null;
+        } else {
+          const { rows } =
+            await db.query(
+              `INSERT INTO public.course_messages
+                (
+                  teacher_id,
+                  class_id,
+                  recipient_mode,
+                  recipient_student_id,
+                  recipient_emails,
+                  subject,
+                  body,
+                  status,
+                  updated_at
+                )
+               VALUES
+                (
+                  $1,
+                  $2,
+                  $3,
+                  $4,
+                  $5::jsonb,
+                  $6,
+                  $7,
+                  'draft',
+                  NOW()
+                )
+               RETURNING *`,
+              [
+                user.id,
+                classId,
+                recipientMode,
+                recipientStudentId,
+                JSON.stringify(
+                  recipientEmails
+                ),
+                subject,
+                body,
+              ]
+            );
+
+          data = rows[0];
+        }
+      } catch (error) {
+        writeError = error;
+      }
+    } else {
+      const payload = {
+        teacher_id: user.id,
+        class_id: classId,
+        recipient_mode:
+          recipientMode,
+        recipient_student_id:
+          recipientStudentId,
+        recipient_emails:
+          recipientEmails,
+        subject,
+        body,
+        status: 'draft',
+        updated_at:
+          new Date().toISOString(),
+      };
+
+      const result = draftId
+        ? await writeWithRequestScopedFallback(
+            req,
+            (client) =>
+              client
+                .from('course_messages')
+                .update(payload)
+                .eq('id', draftId)
+                .eq(
+                  'teacher_id',
+                  user.id
+                )
+                .eq(
+                  'status',
+                  'draft'
+                )
+                .select()
+                .single()
+          )
+        : await writeWithRequestScopedFallback(
+            req,
+            (client) =>
+              client
+                .from('course_messages')
+                .insert(payload)
+                .select()
+                .single()
+          );
+
+      data = result.data;
+      writeError = result.error;
+    }
+
+    if (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error:
+          'Message draft not found.',
+      });
+    }
+
+    res.json({
+      message: data,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 app.delete('/api/course-messages/:id', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    const { error: deleteError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('course_messages').delete().eq('id', req.params.id).eq('teacher_id', user.id)
-    );
-    if (deleteError) return res.status(400).json({ error: deleteError.message });
+    const {
+      user,
+      error,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (error) {
+      return res
+        .status(status)
+        .json({ error });
+    }
+
+    let deleteError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        await db.query(
+          `DELETE FROM public.course_messages
+            WHERE id = $1
+              AND teacher_id = $2`,
+          [
+            req.params.id,
+            user.id,
+          ]
+        );
+      } catch (error) {
+        deleteError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('course_messages')
+              .delete()
+              .eq('id', req.params.id)
+              .eq(
+                'teacher_id',
+                user.id
+              )
+        );
+
+      deleteError = result.error;
+    }
+
+    if (deleteError) {
+      return res.status(400).json({
+        error: deleteError.message,
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
