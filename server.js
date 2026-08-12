@@ -5418,20 +5418,102 @@ app.get('/api/notifications/diagnose-submission', async (req, res) => {
     const assignment = await ensureTeacherOwnsAssignment(assignmentId, user.id, readClient);
     if (!assignment) return res.status(403).json({ error: 'You can only diagnose your own assignments.' });
 
-    const { data: classRow, error: classError } = await supabase
-      .from('classes')
-      .select('id, name, teacher_id')
-      .eq('id', assignment.class_id)
-      .maybeSingle();
-    if (classError) return res.status(400).json({ error: classError.message });
+    let classRow;
+    let classError = null;
 
-    const { data: submission, error: submissionError } = await supabase
-      .from('submissions')
-      .select('*, profiles(id, name)')
-      .eq('assignment_id', assignmentId)
-      .eq('student_id', studentId)
-      .maybeSingle();
-    if (submissionError) return res.status(400).json({ error: submissionError.message });
+    let submission;
+    let submissionError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const classResult = await db.query(
+          `SELECT id, name, teacher_id
+             FROM public.classes
+            WHERE id = $1
+            LIMIT 1`,
+          [assignment.class_id]
+        );
+
+        classRow =
+          classResult.rows[0] || null;
+
+        const submissionResult =
+          await db.query(
+            `SELECT
+               s.*,
+               CASE
+                 WHEN p.id IS NULL THEN NULL
+                 ELSE jsonb_build_object(
+                   'id', p.id,
+                   'name', p.name
+                 )
+               END AS profiles
+             FROM public.submissions s
+             LEFT JOIN public.profiles p
+               ON p.id = s.student_id
+             WHERE s.assignment_id = $1
+               AND s.student_id = $2
+             LIMIT 1`,
+            [
+              assignmentId,
+              studentId,
+            ]
+          );
+
+        submission =
+          submissionResult.rows[0] || null;
+      } catch (readError) {
+        submissionError = readError;
+      }
+    } else {
+      const classResult = await supabase
+        .from('classes')
+        .select('id, name, teacher_id')
+        .eq('id', assignment.class_id)
+        .maybeSingle();
+
+      classRow =
+        classResult.data;
+
+      classError =
+        classResult.error;
+
+      if (!classError) {
+        const submissionResult =
+          await supabase
+            .from('submissions')
+            .select(
+              '*, profiles(id, name)'
+            )
+            .eq(
+              'assignment_id',
+              assignmentId
+            )
+            .eq(
+              'student_id',
+              studentId
+            )
+            .maybeSingle();
+
+        submission =
+          submissionResult.data;
+
+        submissionError =
+          submissionResult.error;
+      }
+    }
+
+    if (classError) {
+      return res.status(400).json({
+        error: classError.message,
+      });
+    }
+
+    if (submissionError) {
+      return res.status(400).json({
+        error: submissionError.message,
+      });
+    }
 
     const emailMap = await getAuthUserEmailMap([studentId, classRow?.teacher_id].filter(Boolean));
     const studentEmail = emailMap.get(studentId) || '';
@@ -6073,6 +6155,14 @@ app.delete('/api/classes/:classId', async (req, res) => {
     const readClient = getRequestScopedSupabase(req);
     const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
     if (!ownedClass) return res.status(403).json({ error: 'You can only delete your own classes.' });
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Class deletion is temporarily unavailable while research archive tables are being migrated.',
+      });
+    }
+
     const { data: assignments } = await supabase
       .from('assignments')
       .select('id')
