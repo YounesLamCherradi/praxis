@@ -6140,66 +6140,271 @@ app.delete('/api/classes/:classId', async (req, res) => {
 
 app.delete('/api/classes/:classId/members/:studentId', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only remove students from your own classes.' });
-    const { error } = await writeWithRequestScopedFallback(req, (client) => client
-      .from('class_members')
-      .delete()
-      .eq('class_id', req.params.classId)
-      .eq('student_id', req.params.studentId));
-    if (error) return res.status(400).json({ error: error.message });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const readClient =
+      getRequestScopedSupabase(req);
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id,
+        readClient
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only remove students from your own classes.',
+      });
+    }
+
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        await db.query(
+          `DELETE FROM public.class_members
+            WHERE class_id = $1
+              AND student_id = $2`,
+          [
+            req.params.classId,
+            req.params.studentId,
+          ]
+        );
+      } catch (deleteError) {
+        error = deleteError;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('class_members')
+              .delete()
+              .eq(
+                'class_id',
+                req.params.classId
+              )
+              .eq(
+                'student_id',
+                req.params.studentId
+              )
+        );
+
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only rename students in your own classes.' });
-    const enrolledStudent = await ensureStudentBelongsToClass(req.params.classId, req.params.studentId, readClient);
-    if (!enrolledStudent) return res.status(404).json({ error: 'That student is not enrolled in this class.' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    const name = String(req.body?.name || '').trim();
-    if (!name) return res.status(400).json({ error: 'A student name is required.' });
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
 
-    const { data, error } = await supabase
-      .from('profiles')
-      .update({ name })
-      .eq('id', req.params.studentId)
-      .select('id, name, role');
-    if (error) return res.status(400).json({ error: error.message });
-    const profile = Array.isArray(data) ? data[0] : data;
-    if (!profile) return res.status(404).json({ error: 'Student profile not found after rename.' });
+    const readClient =
+      getRequestScopedSupabase(req);
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id,
+        readClient
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only rename students in your own classes.',
+      });
+    }
+
+    const enrolledStudent =
+      await ensureStudentBelongsToClass(
+        req.params.classId,
+        req.params.studentId,
+        readClient
+      );
+
+    if (!enrolledStudent) {
+      return res.status(404).json({
+        error:
+          'That student is not enrolled in this class.',
+      });
+    }
+
+    const name =
+      String(req.body?.name || '').trim();
+
+    if (!name) {
+      return res.status(400).json({
+        error:
+          'A student name is required.',
+      });
+    }
+
+    let profile;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `UPDATE public.profiles
+              SET name = $1
+            WHERE id = $2
+          RETURNING id, name, role`,
+          [
+            name,
+            req.params.studentId,
+          ]
+        );
+
+        profile = rows[0] || null;
+      } catch (updateError) {
+        error = updateError;
+      }
+    } else {
+      const result = await supabase
+        .from('profiles')
+        .update({ name })
+        .eq(
+          'id',
+          req.params.studentId
+        )
+        .select('id, name, role');
+
+      error = result.error;
+
+      profile =
+        Array.isArray(result.data)
+          ? result.data[0]
+          : result.data;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    if (!profile) {
+      return res.status(404).json({
+        error:
+          'Student profile not found after rename.',
+      });
+    }
+
     res.json({ profile });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Approve a pending student who joined via the class invite link
 app.post('/api/classes/:classId/members/:studentId/approve', async (req, res) => {
   try {
-    const guard = await requireOwnedClassMember(req, {
-      ownershipError: 'You can only approve students for your own classes.',
-    });
-    if (guard.error) return res.status(guard.status).json({ error: guard.error });
-    const { error } = await writeWithRequestScopedFallback(req, (client) => client
-      .from('class_members')
-      .update({ status: 'approved' })
-      .eq('class_id', req.params.classId)
-      .eq('student_id', req.params.studentId));
-    if (error) return res.status(400).json({ error: error.message });
+    const guard =
+      await requireOwnedClassMember(
+        req,
+        {
+          ownershipError:
+            'You can only approve students for your own classes.',
+        }
+      );
+
+    if (guard.error) {
+      return res
+        .status(guard.status)
+        .json({
+          error: guard.error,
+        });
+    }
+
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        await db.query(
+          `UPDATE public.class_members
+              SET status = 'approved'
+            WHERE class_id = $1
+              AND student_id = $2`,
+          [
+            req.params.classId,
+            req.params.studentId,
+          ]
+        );
+      } catch (updateError) {
+        error = updateError;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('class_members')
+              .update({
+                status: 'approved',
+              })
+              .eq(
+                'class_id',
+                req.params.classId
+              )
+              .eq(
+                'student_id',
+                req.params.studentId
+              )
+        );
+
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -6207,66 +6412,234 @@ app.post('/api/classes/:classId/members/:studentId/approve', async (req, res) =>
 app.get('/api/student/classes', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const { data: memberships, error: membershipError } = await readClient
-      .from('class_members')
-      .select('class_id, status')
-      .eq('student_id', user.id);
-    if (membershipError) return res.status(400).json({ error: membershipError.message });
 
-    // The membership query above is evaluated with the student's JWT/RLS and
-    // therefore proves exactly which class IDs this user may access. Load only
-    // those verified classes with the server client so a missing/narrow class
-    // SELECT policy cannot silently turn an existing membership into
-    // `classes: null`.
-    const classIds = Array.from(
-      new Set((memberships || []).map((entry) => entry.class_id).filter(Boolean))
-    );
-    if (!classIds.length) {
-      return res.json({ classes: [], pendingClasses: [] });
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
     }
 
-    const { data: classRows, error: classError } = await supabase
-      .from('classes')
-      .select('id, name, teacher_id, invite_code, description, semester, is_published, archived, profiles(name)')
-      .in('id', classIds);
-    if (classError) return res.status(400).json({ error: classError.message });
+    let memberships = [];
+    let membershipError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT class_id, status
+             FROM public.class_members
+            WHERE student_id = $1`,
+          [user.id]
+        );
+
+        memberships = rows;
+      } catch (error) {
+        membershipError = error;
+      }
+    } else {
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      const result = await readClient
+        .from('class_members')
+        .select('class_id, status')
+        .eq('student_id', user.id);
+
+      memberships =
+        result.data || [];
+
+      membershipError =
+        result.error;
+    }
+
+    if (membershipError) {
+      return res.status(400).json({
+        error:
+          membershipError.message,
+      });
+    }
+
+    const classIds = Array.from(
+      new Set(
+        (memberships || [])
+          .map(
+            (entry) =>
+              entry.class_id
+          )
+          .filter(Boolean)
+      )
+    );
+
+    if (!classIds.length) {
+      return res.json({
+        classes: [],
+        pendingClasses: [],
+      });
+    }
+
+    let classRows = [];
+    let classError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             c.id,
+             c.name,
+             c.teacher_id,
+             c.invite_code,
+             c.description,
+             c.semester,
+             c.is_published,
+             c.archived,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'name', p.name
+               )
+             END AS profiles
+           FROM public.classes c
+           LEFT JOIN public.profiles p
+             ON p.id = c.teacher_id
+           WHERE c.id = ANY($1::uuid[])`,
+          [classIds]
+        );
+
+        classRows = rows;
+      } catch (error) {
+        classError = error;
+      }
+    } else {
+      const result = await supabase
+        .from('classes')
+        .select(
+          'id, name, teacher_id, invite_code, description, semester, is_published, archived, profiles(name)'
+        )
+        .in('id', classIds);
+
+      classRows =
+        result.data || [];
+
+      classError =
+        result.error;
+    }
+
+    if (classError) {
+      return res.status(400).json({
+        error: classError.message,
+      });
+    }
 
     const classesById = new Map(
-      (classRows || []).map((classRow) => [String(classRow.id), classRow])
+      (classRows || []).map(
+        (classRow) => [
+          String(classRow.id),
+          classRow,
+        ]
+      )
     );
+
     const rows = (memberships || [])
       .map((membership) => ({
         ...membership,
-        classes: classesById.get(String(membership.class_id)) || null,
+        classes:
+          classesById.get(
+            String(
+              membership.class_id
+            )
+          ) || null,
       }))
-      .filter((entry) => entry.classes);
+      .filter(
+        (entry) =>
+          entry.classes
+      );
 
     res.json({
-      classes: rows.filter((entry) => entry.status !== 'pending').map((entry) => entry.classes),
-      pendingClasses: rows.filter((entry) => entry.status === 'pending').map((entry) => entry.classes),
+      classes: rows
+        .filter(
+          (entry) =>
+            entry.status !== 'pending'
+        )
+        .map(
+          (entry) =>
+            entry.classes
+        ),
+      pendingClasses: rows
+        .filter(
+          (entry) =>
+            entry.status === 'pending'
+        )
+        .map(
+          (entry) =>
+            entry.classes
+        ),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Join class via invite token
 app.get('/api/classes/:classId/invite', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('classes')
-      .select('name, profiles(name)')
-      .eq('id', req.params.classId)
-      .single();
-    if (error || !data) return res.status(404).json({ error: 'Class not found' });
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             c.name,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'name', p.name
+               )
+             END AS profiles
+           FROM public.classes c
+           LEFT JOIN public.profiles p
+             ON p.id = c.teacher_id
+           WHERE c.id = $1
+           LIMIT 1`,
+          [req.params.classId]
+        );
+
+        data = rows[0] || null;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const result = await supabase
+        .from('classes')
+        .select(
+          'name, profiles(name)'
+        )
+        .eq(
+          'id',
+          req.params.classId
+        )
+        .single();
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error || !data) {
+      return res.status(404).json({
+        error: 'Class not found',
+      });
+    }
+
     res.json({
       className: data.name,
-      teacherName: data.profiles?.name || "",
+      teacherName:
+        data.profiles?.name || '',
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -6274,46 +6647,192 @@ app.get('/api/classes/:classId/invite', async (req, res) => {
 app.post('/api/classes/:classId/join', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const profile = await getProfile(user.id);
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
+    }
+
+    const profile =
+      await getProfile(user.id);
+
     if (profile?.role !== 'student') {
-      return res.status(403).json({ error: 'Only student accounts can join classes.' });
+      return res.status(403).json({
+        error:
+          'Only student accounts can join classes.',
+      });
     }
-    const { error } = await writeWithRequestScopedFallback(req, (client) => client
-      .from('class_members')
-      .insert({ class_id: req.params.classId, student_id: user.id, status: 'pending' })
-      .select('class_id, student_id')
-      .single());
+
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        await db.query(
+          `INSERT INTO public.class_members
+            (
+              class_id,
+              student_id,
+              status
+            )
+           VALUES ($1, $2, 'pending')`,
+          [
+            req.params.classId,
+            user.id,
+          ]
+        );
+      } catch (insertError) {
+        error = insertError;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('class_members')
+              .insert({
+                class_id:
+                  req.params.classId,
+                student_id:
+                  user.id,
+                status: 'pending',
+              })
+              .select(
+                'class_id, student_id'
+              )
+              .single()
+        );
+
+      error = result.error;
+    }
+
     if (error?.code === '23505') {
-      return res.json({ ok: true, alreadyJoined: true });
+      return res.json({
+        ok: true,
+        alreadyJoined: true,
+      });
     }
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ ok: true, pending: true });
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    res.json({
+      ok: true,
+      pending: true,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 app.get('/api/classes/:classId/members', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only view rosters for your own classes.' });
-    // Ownership is verified before this server-side roster/profile read.
-    const { data, error } = await supabase
-      .from('class_members')
-      .select('student_id, status, profiles(id, name, email)')
-      .eq('class_id', req.params.classId);
-    if (error) return res.status(400).json({ error: error.message });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const readClient =
+      getRequestScopedSupabase(req);
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id,
+        readClient
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only view rosters for your own classes.',
+      });
+    }
+
+    let data = [];
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             cm.student_id,
+             cm.status,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'id', p.id,
+                 'name', p.name,
+                 'email', p.email
+               )
+             END AS profiles
+           FROM public.class_members cm
+           LEFT JOIN public.profiles p
+             ON p.id = cm.student_id
+           WHERE cm.class_id = $1`,
+          [req.params.classId]
+        );
+
+        data = rows;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const result = await supabase
+        .from('class_members')
+        .select(
+          'student_id, status, profiles(id, name, email)'
+        )
+        .eq(
+          'class_id',
+          req.params.classId
+        );
+
+      data =
+        result.data || [];
+
+      error =
+        result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
     res.json({
-      members: data
-        .filter((entry) => entry.student_id !== user.id && entry.profiles)
-        .map((entry) => ({ ...entry.profiles, status: entry.status || 'approved' })),
+      members: (data || [])
+        .filter(
+          (entry) =>
+            entry.student_id !==
+              user.id &&
+            entry.profiles
+        )
+        .map((entry) => ({
+          ...entry.profiles,
+          status:
+            entry.status ||
+            'approved',
+        })),
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
