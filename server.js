@@ -6265,6 +6265,7 @@ app.get('/api/student/submissions', async (req, res) => {
   try {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
     const readClient = getRequestScopedSupabase(req);
 
     const requestedAssignmentIds = String(req.query.assignmentIds || '')
@@ -6272,29 +6273,178 @@ app.get('/api/student/submissions', async (req, res) => {
       .map((id) => id.trim())
       .filter(Boolean);
 
+    if (USE_POSTGRES_APP_DB) {
+      let assignmentResult;
+
+      if (requestedAssignmentIds.length) {
+        assignmentResult = await db.query(
+          `SELECT DISTINCT a.id
+             FROM public.assignments a
+             INNER JOIN public.class_members cm
+               ON cm.class_id = a.class_id
+            WHERE cm.student_id = $1
+              AND a.status = 'published'
+              AND a.id = ANY($2::uuid[])`,
+          [user.id, requestedAssignmentIds]
+        );
+      } else {
+        assignmentResult = await db.query(
+          `SELECT DISTINCT a.id
+             FROM public.assignments a
+             INNER JOIN public.class_members cm
+               ON cm.class_id = a.class_id
+            WHERE cm.student_id = $1
+              AND a.status = 'published'`,
+          [user.id]
+        );
+      }
+
+      const assignmentIds = assignmentResult.rows
+        .map((assignment) => assignment.id)
+        .filter(Boolean);
+
+      if (!assignmentIds.length) {
+        return res.json({ submissions: [] });
+      }
+
+      if (String(req.query.summary || '') === '1') {
+        const { rows } = await db.query(
+          `SELECT
+             id,
+             assignment_id,
+             student_id,
+             status,
+             teacher_review,
+             submitted_at,
+             updated_at,
+             version
+           FROM public.submissions
+           WHERE student_id = $1
+             AND assignment_id = ANY($2::uuid[])`,
+          [user.id, assignmentIds]
+        );
+
+        return res.json({
+          submissions: rows.map((submission) => ({
+            ...normalizeStudentVisibleSubmission(submission),
+            detail_loaded: false,
+          })),
+        });
+      }
+
+      const { rows } = await db.query(
+        `SELECT
+           id,
+           assignment_id,
+           student_id,
+           status,
+           draft_text,
+           final_text,
+           outline,
+           chat_history,
+           feedback_history,
+           self_assessment,
+           teacher_review,
+           chat_started_at,
+           chat_skipped_at,
+           chat_expired_at,
+           chat_elapsed_ms,
+           started_at,
+           submitted_at,
+           created_at,
+           updated_at,
+           version
+         FROM public.submissions
+         WHERE student_id = $1
+           AND assignment_id = ANY($2::uuid[])`,
+        [user.id, assignmentIds]
+      );
+
+      const submissionIds = rows
+        .map((submission) => submission.id)
+        .filter(Boolean);
+
+      let revisions = [];
+
+      if (submissionIds.length) {
+        const revisionResult = await db.query(
+          `SELECT
+             submission_id,
+             revision_number,
+             snapshot,
+             change_type,
+             created_at
+           FROM public.submission_revisions
+           WHERE submission_id = ANY($1::uuid[])
+             AND change_type = ANY($2::text[])
+           ORDER BY revision_number ASC`,
+          [
+            submissionIds,
+            ['submitted', 'reviewed'],
+          ]
+        );
+
+        revisions = revisionResult.rows;
+      }
+
+      const attempts = buildSubmissionAttemptList(rows, revisions);
+
+      return res.json({
+        submissions: attempts.map(normalizeStudentVisibleSubmission),
+      });
+    }
+
     const { data: memberships, error: membershipError } = await readClient
       .from('class_members')
       .select('class_id')
       .eq('student_id', user.id);
-    if (membershipError) return res.status(400).json({ error: membershipError.message });
 
-    const classIds = Array.from(new Set((memberships || []).map((entry) => entry.class_id).filter(Boolean)));
-    if (!classIds.length) return res.json({ submissions: [] });
+    if (membershipError) {
+      return res.status(400).json({ error: membershipError.message });
+    }
+
+    const classIds = Array.from(
+      new Set(
+        (memberships || [])
+          .map((entry) => entry.class_id)
+          .filter(Boolean)
+      )
+    );
+
+    if (!classIds.length) {
+      return res.json({ submissions: [] });
+    }
 
     let assignmentQuery = readClient
       .from('assignments')
       .select('id')
       .in('class_id', classIds)
       .eq('status', 'published');
+
     if (requestedAssignmentIds.length) {
       assignmentQuery = assignmentQuery.in('id', requestedAssignmentIds);
     }
 
-    const { data: assignments, error: assignmentError } = await assignmentQuery;
-    if (assignmentError) return res.status(400).json({ error: assignmentError.message });
+    const {
+      data: assignments,
+      error: assignmentError,
+    } = await assignmentQuery;
 
-    const assignmentIds = Array.from(new Set((assignments || []).map((assignment) => assignment.id).filter(Boolean)));
-    if (!assignmentIds.length) return res.json({ submissions: [] });
+    if (assignmentError) {
+      return res.status(400).json({ error: assignmentError.message });
+    }
+
+    const assignmentIds = Array.from(
+      new Set(
+        (assignments || [])
+          .map((assignment) => assignment.id)
+          .filter(Boolean)
+      )
+    );
+
+    if (!assignmentIds.length) {
+      return res.json({ submissions: [] });
+    }
 
     if (String(req.query.summary || '') === '1') {
       const { data: summaryRows, error: summaryError } = await readClient
@@ -6311,7 +6461,11 @@ app.get('/api/student/submissions', async (req, res) => {
         ].join(','))
         .eq('student_id', user.id)
         .in('assignment_id', assignmentIds);
-      if (summaryError) return res.status(400).json({ error: summaryError.message });
+
+      if (summaryError) {
+        return res.status(400).json({ error: summaryError.message });
+      }
+
       return res.json({
         submissions: (summaryRows || []).map((submission) => ({
           ...normalizeStudentVisibleSubmission(submission),
@@ -6346,26 +6500,57 @@ app.get('/api/student/submissions', async (req, res) => {
       ].join(','))
       .eq('student_id', user.id)
       .in('assignment_id', assignmentIds);
-    if (error) return res.status(400).json({ error: error.message });
 
-    const submissionIds = (data || []).map((submission) => submission.id).filter(Boolean);
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    const submissionIds = (data || [])
+      .map((submission) => submission.id)
+      .filter(Boolean);
+
     let revisions = [];
+
     if (submissionIds.length) {
-      const { data: revisionRows, error: revisionError } = await supabase
+      const {
+        data: revisionRows,
+        error: revisionError,
+      } = await supabase
         .from('submission_revisions')
-        .select('submission_id, revision_number, snapshot, change_type, created_at')
+        .select(
+          'submission_id, revision_number, snapshot, change_type, created_at'
+        )
         .in('submission_id', submissionIds)
         .in('change_type', ['submitted', 'reviewed'])
         .order('revision_number', { ascending: true });
-      if (revisionError) return res.status(400).json({ error: revisionError.message });
+
+      if (revisionError) {
+        return res.status(400).json({
+          error: revisionError.message,
+        });
+      }
+
       revisions = revisionRows || [];
     }
 
-    const attempts = buildSubmissionAttemptList(data || [], revisions);
-    res.json({ submissions: attempts.map(normalizeStudentVisibleSubmission) });
+    const attempts = buildSubmissionAttemptList(
+      data || [],
+      revisions
+    );
+
+    return res.json({
+      submissions: attempts.map(normalizeStudentVisibleSubmission),
+    });
   } catch (error) {
-    console.error('Unexpected student submissions failure:', safeLogError(error));
-    res.status(500).json({ error: 'Could not load your submissions right now. Please refresh and try again.' });
+    console.error(
+      'Unexpected student submissions failure:',
+      safeLogError(error)
+    );
+
+    res.status(500).json({
+      error:
+        'Could not load your submissions right now. Please refresh and try again.',
+    });
   }
 });
 
@@ -6373,45 +6558,171 @@ app.get('/api/student/submissions', async (req, res) => {
 app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const accessibleAssignment = await ensureStudentCanAccessAssignment(req.params.assignmentId, user.id, readClient);
-    if (!accessibleAssignment) {
-      return res.status(403).json({ error: 'You do not have access to this assignment.' });
+
+    if (!user) {
+      return res.status(401).json({ error: 'Not authenticated' });
     }
+
+    const readClient = getRequestScopedSupabase(req);
+
+    const accessibleAssignment =
+      await ensureStudentCanAccessAssignment(
+        req.params.assignmentId,
+        user.id,
+        readClient
+      );
+
+    if (!accessibleAssignment) {
+      return res.status(403).json({
+        error: 'You do not have access to this assignment.',
+      });
+    }
+
+    if (USE_POSTGRES_APP_DB) {
+      const existingResult = await db.query(
+        `SELECT *
+           FROM public.submissions
+          WHERE assignment_id = $1
+            AND student_id = $2
+          LIMIT 1`,
+        [
+          req.params.assignmentId,
+          user.id,
+        ]
+      );
+
+      if (existingResult.rows[0]) {
+        return res.json({
+          submission: normalizeStudentVisibleSubmission(
+            existingResult.rows[0]
+          ),
+        });
+      }
+
+      if (accessibleAssignment.classArchived === true) {
+        return res.status(409).json({
+          error:
+            'This course is archived. Previous work remains available, but new work cannot be started.',
+        });
+      }
+
+      const insertResult = await db.query(
+        `INSERT INTO public.submissions
+          (
+            assignment_id,
+            student_id,
+            started_at
+          )
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (assignment_id, student_id)
+         DO NOTHING
+         RETURNING *`,
+        [
+          req.params.assignmentId,
+          user.id,
+        ]
+      );
+
+      let data = insertResult.rows[0];
+
+      if (data) {
+        await saveSubmissionRevision(
+          data,
+          user.id,
+          'started'
+        );
+      } else {
+        const raceResult = await db.query(
+          `SELECT *
+             FROM public.submissions
+            WHERE assignment_id = $1
+              AND student_id = $2
+            LIMIT 1`,
+          [
+            req.params.assignmentId,
+            user.id,
+          ]
+        );
+
+        data = raceResult.rows[0];
+      }
+
+      if (!data) {
+        return res.status(500).json({
+          error: 'Could not create your submission.',
+        });
+      }
+
+      return res.json({
+        submission: normalizeStudentVisibleSubmission(data),
+      });
+    }
+
     const submissionClient = readClient;
+
     let { data, error } = await submissionClient
       .from('submissions')
       .select('*')
       .eq('assignment_id', req.params.assignmentId)
       .eq('student_id', user.id)
       .single();
+
     if (error && error.code === 'PGRST116') {
       if (accessibleAssignment.classArchived === true) {
         return res.status(409).json({
-          error: 'This course is archived. Previous work remains available, but new work cannot be started.',
+          error:
+            'This course is archived. Previous work remains available, but new work cannot be started.',
         });
       }
-      // No submission yet - create one using the student's authenticated session when available.
-      const { data: newData, error: createError } = await submissionWriteWithFallback(req, (client) => client
-        .from('submissions')
-        .insert({
-          assignment_id: req.params.assignmentId,
-          student_id: user.id,
-          started_at: new Date().toISOString(),
-        })
-        .select()
-        .single());
-      if (createError) return res.status(400).json({ error: createError.message });
+
+      const {
+        data: newData,
+        error: createError,
+      } = await submissionWriteWithFallback(
+        req,
+        (client) => client
+          .from('submissions')
+          .insert({
+            assignment_id: req.params.assignmentId,
+            student_id: user.id,
+            started_at: new Date().toISOString(),
+          })
+          .select()
+          .single()
+      );
+
+      if (createError) {
+        return res.status(400).json({
+          error: createError.message,
+        });
+      }
+
       data = newData;
-      await saveSubmissionRevision(data, user.id, 'started');
+
+      await saveSubmissionRevision(
+        data,
+        user.id,
+        'started'
+      );
     } else if (error) {
-      return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+      return res
+        .status(isRlsDenial(error) ? 403 : 400)
+        .json({ error: error.message });
     }
-    res.json({ submission: normalizeStudentVisibleSubmission(data) });
+
+    return res.json({
+      submission: normalizeStudentVisibleSubmission(data),
+    });
   } catch (error) {
-    console.error('Unexpected my-submission failure:', safeLogError(error));
-    res.status(500).json({ error: 'Could not load your submission right now. Please refresh and try again.' });
+    console.error(
+      'Unexpected my-submission failure:',
+      safeLogError(error)
+    );
+
+    res.status(500).json({
+      error:
+        'Could not load your submission right now. Please refresh and try again.',
+    });
   }
 });
 
