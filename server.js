@@ -5932,6 +5932,95 @@ async function querySubmissionsForAssignments(
   client = supabase,
   { includeAttempts = true } = {}
 ) {
+  if (USE_POSTGRES_APP_DB) {
+    if (!Array.isArray(assignmentIds) || !assignmentIds.length) {
+      return { data: [], error: null };
+    }
+
+    try {
+      const { rows } = await db.query(
+        `SELECT
+           s.id,
+           s.assignment_id,
+           s.student_id,
+           s.status,
+           s.draft_text,
+           s.final_text,
+           s.reflections,
+           s.self_assessment,
+           s.teacher_review,
+           s.submitted_at,
+           s.started_at,
+           s.created_at,
+           s.updated_at,
+           s.version,
+           s.deleted_at,
+           CASE
+             WHEN p.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'id', p.id,
+               'name', p.name,
+               'email', p.email
+             )
+           END AS profiles
+         FROM public.submissions s
+         LEFT JOIN public.profiles p
+           ON p.id = s.student_id
+         WHERE s.assignment_id = ANY($1::uuid[])`,
+        [assignmentIds]
+      );
+
+      if (!includeAttempts) {
+        return {
+          data: rows.map((submission) => ({
+            ...submission,
+            detail_loaded: false,
+          })),
+          error: null,
+        };
+      }
+
+      const submissionIds = rows
+        .map((submission) => submission.id)
+        .filter(Boolean);
+
+      let revisions = [];
+
+      if (submissionIds.length) {
+        const revisionResult = await db.query(
+          `SELECT
+             submission_id,
+             revision_number,
+             snapshot,
+             change_type,
+             created_at
+           FROM public.submission_revisions
+           WHERE submission_id = ANY($1::uuid[])
+             AND change_type = ANY($2::text[])
+           ORDER BY revision_number ASC`,
+          [
+            submissionIds,
+            ['submitted', 'reviewed'],
+          ]
+        );
+
+        revisions = revisionResult.rows;
+      }
+
+      const attempts = buildSubmissionAttemptList(rows, revisions);
+
+      return {
+        data: attempts.map((submission) => ({
+          ...submission,
+          detail_loaded: submission.detail_loaded === true,
+        })),
+        error: null,
+      };
+    } catch (error) {
+      return { data: [], error };
+    }
+  }
+
   const { data, error } = await client
     .from('submissions')
     .select([
@@ -5953,6 +6042,7 @@ async function querySubmissionsForAssignments(
       'profiles(id, name, email)',
     ].join(','))
     .in('assignment_id', assignmentIds);
+
   if (error) return { data: [], error };
 
   if (!includeAttempts) {
@@ -5965,20 +6055,31 @@ async function querySubmissionsForAssignments(
     };
   }
 
-  const submissionIds = (data || []).map((submission) => submission.id).filter(Boolean);
+  const submissionIds = (data || [])
+    .map((submission) => submission.id)
+    .filter(Boolean);
+
   let revisions = [];
+
   if (submissionIds.length) {
     const { data: revisionRows, error: revisionError } = await supabase
       .from('submission_revisions')
-      .select('submission_id, revision_number, snapshot, change_type, created_at')
+      .select(
+        'submission_id, revision_number, snapshot, change_type, created_at'
+      )
       .in('submission_id', submissionIds)
       .in('change_type', ['submitted', 'reviewed'])
       .order('revision_number', { ascending: true });
-    if (revisionError) return { data: [], error: revisionError };
+
+    if (revisionError) {
+      return { data: [], error: revisionError };
+    }
+
     revisions = revisionRows || [];
   }
 
   const attempts = buildSubmissionAttemptList(data || [], revisions);
+
   return {
     data: attempts.map((submission) => ({
       ...submission,
@@ -5987,7 +6088,6 @@ async function querySubmissionsForAssignments(
     error: null,
   };
 }
-
 
 // Get all submissions for every assignment in a class (teacher) — single
 // round-trip replacement for the old per-assignment N+1 pattern.
@@ -5999,13 +6099,39 @@ app.get('/api/classes/:classId/submissions', async (req, res) => {
     const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
     if (!ownedClass) return res.status(403).json({ error: 'You can only view submissions for your own classes.' });
 
-    const { data: assignments, error: assignError } = await supabase
-      .from('assignments')
-      .select('id')
-      .eq('class_id', req.params.classId);
-    if (assignError) return res.status(400).json({ error: assignError.message });
+    let assignments;
+    let assignError = null;
 
-    const assignmentIds = (assignments || []).map((a) => a.id).filter(Boolean);
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT id
+             FROM public.assignments
+            WHERE class_id = $1`,
+          [req.params.classId]
+        );
+
+        assignments = rows;
+      } catch (error) {
+        assignError = error;
+      }
+    } else {
+      const result = await supabase
+        .from('assignments')
+        .select('id')
+        .eq('class_id', req.params.classId);
+
+      assignments = result.data;
+      assignError = result.error;
+    }
+
+    if (assignError) {
+      return res.status(400).json({ error: assignError.message });
+    }
+
+    const assignmentIds = (assignments || [])
+      .map((a) => a.id)
+      .filter(Boolean);
     if (!assignmentIds.length) return res.json({ submissions: [] });
 
     const { data, error } = await querySubmissionsForAssignments(assignmentIds);
@@ -6027,24 +6153,54 @@ app.get('/api/teacher/submissions', async (req, res) => {
     if (teacherError) return res.status(status).json({ error: teacherError });
     const readClient = getRequestScopedSupabase(req);
 
-    const { data: classes, error: classError } = await readClient
-      .from('classes')
-      .select('id')
-      .eq('teacher_id', user.id);
-    if (classError) return res.status(400).json({ error: classError.message });
+    let assignmentIds = [];
 
-    const classIds = (classes || []).map((entry) => entry.id).filter(Boolean);
-    if (!classIds.length) return res.json({ submissions: [] });
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT a.id
+           FROM public.assignments a
+           INNER JOIN public.classes c
+             ON c.id = a.class_id
+          WHERE c.teacher_id = $1`,
+        [user.id]
+      );
 
-    const { data: assignments, error: assignmentError } = await readClient
-      .from('assignments')
-      .select('id')
-      .in('class_id', classIds);
-    if (assignmentError) {
-      return res.status(400).json({ error: assignmentError.message });
+      assignmentIds = rows
+        .map((entry) => entry.id)
+        .filter(Boolean);
+    } else {
+      const { data: classes, error: classError } = await readClient
+        .from('classes')
+        .select('id')
+        .eq('teacher_id', user.id);
+
+      if (classError) {
+        return res.status(400).json({ error: classError.message });
+      }
+
+      const classIds = (classes || [])
+        .map((entry) => entry.id)
+        .filter(Boolean);
+
+      if (!classIds.length) {
+        return res.json({ submissions: [] });
+      }
+
+      const { data: assignments, error: assignmentError } = await readClient
+        .from('assignments')
+        .select('id')
+        .in('class_id', classIds);
+
+      if (assignmentError) {
+        return res.status(400).json({
+          error: assignmentError.message,
+        });
+      }
+
+      assignmentIds = (assignments || [])
+        .map((entry) => entry.id)
+        .filter(Boolean);
     }
-
-    const assignmentIds = (assignments || []).map((entry) => entry.id).filter(Boolean);
     if (!assignmentIds.length) return res.json({ submissions: [] });
 
     // Authorization and assignment scope are established above with the
