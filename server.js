@@ -6777,22 +6777,60 @@ app.get('/api/debug/submission-state', async (req, res) => {
       return res.status(403).json({ error: 'Unsupported role for debug endpoint.' });
     }
 
-    const scopedResult = await readClient
-      .from('submissions')
-      .select('*')
-      .eq('assignment_id', assignmentId)
-      .eq('student_id', targetStudentId)
-      .maybeSingle();
+    let scopedResult;
+    let rawResult;
 
-    const rawResult = await supabase
-      .from('submissions')
-      .select('*')
-      .eq('assignment_id', assignmentId)
-      .eq('student_id', targetStudentId)
-      .maybeSingle();
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT *
+           FROM public.submissions
+          WHERE assignment_id = $1
+            AND student_id = $2
+          LIMIT 1`,
+        [
+          assignmentId,
+          targetStudentId
+        ]
+      );
 
-    if (scopedResult.error) return res.status(400).json({ error: scopedResult.error.message });
-    if (rawResult.error) return res.status(400).json({ error: rawResult.error.message });
+      const row = rows[0] || null;
+
+      scopedResult = {
+        data: row,
+        error: null
+      };
+
+      rawResult = {
+        data: row,
+        error: null
+      };
+    } else {
+      scopedResult = await readClient
+        .from('submissions')
+        .select('*')
+        .eq('assignment_id', assignmentId)
+        .eq('student_id', targetStudentId)
+        .maybeSingle();
+
+      rawResult = await supabase
+        .from('submissions')
+        .select('*')
+        .eq('assignment_id', assignmentId)
+        .eq('student_id', targetStudentId)
+        .maybeSingle();
+    }
+
+    if (scopedResult.error) {
+      return res.status(400).json({
+        error: scopedResult.error.message
+      });
+    }
+
+    if (rawResult.error) {
+      return res.status(400).json({
+        error: rawResult.error.message
+      });
+    }
 
     res.json({
       checkedAt: new Date().toISOString(),
@@ -7352,14 +7390,46 @@ app.get('/api/submissions/:id', async (req, res) => {
       }
     }
 
-    const { data, error } = await readClient
-      .from('submissions')
-      .select('*, profiles(id, name)')
-      .eq('id', req.params.id)
-      .maybeSingle();
-    if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: 'Submission not found' });
-    res.json({ submission: { ...data, detail_loaded: true } });
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        data = await getPostgresSubmissionWithProfile(
+          req.params.id
+        );
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const result = await readClient
+        .from('submissions')
+        .select('*, profiles(id, name)')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res
+        .status(isRlsDenial(error) ? 403 : 400)
+        .json({ error: error.message });
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'Submission not found'
+      });
+    }
+
+    res.json({
+      submission: {
+        ...data,
+        detail_loaded: true
+      }
+    });
   } catch (error) {
     console.error('Unexpected submission detail failure:', errorClassForLog(error));
     res.status(500).json({ error: 'Could not load this submission right now. Please try again.' });
