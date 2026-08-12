@@ -3919,14 +3919,46 @@ app.get('/api/assignment-builder-draft', async (req, res) => {
   try {
     const { user, error, status } = await requireTeacherProfile(req);
     if (error) return res.status(status).json({ error });
-    const client = getRequestScopedSupabase(req);
-    const { data, error: readError } = await client
-      .from('assignment_builder_drafts')
-      .select('draft_state, updated_at')
-      .eq('owner_id', user.id)
-      .maybeSingle();
-    if (readError) return res.status(400).json({ error: readError.message });
-    res.json({ draft: data?.draft_state || null, updatedAt: data?.updated_at || null });
+    let data;
+    let readError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT draft_state, updated_at
+             FROM public.assignment_builder_drafts
+            WHERE owner_id = $1
+            LIMIT 1`,
+          [user.id]
+        );
+
+        data = rows[0] || null;
+      } catch (error) {
+        readError = error;
+      }
+    } else {
+      const client = getRequestScopedSupabase(req);
+
+      const result = await client
+        .from('assignment_builder_drafts')
+        .select('draft_state, updated_at')
+        .eq('owner_id', user.id)
+        .maybeSingle();
+
+      data = result.data;
+      readError = result.error;
+    }
+
+    if (readError) {
+      return res.status(400).json({
+        error: readError.message,
+      });
+    }
+
+    res.json({
+      draft: data?.draft_state || null,
+      updatedAt: data?.updated_at || null,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3940,15 +3972,70 @@ app.put('/api/assignment-builder-draft', async (req, res) => {
     if (!draftState || typeof draftState !== 'object' || Array.isArray(draftState)) {
       return res.status(400).json({ error: 'A valid assignment draft is required.' });
     }
-    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('assignment_builder_drafts').upsert({
-        owner_id: user.id,
-        draft_state: draftState,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'owner_id' }).select('updated_at').single()
-    );
-    if (writeError) return res.status(400).json({ error: writeError.message });
-    res.json({ ok: true, updatedAt: data.updated_at });
+    let data;
+    let writeError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.assignment_builder_drafts
+            (
+              owner_id,
+              draft_state,
+              updated_at
+            )
+           VALUES ($1, $2::jsonb, NOW())
+           ON CONFLICT (owner_id)
+           DO UPDATE SET
+             draft_state = EXCLUDED.draft_state,
+             updated_at = NOW()
+           RETURNING updated_at`,
+          [
+            user.id,
+            JSON.stringify(draftState),
+          ]
+        );
+
+        data = rows[0];
+      } catch (error) {
+        writeError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('assignment_builder_drafts')
+              .upsert(
+                {
+                  owner_id: user.id,
+                  draft_state: draftState,
+                  updated_at:
+                    new Date().toISOString(),
+                },
+                {
+                  onConflict: 'owner_id',
+                }
+              )
+              .select('updated_at')
+              .single()
+        );
+
+      data = result.data;
+      writeError = result.error;
+    }
+
+    if (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
+    }
+
+    res.json({
+      ok: true,
+      updatedAt: data.updated_at,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3958,10 +4045,38 @@ app.delete('/api/assignment-builder-draft', async (req, res) => {
   try {
     const { user, error, status } = await requireTeacherProfile(req);
     if (error) return res.status(status).json({ error });
-    const { error: deleteError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('assignment_builder_drafts').delete().eq('owner_id', user.id)
-    );
-    if (deleteError) return res.status(400).json({ error: deleteError.message });
+    let deleteError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        await db.query(
+          `DELETE FROM public.assignment_builder_drafts
+            WHERE owner_id = $1`,
+          [user.id]
+        );
+      } catch (error) {
+        deleteError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('assignment_builder_drafts')
+              .delete()
+              .eq('owner_id', user.id)
+        );
+
+      deleteError = result.error;
+    }
+
+    if (deleteError) {
+      return res.status(400).json({
+        error: deleteError.message,
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
