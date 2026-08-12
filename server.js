@@ -3347,6 +3347,14 @@ async function getProcessAnalysisContext(req, submissionId) {
   const viewerProfile = await getProfile(user.id);
   if (!viewerProfile) return { status: 409, error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE };
 
+  if (USE_POSTGRES_APP_DB) {
+    return {
+      status: 503,
+      error:
+        'Writing-process analysis is temporarily unavailable while its research tables are being migrated.',
+    };
+  }
+
   const readClient = getRequestScopedSupabase(req);
   const { data: submission, error: submissionError } = await readClient
     .from('submissions')
@@ -11370,6 +11378,13 @@ function rowsToCsv(rows) {
 // exclude test accounts, consent-excluded students, and analytics-excluded
 // analyses, and key rows by the stable salted pseudonym (never name/email/id).
 async function sendResearchViewCsv(res, viewName, filename) {
+  if (USE_POSTGRES_APP_DB) {
+    return res.status(503).json({
+      error:
+        'Research exports are temporarily unavailable while the research views are being migrated.',
+    });
+  }
+
   const { data, error } = await supabase
     .from(viewName)
     .select('*')
@@ -11415,6 +11430,14 @@ app.delete('/api/admin/research/students/:studentId/data', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Research withdrawal deletion is temporarily unavailable while its archive tables are being migrated.',
+      });
+    }
+
     const studentId = req.params.studentId;
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
@@ -11467,6 +11490,10 @@ function isMissingAssignmentTypesTable(error) {
 }
 
 async function listAssignmentTypes() {
+  if (USE_POSTGRES_APP_DB) {
+    return [];
+  }
+
   const { data } = await supabase
     .from('assignment_types')
     .select('id, value')
@@ -11481,6 +11508,11 @@ app.get('/api/assignment-types', async (req, res) => {
   try {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.json({ types: [] });
+    }
+
     const { data, error } = await supabase
       .from('assignment_types')
       .select('id, value')
@@ -11499,6 +11531,13 @@ app.post('/api/admin/assignment-types', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Custom assignment types are temporarily unavailable while their PostgreSQL table is being migrated.',
+      });
+    }
     const value = String(req.body?.value || '').trim().toLowerCase().slice(0, 40);
     if (value.length < 2) {
       return res.status(400).json({ error: 'Enter an assignment type of at least 2 characters.' });
@@ -11529,6 +11568,13 @@ app.delete('/api/admin/assignment-types/:id', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Custom assignment types are temporarily unavailable while their PostgreSQL table is being migrated.',
+      });
+    }
     const { error } = await supabase
       .from('assignment_types')
       .delete()
@@ -11544,6 +11590,15 @@ app.post('/api/admin/process-analytics/recompute-stale', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Process analytics are temporarily unavailable while their PostgreSQL tables are being migrated.',
+        needsMigration: true,
+      });
+    }
+
     const result = await recomputeStaleProcessAnalyses({
       limit: req.body?.limit || req.query?.limit || 50,
     });
@@ -11561,6 +11616,15 @@ app.get('/api/admin/process-analytics', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
+    if (USE_POSTGRES_APP_DB) {
+      return res.status(503).json({
+        error:
+          'Process analytics are temporarily unavailable while their PostgreSQL tables are being migrated.',
+        needsMigration: true,
+      });
+    }
+
     const { data: analyses, error } = await supabase
       .from('submission_process_analyses')
       .select('id, submission_id, assignment_id, class_id, student_id, analysis_version, process_status, excluded_from_analytics, exclusion_sources, calculated_at');
