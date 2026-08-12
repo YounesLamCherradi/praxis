@@ -2205,27 +2205,88 @@ async function requireRubricTeacherProfile(req) {
 }
 
 async function ensureTeacherOwnsClass(classId, teacherId, client = supabase) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT id, teacher_id, name
+         FROM public.classes
+        WHERE id = $1
+          AND teacher_id = $2
+        LIMIT 1`,
+      [classId, teacherId]
+    );
+
+    return rows[0] || null;
+  }
+
   const { data, error } = await client
     .from('classes')
     .select('id, teacher_id, name')
     .eq('id', classId)
     .eq('teacher_id', teacherId)
     .maybeSingle();
+
   if (error) throw error;
   return data || null;
 }
 
-async function ensureTeacherOwnsAssignment(assignmentId, teacherId, client = supabase) {
+async function ensureTeacherOwnsAssignment(
+  assignmentId,
+  teacherId,
+  client = supabase
+) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT
+         a.id,
+         a.class_id,
+         a.title,
+         a.status,
+         a.version,
+         a.updated_at,
+         c.name AS class_name
+       FROM public.assignments a
+       INNER JOIN public.classes c
+         ON c.id = a.class_id
+       WHERE a.id = $1
+         AND a.deleted_at IS NULL
+         AND c.teacher_id = $2
+       LIMIT 1`,
+      [assignmentId, teacherId]
+    );
+
+    const row = rows[0];
+    if (!row) return null;
+
+    const { class_name: className, ...assignment } = row;
+
+    return {
+      ...assignment,
+      className: className || '',
+    };
+  }
+
   const { data, error } = await client
     .from('assignments')
     .select('id, class_id, title, status, version, updated_at')
     .eq('id', assignmentId)
     .is('deleted_at', null)
     .maybeSingle();
+
   if (error) throw error;
   if (!data) return null;
-  const ownedClass = await ensureTeacherOwnsClass(data.class_id, teacherId, client);
-  return ownedClass ? { ...data, className: ownedClass.name || '' } : null;
+
+  const ownedClass = await ensureTeacherOwnsClass(
+    data.class_id,
+    teacherId,
+    client
+  );
+
+  return ownedClass
+    ? {
+        ...data,
+        className: ownedClass.name || '',
+      }
+    : null;
 }
 
 // Snapshot the de-identified writing-process data of submissions into
@@ -2264,13 +2325,31 @@ async function archiveSubmissionsForDeletion(submissions, { reason, classId = nu
   if (error) throw error;
 }
 
-async function ensureStudentBelongsToClass(classId, studentId, client = supabase) {
+async function ensureStudentBelongsToClass(
+  classId,
+  studentId,
+  client = supabase
+) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT class_id
+         FROM public.class_members
+        WHERE class_id = $1
+          AND student_id = $2
+        LIMIT 1`,
+      [classId, studentId]
+    );
+
+    return rows[0] || null;
+  }
+
   const { data, error } = await client
     .from('class_members')
     .select('class_id')
     .eq('class_id', classId)
     .eq('student_id', studentId)
     .maybeSingle();
+
   if (error) throw error;
   return data || null;
 }
@@ -2296,25 +2375,74 @@ async function ensureUserCanAccessClass(classId, userId, client = supabase) {
   return null;
 }
 
-async function ensureStudentCanAccessAssignment(assignmentId, studentId, client = supabase) {
+async function ensureStudentCanAccessAssignment(
+  assignmentId,
+  studentId,
+  client = supabase
+) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT
+         a.id,
+         a.class_id,
+         a.title,
+         a.status,
+         c.archived AS class_archived
+       FROM public.assignments a
+       INNER JOIN public.classes c
+         ON c.id = a.class_id
+       INNER JOIN public.class_members cm
+         ON cm.class_id = a.class_id
+        AND cm.student_id = $2
+       WHERE a.id = $1
+         AND a.deleted_at IS NULL
+         AND a.status = 'published'
+       LIMIT 1`,
+      [assignmentId, studentId]
+    );
+
+    const row = rows[0];
+    if (!row) return null;
+
+    const { class_archived: classArchived, ...assignment } = row;
+
+    return {
+      ...assignment,
+      classArchived: classArchived === true,
+    };
+  }
+
   const { data, error } = await client
     .from('assignments')
     .select('id, class_id, title, status')
     .eq('id', assignmentId)
     .is('deleted_at', null)
     .maybeSingle();
+
   if (error) throw error;
   if (!data) return null;
   if (data.status !== 'published') return null;
-  const enrolledClass = await ensureStudentBelongsToClass(data.class_id, studentId, client);
+
+  const enrolledClass = await ensureStudentBelongsToClass(
+    data.class_id,
+    studentId,
+    client
+  );
+
   if (!enrolledClass) return null;
+
   const { data: classRecord, error: classError } = await client
     .from('classes')
     .select('archived')
     .eq('id', data.class_id)
     .maybeSingle();
+
   if (classError) throw classError;
-  return { ...data, classArchived: classRecord?.archived === true };
+
+  return {
+    ...data,
+    classArchived: classRecord?.archived === true,
+  };
 }
 
 async function ensureStudentCanModifyAssignment(assignmentId, studentId, client = supabase) {
@@ -2322,12 +2450,39 @@ async function ensureStudentCanModifyAssignment(assignmentId, studentId, client 
   return assignment && assignment.classArchived !== true ? assignment : null;
 }
 
-async function getSubmissionRecord(submissionId, client = supabase) {
+async function getSubmissionRecord(
+  submissionId,
+  client = supabase
+) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT
+         id,
+         assignment_id,
+         student_id,
+         status,
+         teacher_review,
+         version,
+         updated_at,
+         writing_events,
+         keystroke_log
+       FROM public.submissions
+       WHERE id = $1
+       LIMIT 1`,
+      [submissionId]
+    );
+
+    return rows[0] || null;
+  }
+
   const { data, error } = await client
     .from('submissions')
-    .select('id, assignment_id, student_id, status, teacher_review, version, updated_at, writing_events, keystroke_log')
+    .select(
+      'id, assignment_id, student_id, status, teacher_review, version, updated_at, writing_events, keystroke_log'
+    )
     .eq('id', submissionId)
     .maybeSingle();
+
   if (error) throw error;
   return data || null;
 }
