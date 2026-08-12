@@ -3833,22 +3833,51 @@ app.get('/api/rubrics', async (req, res) => {
   try {
     const { user, error, status } = await requireTeacherProfile(req);
     if (error) return res.status(status).json({ error });
-    const client = getRequestScopedSupabase(req);
-    const { data, error: queryError } = await client
-      .from('rubric_library')
-      .select('*')
-      .eq('owner_id', user.id)
-      .neq('status', 'archived')
-      .order('updated_at', { ascending: false });
-    if (queryError) {
-      // Reusable rubrics are optional until the rubric-library migration is
-      // installed. Assignment creation still embeds its rubric on the
-      // assignment itself, so an absent library must not break the builder.
-      if (isMissingRelation(queryError)) {
-        return res.json({ rubrics: [], libraryAvailable: false });
+    let data = [];
+    let queryError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT *
+             FROM public.rubric_library
+            WHERE owner_id = $1
+              AND status <> 'archived'
+            ORDER BY updated_at DESC`,
+          [user.id]
+        );
+
+        data = rows;
+      } catch (error) {
+        queryError = error;
       }
-      return res.status(400).json({ error: queryError.message });
+    } else {
+      const client = getRequestScopedSupabase(req);
+
+      const result = await client
+        .from('rubric_library')
+        .select('*')
+        .eq('owner_id', user.id)
+        .neq('status', 'archived')
+        .order('updated_at', { ascending: false });
+
+      data = result.data;
+      queryError = result.error;
     }
+
+    if (queryError) {
+      if (!USE_POSTGRES_APP_DB && isMissingRelation(queryError)) {
+        return res.json({
+          rubrics: [],
+          libraryAvailable: false,
+        });
+      }
+
+      return res.status(400).json({
+        error: queryError.message,
+      });
+    }
+
     res.json({ rubrics: data || [] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3861,15 +3890,63 @@ app.post('/api/rubrics', async (req, res) => {
     if (error) return res.status(status).json({ error });
     const rubricSchema = req.body?.rubric_schema || req.body?.rubricSchema || {};
     const title = String(req.body?.title || rubricSchema.title || 'Untitled rubric').trim();
-    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('rubric_library').insert({
-        owner_id: user.id,
-        title,
-        rubric_schema: rubricSchema,
-        status: String(req.body?.status || 'active').toLowerCase(),
-      }).select().single()
-    );
-    if (writeError) return res.status(400).json({ error: writeError.message });
+    const rubricStatus =
+      String(req.body?.status || 'active').toLowerCase();
+
+    let data;
+    let writeError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.rubric_library
+            (
+              owner_id,
+              title,
+              rubric_schema,
+              status
+            )
+           VALUES ($1, $2, $3::jsonb, $4)
+           RETURNING *`,
+          [
+            user.id,
+            title,
+            JSON.stringify(rubricSchema),
+            rubricStatus,
+          ]
+        );
+
+        data = rows[0];
+      } catch (error) {
+        writeError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('rubric_library')
+              .insert({
+                owner_id: user.id,
+                title,
+                rubric_schema: rubricSchema,
+                status: rubricStatus,
+              })
+              .select()
+              .single()
+        );
+
+      data = result.data;
+      writeError = result.error;
+    }
+
+    if (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
+    }
+
     res.json({ rubric: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3886,12 +3963,95 @@ app.patch('/api/rubrics/:id', async (req, res) => {
       patch.rubric_schema = req.body.rubric_schema || req.body.rubricSchema;
     }
     if (req.body?.status !== undefined) patch.status = String(req.body.status).toLowerCase();
-    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('rubric_library').update(patch)
-        .eq('id', req.params.id).eq('owner_id', user.id).select().maybeSingle()
-    );
-    if (writeError) return res.status(400).json({ error: writeError.message });
-    if (!data) return res.status(404).json({ error: 'Rubric not found.' });
+    let data;
+    let writeError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const entries = Object.entries(patch);
+
+        if (!entries.length) {
+          return res.status(400).json({
+            error: 'No rubric changes were provided.',
+          });
+        }
+
+        const setParts = [];
+        const values = [];
+
+        for (const [key, value] of entries) {
+          values.push(
+            key === 'rubric_schema'
+              ? JSON.stringify(value)
+              : value
+          );
+
+          const index = values.length;
+
+          if (key === 'rubric_schema') {
+            setParts.push(
+              `${key} = $${index}::jsonb`
+            );
+          } else {
+            setParts.push(
+              `${key} = $${index}`
+            );
+          }
+        }
+
+        setParts.push('updated_at = NOW()');
+
+        values.push(
+          req.params.id,
+          user.id
+        );
+
+        const idParam = values.length - 1;
+        const ownerParam = values.length;
+
+        const { rows } = await db.query(
+          `UPDATE public.rubric_library
+              SET ${setParts.join(', ')}
+            WHERE id = $${idParam}
+              AND owner_id = $${ownerParam}
+          RETURNING *`,
+          values
+        );
+
+        data = rows[0] || null;
+      } catch (error) {
+        writeError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('rubric_library')
+              .update(patch)
+              .eq('id', req.params.id)
+              .eq('owner_id', user.id)
+              .select()
+              .maybeSingle()
+        );
+
+      data = result.data;
+      writeError = result.error;
+    }
+
+    if (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'Rubric not found.',
+      });
+    }
+
     res.json({ rubric: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -3902,12 +4062,60 @@ app.delete('/api/rubrics/:id', async (req, res) => {
   try {
     const { user, error, status } = await requireTeacherProfile(req);
     if (error) return res.status(status).json({ error });
-    const { data, error: writeError } = await writeWithRequestScopedFallback(req, (client) =>
-      client.from('rubric_library').update({ status: 'archived' })
-        .eq('id', req.params.id).eq('owner_id', user.id).select('id').maybeSingle()
-    );
-    if (writeError) return res.status(400).json({ error: writeError.message });
-    if (!data) return res.status(404).json({ error: 'Rubric not found.' });
+    let data;
+    let writeError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `UPDATE public.rubric_library
+              SET status = 'archived',
+                  updated_at = NOW()
+            WHERE id = $1
+              AND owner_id = $2
+          RETURNING id`,
+          [
+            req.params.id,
+            user.id,
+          ]
+        );
+
+        data = rows[0] || null;
+      } catch (error) {
+        writeError = error;
+      }
+    } else {
+      const result =
+        await writeWithRequestScopedFallback(
+          req,
+          (client) =>
+            client
+              .from('rubric_library')
+              .update({
+                status: 'archived',
+              })
+              .eq('id', req.params.id)
+              .eq('owner_id', user.id)
+              .select('id')
+              .maybeSingle()
+        );
+
+      data = result.data;
+      writeError = result.error;
+    }
+
+    if (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'Rubric not found.',
+      });
+    }
+
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
