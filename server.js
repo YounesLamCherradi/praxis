@@ -1411,69 +1411,205 @@ async function sendDurableEmail(email) {
   }
 
   const now = new Date().toISOString();
-  const { error: insertError } = await supabase
-    .from('notification_deliveries')
-    .insert({
-      idempotency_key: idempotencyKey,
-      status: 'processing',
-      started_at: now,
-      updated_at: now,
-    });
 
-  if (insertError && insertError.code !== '23505') throw insertError;
-  if (insertError?.code === '23505') {
-    const { data: existing, error: readError } = await supabase
-      .from('notification_deliveries')
-      .select('status, attempt_count')
-      .eq('idempotency_key', idempotencyKey)
-      .single();
-    if (readError) throw readError;
-    if (existing.status === 'delivered' || existing.status === 'processing') {
-      return { deduplicated: true, status: existing.status };
+  if (USE_POSTGRES_APP_DB) {
+    const insertResult = await db.query(
+      `INSERT INTO public.notification_deliveries
+        (
+          idempotency_key,
+          status,
+          started_at,
+          updated_at
+        )
+       VALUES ($1, 'processing', $2, $2)
+       ON CONFLICT (idempotency_key) DO NOTHING
+       RETURNING idempotency_key`,
+      [idempotencyKey, now]
+    );
+
+    if (!insertResult.rows[0]) {
+      const existingResult = await db.query(
+        `SELECT status, attempt_count
+           FROM public.notification_deliveries
+          WHERE idempotency_key = $1
+          LIMIT 1`,
+        [idempotencyKey]
+      );
+
+      const existing = existingResult.rows[0];
+
+      if (!existing) {
+        throw new Error(
+          'Could not load durable email delivery state.'
+        );
+      }
+
+      if (
+        existing.status === 'delivered' ||
+        existing.status === 'processing'
+      ) {
+        return {
+          deduplicated: true,
+          status: existing.status,
+        };
+      }
+
+      const retryResult = await db.query(
+        `UPDATE public.notification_deliveries
+            SET status = 'processing',
+                attempt_count = $2,
+                started_at = $3,
+                updated_at = $3,
+                last_error = NULL
+          WHERE idempotency_key = $1
+            AND status = 'failed'
+        RETURNING idempotency_key`,
+        [
+          idempotencyKey,
+          Number(existing.attempt_count || 1) + 1,
+          now,
+        ]
+      );
+
+      if (!retryResult.rows[0]) {
+        const raceResult = await db.query(
+          `SELECT status
+             FROM public.notification_deliveries
+            WHERE idempotency_key = $1
+            LIMIT 1`,
+          [idempotencyKey]
+        );
+
+        const raceStatus = raceResult.rows[0]?.status;
+
+        if (
+          raceStatus === 'processing' ||
+          raceStatus === 'delivered'
+        ) {
+          return {
+            deduplicated: true,
+            status: raceStatus,
+          };
+        }
+
+        throw new Error(
+          'Could not claim durable email delivery retry.'
+        );
+      }
     }
-    const { error: retryClaimError } = await supabase
+  } else {
+    const { error: insertError } = await supabase
       .from('notification_deliveries')
-      .update({
+      .insert({
+        idempotency_key: idempotencyKey,
         status: 'processing',
-        attempt_count: Number(existing.attempt_count || 1) + 1,
         started_at: now,
         updated_at: now,
-        last_error: null,
-      })
-      .eq('idempotency_key', idempotencyKey)
-      .eq('status', 'failed');
-    if (retryClaimError) throw retryClaimError;
+      });
+
+    if (insertError && insertError.code !== '23505') {
+      throw insertError;
+    }
+
+    if (insertError?.code === '23505') {
+      const { data: existing, error: readError } =
+        await supabase
+          .from('notification_deliveries')
+          .select('status, attempt_count')
+          .eq('idempotency_key', idempotencyKey)
+          .single();
+
+      if (readError) throw readError;
+
+      if (
+        existing.status === 'delivered' ||
+        existing.status === 'processing'
+      ) {
+        return {
+          deduplicated: true,
+          status: existing.status,
+        };
+      }
+
+      const { error: retryClaimError } = await supabase
+        .from('notification_deliveries')
+        .update({
+          status: 'processing',
+          attempt_count:
+            Number(existing.attempt_count || 1) + 1,
+          started_at: now,
+          updated_at: now,
+          last_error: null,
+        })
+        .eq('idempotency_key', idempotencyKey)
+        .eq('status', 'failed');
+
+      if (retryClaimError) throw retryClaimError;
+    }
   }
 
   let result;
+
   try {
     result = await sendEmail(email);
   } catch (error) {
-    await supabase
-      .from('notification_deliveries')
-      .update({
-        status: 'failed',
-        last_error: safeLogError(error).slice(0, 2000),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('idempotency_key', idempotencyKey);
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `UPDATE public.notification_deliveries
+            SET status = 'failed',
+                last_error = $2,
+                updated_at = NOW()
+          WHERE idempotency_key = $1`,
+        [
+          idempotencyKey,
+          safeLogError(error).slice(0, 2000),
+        ]
+      );
+    } else {
+      await supabase
+        .from('notification_deliveries')
+        .update({
+          status: 'failed',
+          last_error:
+            safeLogError(error).slice(0, 2000),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('idempotency_key', idempotencyKey);
+    }
+
     throw error;
   }
 
-  // Once the provider accepted the message, never mark the key retryable. If
-  // this database write fails, its existing "processing" state deliberately
-  // suppresses an uncertain retry that could duplicate an SMTP delivery.
-  const providerMessageId = result?.messageId || result?.id || null;
-  const { error: deliveredError } = await supabase
-    .from('notification_deliveries')
-    .update({
-      status: 'delivered',
-      provider_message_id: providerMessageId,
-      delivered_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('idempotency_key', idempotencyKey);
-  if (deliveredError) throw deliveredError;
+  const providerMessageId =
+    result?.messageId || result?.id || null;
+
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `UPDATE public.notification_deliveries
+          SET status = 'delivered',
+              provider_message_id = $2,
+              delivered_at = NOW(),
+              updated_at = NOW()
+        WHERE idempotency_key = $1`,
+      [
+        idempotencyKey,
+        providerMessageId,
+      ]
+    );
+  } else {
+    const { error: deliveredError } = await supabase
+      .from('notification_deliveries')
+      .update({
+        status: 'delivered',
+        provider_message_id: providerMessageId,
+        delivered_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('idempotency_key', idempotencyKey);
+
+    if (deliveredError) throw deliveredError;
+  }
+
   return result;
 }
 
@@ -1977,68 +2113,210 @@ async function deliverNotificationOutboxEvent(event) {
 }
 
 async function processNotificationOutbox() {
-  if (notificationOutboxInFlight || !canSendNotificationEmails()) return;
+  if (
+    notificationOutboxInFlight ||
+    !canSendNotificationEmails()
+  ) {
+    return;
+  }
+
   notificationOutboxInFlight = true;
+
   try {
-    const staleClaimCutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    const { error: recoveryError } = await supabase
-      .from('notification_outbox')
-      .update({
-        status: 'failed',
-        available_at: new Date().toISOString(),
-        last_error: 'Recovered after an interrupted notification worker.',
-        claimed_at: null,
-      })
-      .eq('status', 'processing')
-      .or(`claimed_at.is.null,claimed_at.lt.${staleClaimCutoff}`);
-    if (recoveryError) throw recoveryError;
+    let events = [];
 
-    const { data: events, error } = await supabase
-      .from('notification_outbox')
-      .select('*')
-      .in('status', ['pending', 'failed'])
-      .lte('available_at', new Date().toISOString())
-      .order('created_at', { ascending: true })
-      .limit(25);
-    if (error) throw error;
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `UPDATE public.notification_outbox
+            SET status = 'failed',
+                available_at = NOW(),
+                last_error =
+                  'Recovered after an interrupted notification worker.',
+                claimed_at = NULL
+          WHERE status = 'processing'
+            AND (
+              claimed_at IS NULL
+              OR claimed_at < NOW() - INTERVAL '5 minutes'
+            )`
+      );
 
-    for (const event of events || []) {
-      const attemptCount = Number(event.attempt_count || 0) + 1;
-      const { data: claimed, error: claimError } = await supabase
+      const eventResult = await db.query(
+        `SELECT *
+           FROM public.notification_outbox
+          WHERE status = ANY($1::text[])
+            AND available_at <= NOW()
+          ORDER BY created_at ASC
+          LIMIT 25`,
+        [['pending', 'failed']]
+      );
+
+      events = eventResult.rows;
+    } else {
+      const staleClaimCutoff =
+        new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+      const { error: recoveryError } = await supabase
         .from('notification_outbox')
         .update({
-          status: 'processing',
-          attempt_count: attemptCount,
-          claimed_at: new Date().toISOString(),
+          status: 'failed',
+          available_at: new Date().toISOString(),
+          last_error:
+            'Recovered after an interrupted notification worker.',
+          claimed_at: null,
         })
-        .eq('id', event.id)
+        .eq('status', 'processing')
+        .or(
+          `claimed_at.is.null,claimed_at.lt.${staleClaimCutoff}`
+        );
+
+      if (recoveryError) throw recoveryError;
+
+      const {
+        data,
+        error,
+      } = await supabase
+        .from('notification_outbox')
+        .select('*')
         .in('status', ['pending', 'failed'])
-        .select('id')
-        .maybeSingle();
-      if (claimError) throw claimError;
+        .lte(
+          'available_at',
+          new Date().toISOString()
+        )
+        .order('created_at', {
+          ascending: true,
+        })
+        .limit(25);
+
+      if (error) throw error;
+
+      events = data || [];
+    }
+
+    for (const event of events) {
+      const attemptCount =
+        Number(event.attempt_count || 0) + 1;
+
+      let claimed = null;
+
+      if (USE_POSTGRES_APP_DB) {
+        const claimResult = await db.query(
+          `UPDATE public.notification_outbox
+              SET status = 'processing',
+                  attempt_count = $2,
+                  claimed_at = NOW()
+            WHERE id = $1
+              AND status = ANY($3::text[])
+          RETURNING id`,
+          [
+            event.id,
+            attemptCount,
+            ['pending', 'failed'],
+          ]
+        );
+
+        claimed = claimResult.rows[0] || null;
+      } else {
+        const {
+          data,
+          error: claimError,
+        } = await supabase
+          .from('notification_outbox')
+          .update({
+            status: 'processing',
+            attempt_count: attemptCount,
+            claimed_at: new Date().toISOString(),
+          })
+          .eq('id', event.id)
+          .in('status', ['pending', 'failed'])
+          .select('id')
+          .maybeSingle();
+
+        if (claimError) throw claimError;
+
+        claimed = data;
+      }
+
       if (!claimed) continue;
 
       try {
         await deliverNotificationOutboxEvent(event);
-        const { error: deliveredError } = await supabase
-          .from('notification_outbox')
-          .update({
-            status: 'delivered',
-            processed_at: new Date().toISOString(),
-            last_error: null,
-            claimed_at: null,
-          })
-          .eq('id', event.id);
-        if (deliveredError) throw deliveredError;
+
+        if (USE_POSTGRES_APP_DB) {
+          await db.query(
+            `UPDATE public.notification_outbox
+                SET status = 'delivered',
+                    processed_at = NOW(),
+                    last_error = NULL,
+                    claimed_at = NULL
+              WHERE id = $1`,
+            [event.id]
+          );
+        } else {
+          const {
+            error: deliveredError,
+          } = await supabase
+            .from('notification_outbox')
+            .update({
+              status: 'delivered',
+              processed_at:
+                new Date().toISOString(),
+              last_error: null,
+              claimed_at: null,
+            })
+            .eq('id', event.id);
+
+          if (deliveredError) {
+            throw deliveredError;
+          }
+        }
       } catch (deliveryError) {
         const failurePatch = {
-          ...buildNotificationFailurePatch(deliveryError, attemptCount),
+          ...buildNotificationFailurePatch(
+            deliveryError,
+            attemptCount
+          ),
           claimed_at: null,
         };
-        await supabase
-          .from('notification_outbox')
-          .update(failurePatch)
-          .eq('id', event.id);
+
+        if (USE_POSTGRES_APP_DB) {
+          if (
+            failurePatch.status ===
+            'dead_letter'
+          ) {
+            await db.query(
+              `UPDATE public.notification_outbox
+                  SET status = 'dead_letter',
+                      last_error = $2,
+                      processed_at = $3,
+                      claimed_at = NULL
+                WHERE id = $1`,
+              [
+                event.id,
+                failurePatch.last_error,
+                failurePatch.processed_at,
+              ]
+            );
+          } else {
+            await db.query(
+              `UPDATE public.notification_outbox
+                  SET status = 'failed',
+                      last_error = $2,
+                      available_at = $3,
+                      claimed_at = NULL
+                WHERE id = $1`,
+              [
+                event.id,
+                failurePatch.last_error,
+                failurePatch.available_at,
+              ]
+            );
+          }
+        } else {
+          await supabase
+            .from('notification_outbox')
+            .update(failurePatch)
+            .eq('id', event.id);
+        }
       }
     }
   } finally {
