@@ -47,6 +47,9 @@ const {
 } = require('./auth-user-retry');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+const APP_DB_BACKEND = String(process.env.APP_DB_BACKEND || 'supabase').trim().toLowerCase();
+const USE_POSTGRES_APP_DB = APP_DB_BACKEND === 'postgres';
+
 const app = express();
 app.disable("x-powered-by");
 app.use(compression());
@@ -4757,6 +4760,24 @@ const ASSIGNMENT_ALLOWED_FIELDS = new Set([
 async function saveAssignmentRevision(assignment, userId, changeType) {
   if (!assignment?.id) return;
   const revisionNumber = Number(assignment.version || 1);
+
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `INSERT INTO public.assignment_revisions
+        (assignment_id, revision_number, snapshot, change_type, created_by)
+       VALUES ($1, $2, $3::jsonb, $4, $5)
+       ON CONFLICT (assignment_id, revision_number) DO NOTHING`,
+      [
+        assignment.id,
+        revisionNumber,
+        JSON.stringify(assignment),
+        changeType || 'autosave',
+        userId || null,
+      ]
+    );
+    return;
+  }
+
   const { error } = await supabase.from('assignment_revisions').upsert({
     assignment_id: assignment.id,
     revision_number: revisionNumber,
@@ -4764,12 +4785,31 @@ async function saveAssignmentRevision(assignment, userId, changeType) {
     change_type: changeType,
     created_by: userId || null,
   }, { onConflict: 'assignment_id,revision_number', ignoreDuplicates: true });
+
   if (error) throw error;
 }
 
 async function saveSubmissionRevision(submission, userId, changeType) {
   if (!submission?.id) return;
   const revisionNumber = Number(submission.version || 1);
+
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `INSERT INTO public.submission_revisions
+        (submission_id, revision_number, snapshot, change_type, created_by)
+       VALUES ($1, $2, $3::jsonb, $4, $5)
+       ON CONFLICT (submission_id, revision_number) DO NOTHING`,
+      [
+        submission.id,
+        revisionNumber,
+        JSON.stringify(submission),
+        changeType || 'autosave',
+        userId || null,
+      ]
+    );
+    return;
+  }
+
   const { error } = await supabase.from('submission_revisions').upsert({
     submission_id: submission.id,
     revision_number: revisionNumber,
@@ -4777,10 +4817,34 @@ async function saveSubmissionRevision(submission, userId, changeType) {
     change_type: changeType,
     created_by: userId || null,
   }, { onConflict: 'submission_id,revision_number', ignoreDuplicates: true });
+
   if (error) throw error;
 }
 
-async function enqueueDomainEvent({ eventType, aggregateType, aggregateId, idempotencyKey, payload }) {
+async function enqueueDomainEvent({
+  eventType,
+  aggregateType,
+  aggregateId,
+  idempotencyKey,
+  payload,
+}) {
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `INSERT INTO public.notification_outbox
+        (event_type, aggregate_type, aggregate_id, idempotency_key, payload)
+       VALUES ($1, $2, $3, $4, $5::jsonb)
+       ON CONFLICT (idempotency_key) DO NOTHING`,
+      [
+        eventType,
+        aggregateType,
+        aggregateId,
+        idempotencyKey,
+        JSON.stringify(payload || {}),
+      ]
+    );
+    return;
+  }
+
   const { error } = await supabase.from('notification_outbox').upsert({
     event_type: eventType,
     aggregate_type: aggregateType,
@@ -4788,6 +4852,7 @@ async function enqueueDomainEvent({ eventType, aggregateType, aggregateId, idemp
     idempotency_key: idempotencyKey,
     payload: payload || {},
   }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+
   if (error) throw error;
 }
 
@@ -4797,6 +4862,22 @@ function getIdempotencyKey(req) {
 
 async function getIdempotentResponse(userId, operation, idempotencyKey) {
   if (!idempotencyKey) return null;
+
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT response_status, response_body
+         FROM public.api_idempotency_keys
+        WHERE user_id = $1
+          AND operation = $2
+          AND idempotency_key = $3
+          AND expires_at > NOW()
+        LIMIT 1`,
+      [userId, operation, idempotencyKey]
+    );
+
+    return rows[0] || null;
+  }
+
   const { data, error } = await supabase
     .from('api_idempotency_keys')
     .select('response_status, response_body')
@@ -4805,6 +4886,7 @@ async function getIdempotentResponse(userId, operation, idempotencyKey) {
     .eq('idempotency_key', idempotencyKey)
     .gt('expires_at', new Date().toISOString())
     .maybeSingle();
+
   if (error) throw error;
   return data || null;
 }
@@ -4819,6 +4901,39 @@ async function saveIdempotentResponse({
   responseBody,
 }) {
   if (!idempotencyKey) return;
+
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `INSERT INTO public.api_idempotency_keys
+        (
+          user_id,
+          operation,
+          idempotency_key,
+          resource_type,
+          resource_id,
+          response_status,
+          response_body
+        )
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+       ON CONFLICT (user_id, operation, idempotency_key)
+       DO UPDATE SET
+         resource_type = EXCLUDED.resource_type,
+         resource_id = EXCLUDED.resource_id,
+         response_status = EXCLUDED.response_status,
+         response_body = EXCLUDED.response_body`,
+      [
+        userId,
+        operation,
+        idempotencyKey,
+        resourceType || null,
+        resourceId || null,
+        responseStatus || null,
+        JSON.stringify(responseBody ?? null),
+      ]
+    );
+    return;
+  }
+
   const { error } = await supabase.from('api_idempotency_keys').upsert({
     user_id: userId,
     operation,
@@ -4828,6 +4943,7 @@ async function saveIdempotentResponse({
     response_status: responseStatus,
     response_body: responseBody,
   }, { onConflict: 'user_id,operation,idempotency_key' });
+
   if (error) throw error;
 }
 
