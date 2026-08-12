@@ -1692,22 +1692,60 @@ function buildEmailConfigDiagnostic() {
 }
 
 async function getClassStudentRecipients(classId) {
-  const { data, error } = await supabase
-    .from('class_members')
-    .select('student_id, profiles(name, email)')
-    .eq('class_id', classId);
-  if (error) throw error;
+  let studentRows = [];
 
-  const studentRows = (data || []).filter((entry) => entry.student_id);
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT
+         cm.student_id,
+         CASE
+           WHEN p.id IS NULL THEN NULL
+           ELSE jsonb_build_object(
+             'name', p.name,
+             'email', p.email
+           )
+         END AS profiles
+       FROM public.class_members cm
+       LEFT JOIN public.profiles p
+         ON p.id = cm.student_id
+       WHERE cm.class_id = $1`,
+      [classId]
+    );
+
+    studentRows = rows.filter(
+      (entry) => entry.student_id
+    );
+  } else {
+    const { data, error } = await supabase
+      .from('class_members')
+      .select('student_id, profiles(name, email)')
+      .eq('class_id', classId);
+
+    if (error) throw error;
+
+    studentRows = (data || []).filter(
+      (entry) => entry.student_id
+    );
+  }
+
   const missingEmailIds = studentRows
-    .filter((entry) => !normalizeEmail(entry.profiles?.email))
+    .filter(
+      (entry) =>
+        !normalizeEmail(entry.profiles?.email)
+    )
     .map((entry) => entry.student_id);
-  const emailMap = await getAuthUserEmailMap(missingEmailIds);
+
+  const emailMap =
+    await getAuthUserEmailMap(missingEmailIds);
+
   return studentRows
     .map((entry) => ({
       id: entry.student_id,
       name: entry.profiles?.name || 'Student',
-      email: normalizeEmail(entry.profiles?.email || emailMap.get(entry.student_id)),
+      email: normalizeEmail(
+        entry.profiles?.email ||
+        emailMap.get(entry.student_id)
+      ),
     }))
     .filter((entry) => entry.email);
 }
@@ -1925,11 +1963,34 @@ async function notifyTeacherAboutStudentSubmission({
     return;
   }
 
-  const { data: classRow, error: classError } = await supabase
-    .from('classes')
-    .select('id, name, teacher_id')
-    .eq('id', assignment.class_id)
-    .maybeSingle();
+  let classRow;
+  let classError = null;
+
+  if (USE_POSTGRES_APP_DB) {
+    try {
+      const { rows } = await db.query(
+        `SELECT id, name, teacher_id
+           FROM public.classes
+          WHERE id = $1
+          LIMIT 1`,
+        [assignment.class_id]
+      );
+
+      classRow = rows[0] || null;
+    } catch (error) {
+      classError = error;
+    }
+  } else {
+    const result = await supabase
+      .from('classes')
+      .select('id, name, teacher_id')
+      .eq('id', assignment.class_id)
+      .maybeSingle();
+
+    classRow = result.data;
+    classError = result.error;
+  }
+
   if (classError) throw classError;
   if (!classRow?.teacher_id) return;
 
@@ -1985,131 +2046,420 @@ async function deliverNotificationOutboxEvent(event) {
     event.event_type === 'assignment_published' ||
     event.event_type === 'assignment_deadline_reminder'
   ) {
-    const { data: assignment, error } = await supabase
-      .from('assignments')
-      .select('*, classes(name)')
-      .eq('id', event.aggregate_id)
-      .single();
-    if (error) throw error;
+    let assignment;
+
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT
+           a.*,
+           CASE
+             WHEN c.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', c.name
+             )
+           END AS classes
+         FROM public.assignments a
+         LEFT JOIN public.classes c
+           ON c.id = a.class_id
+         WHERE a.id = $1
+         LIMIT 1`,
+        [event.aggregate_id]
+      );
+
+      assignment = rows[0];
+
+      if (!assignment) {
+        throw new Error(
+          'Notification assignment not found.'
+        );
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('assignments')
+        .select('*, classes(name)')
+        .eq('id', event.aggregate_id)
+        .single();
+
+      if (error) throw error;
+      assignment = data;
+    }
+
     await notifyStudentsAboutAssignment({
       assignment,
-      className: assignment.classes?.name || 'your class',
+      className:
+        assignment.classes?.name || 'your class',
       baseUrl,
-      mode: event.event_type === 'assignment_deadline_reminder'
-        ? 'deadline-reminder'
-        : 'published',
+      mode:
+        event.event_type ===
+        'assignment_deadline_reminder'
+          ? 'deadline-reminder'
+          : 'published',
     });
+
     return;
   }
 
   if (event.event_type === 'submission_received') {
-    const { data: submission, error: submissionError } = await supabase
-      .from('submissions')
-      .select('*, profiles(id, name)')
-      .eq('id', event.aggregate_id)
-      .single();
-    if (submissionError) throw submissionError;
-    const { data: assignment, error: assignmentError } = await supabase
-      .from('assignments')
-      .select('*')
-      .eq('id', submission.assignment_id)
-      .single();
-    if (assignmentError) throw assignmentError;
-    await notifyTeacherAboutStudentSubmission({ assignment, submission, baseUrl });
+    let submission;
+    let assignment;
+
+    if (USE_POSTGRES_APP_DB) {
+      submission =
+        await getPostgresSubmissionWithProfile(
+          event.aggregate_id
+        );
+
+      if (!submission) {
+        throw new Error(
+          'Notification submission not found.'
+        );
+      }
+
+      const { rows } = await db.query(
+        `SELECT *
+           FROM public.assignments
+          WHERE id = $1
+          LIMIT 1`,
+        [submission.assignment_id]
+      );
+
+      assignment = rows[0];
+
+      if (!assignment) {
+        throw new Error(
+          'Notification assignment not found.'
+        );
+      }
+    } else {
+      const {
+        data: submissionData,
+        error: submissionError,
+      } = await supabase
+        .from('submissions')
+        .select('*, profiles(id, name)')
+        .eq('id', event.aggregate_id)
+        .single();
+
+      if (submissionError) {
+        throw submissionError;
+      }
+
+      submission = submissionData;
+
+      const {
+        data: assignmentData,
+        error: assignmentError,
+      } = await supabase
+        .from('assignments')
+        .select('*')
+        .eq('id', submission.assignment_id)
+        .single();
+
+      if (assignmentError) {
+        throw assignmentError;
+      }
+
+      assignment = assignmentData;
+    }
+
+    await notifyTeacherAboutStudentSubmission({
+      assignment,
+      submission,
+      baseUrl,
+    });
+
     return;
   }
 
-  if (event.event_type === 'submission_reviewed' || event.event_type === 'submission_reopened') {
-    const { data: submission, error: submissionError } = await supabase
-      .from('submissions')
-      .select('*, profiles(id, name)')
-      .eq('id', event.aggregate_id)
-      .single();
-    if (submissionError) throw submissionError;
-    const { data: assignment, error: assignmentError } = await supabase
-      .from('assignments')
-      .select('*, classes(name)')
-      .eq('id', submission.assignment_id)
-      .single();
-    if (assignmentError) throw assignmentError;
-    if (event.event_type === 'submission_reviewed') {
+  if (
+    event.event_type === 'submission_reviewed' ||
+    event.event_type === 'submission_reopened'
+  ) {
+    let submission;
+    let assignment;
+
+    if (USE_POSTGRES_APP_DB) {
+      submission =
+        await getPostgresSubmissionWithProfile(
+          event.aggregate_id
+        );
+
+      if (!submission) {
+        throw new Error(
+          'Notification submission not found.'
+        );
+      }
+
+      const { rows } = await db.query(
+        `SELECT
+           a.*,
+           CASE
+             WHEN c.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', c.name
+             )
+           END AS classes
+         FROM public.assignments a
+         LEFT JOIN public.classes c
+           ON c.id = a.class_id
+         WHERE a.id = $1
+         LIMIT 1`,
+        [submission.assignment_id]
+      );
+
+      assignment = rows[0];
+
+      if (!assignment) {
+        throw new Error(
+          'Notification assignment not found.'
+        );
+      }
+    } else {
+      const {
+        data: submissionData,
+        error: submissionError,
+      } = await supabase
+        .from('submissions')
+        .select('*, profiles(id, name)')
+        .eq('id', event.aggregate_id)
+        .single();
+
+      if (submissionError) {
+        throw submissionError;
+      }
+
+      submission = submissionData;
+
+      const {
+        data: assignmentData,
+        error: assignmentError,
+      } = await supabase
+        .from('assignments')
+        .select('*, classes(name)')
+        .eq('id', submission.assignment_id)
+        .single();
+
+      if (assignmentError) {
+        throw assignmentError;
+      }
+
+      assignment = assignmentData;
+    }
+
+    if (
+      event.event_type ===
+      'submission_reviewed'
+    ) {
       await notifyStudentAboutGradedSubmission({
         assignment,
         submission,
-        previousTeacherReview: payload.previousTeacherReview || {},
+        previousTeacherReview:
+          payload.previousTeacherReview || {},
         baseUrl,
       });
     } else {
       await notifyStudentAboutReopenedSubmission({
         assignment,
-        previousSubmission: payload.previousSubmission || {},
+        previousSubmission:
+          payload.previousSubmission || {},
         submission,
         baseUrl,
       });
     }
+
     return;
   }
 
   if (event.event_type === 'course_message') {
-    const { data: message, error: messageError } = await supabase
-      .from('course_messages')
-      .select('*, classes(name)')
-      .eq('id', event.aggregate_id)
-      .single();
-    if (messageError) throw messageError;
+    let message;
 
-    const recipients = Array.isArray(payload.recipients) ? payload.recipients : [];
-    const safeBody = escapeHtmlEmail(message.body).replace(/\r?\n/g, '<br>');
-    const safeTeacherName = escapeHtmlEmail(payload.teacherName || 'Your instructor');
-    const safeCourseName = escapeHtmlEmail(message.classes?.name || payload.courseName || 'your course');
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT
+           m.*,
+           CASE
+             WHEN c.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', c.name
+             )
+           END AS classes
+         FROM public.course_messages m
+         LEFT JOIN public.classes c
+           ON c.id = m.class_id
+         WHERE m.id = $1
+         LIMIT 1`,
+        [event.aggregate_id]
+      );
 
-    await supabase
-      .from('course_messages')
-      .update({ status: 'sending', updated_at: new Date().toISOString() })
-      .eq('id', message.id);
+      message = rows[0];
 
-    const results = await settleWithConcurrency(recipients, (recipient) =>
-      sendDurableEmail({
-        to: recipient.email,
-        subject: message.subject,
-        html: `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;"><p>Hi ${escapeHtmlEmail(recipient.name || 'Student')},</p><div>${safeBody}</div><p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p></div>`,
-        text: `Hi ${recipient.name || 'Student'},\n\n${message.body}\n\nSent by ${payload.teacherName || 'Your instructor'} · ${message.classes?.name || payload.courseName || 'your course'}`,
-        idempotencyKey: makeIdempotencyKey([
-          'teacher-course-message',
-          message.teacher_id,
-          message.provider_request_id,
-          recipient.id || recipient.email,
-        ]),
-      }),
-    10);
-    const deliveredCount = results.filter((result) => result.status === 'fulfilled').length;
-    const failedCount = recipients.length - deliveredCount;
-    const nextStatus = failedCount === 0
-      ? 'sent'
-      : deliveredCount > 0
-        ? 'partially_sent'
-        : 'failed';
-    const { error: updateError } = await supabase
-      .from('course_messages')
-      .update({
-        status: nextStatus,
-        delivered_count: deliveredCount,
-        failed_count: failedCount,
-        sent_at: deliveredCount > 0 ? new Date().toISOString() : null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', message.id);
-    if (updateError) throw updateError;
+      if (!message) {
+        throw new Error(
+          'Notification course message not found.'
+        );
+      }
+    } else {
+      const {
+        data,
+        error: messageError,
+      } = await supabase
+        .from('course_messages')
+        .select('*, classes(name)')
+        .eq('id', event.aggregate_id)
+        .single();
+
+      if (messageError) throw messageError;
+
+      message = data;
+    }
+
+    const recipients =
+      Array.isArray(payload.recipients)
+        ? payload.recipients
+        : [];
+
+    const safeBody = escapeHtmlEmail(
+      message.body
+    ).replace(/\r?\n/g, '<br>');
+
+    const safeTeacherName =
+      escapeHtmlEmail(
+        payload.teacherName ||
+        'Your instructor'
+      );
+
+    const safeCourseName =
+      escapeHtmlEmail(
+        message.classes?.name ||
+        payload.courseName ||
+        'your course'
+      );
+
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `UPDATE public.course_messages
+            SET status = 'sending',
+                updated_at = NOW()
+          WHERE id = $1`,
+        [message.id]
+      );
+    } else {
+      const { error: sendingError } =
+        await supabase
+          .from('course_messages')
+          .update({
+            status: 'sending',
+            updated_at:
+              new Date().toISOString(),
+          })
+          .eq('id', message.id);
+
+      if (sendingError) throw sendingError;
+    }
+
+    const results = await settleWithConcurrency(
+      recipients,
+      (recipient) =>
+        sendDurableEmail({
+          to: recipient.email,
+          subject: message.subject,
+          html:
+            `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;">` +
+            `<p>Hi ${escapeHtmlEmail(recipient.name || 'Student')},</p>` +
+            `<div>${safeBody}</div>` +
+            `<p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p>` +
+            `</div>`,
+          text:
+            `Hi ${recipient.name || 'Student'},\n\n` +
+            `${message.body}\n\n` +
+            `Sent by ${payload.teacherName || 'Your instructor'} · ` +
+            `${message.classes?.name || payload.courseName || 'your course'}`,
+          idempotencyKey: makeIdempotencyKey([
+            'teacher-course-message',
+            message.teacher_id,
+            message.provider_request_id,
+            recipient.id || recipient.email,
+          ]),
+        }),
+      10
+    );
+
+    const deliveredCount =
+      results.filter(
+        (result) =>
+          result.status === 'fulfilled'
+      ).length;
+
+    const failedCount =
+      recipients.length - deliveredCount;
+
+    const nextStatus =
+      failedCount === 0
+        ? 'sent'
+        : deliveredCount > 0
+          ? 'partially_sent'
+          : 'failed';
+
+    const sentAt =
+      deliveredCount > 0
+        ? new Date().toISOString()
+        : null;
+
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `UPDATE public.course_messages
+            SET status = $2,
+                delivered_count = $3,
+                failed_count = $4,
+                sent_at = $5,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [
+          message.id,
+          nextStatus,
+          deliveredCount,
+          failedCount,
+          sentAt,
+        ]
+      );
+    } else {
+      const {
+        error: updateError,
+      } = await supabase
+        .from('course_messages')
+        .update({
+          status: nextStatus,
+          delivered_count: deliveredCount,
+          failed_count: failedCount,
+          sent_at: sentAt,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq('id', message.id);
+
+      if (updateError) throw updateError;
+    }
+
     if (failedCount > 0) {
       throw new AggregateError(
-        results.filter((result) => result.status === 'rejected').map((result) => result.reason),
+        results
+          .filter(
+            (result) =>
+              result.status === 'rejected'
+          )
+          .map(
+            (result) => result.reason
+          ),
         `${failedCount} of ${recipients.length} course message emails failed.`
       );
     }
+
     return;
   }
 
-  throw new Error(`Unsupported notification outbox event: ${event.event_type}`);
+  throw new Error(
+    `Unsupported notification outbox event: ${event.event_type}`
+  );
 }
 
 async function processNotificationOutbox() {
