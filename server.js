@@ -10281,77 +10281,243 @@ app.get('/api/admin/writing-process/benchmarks', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
 
-    // Get all assignments with language level
-    const { data: assignments, error: assignError } = await readClient
-      .from('assignments')
-      .select('id, language_level, class_id');
-    if (assignError) return res.status(400).json({ error: assignError.message });
+    let assignments = [];
+    let submissions = [];
+    let profiles = [];
 
-    // Get all submissions with writing events
-    const assignmentIds = (assignments || []).map(a => a.id);
-    if (!assignmentIds.length) return res.json({ byLevel: {} });
+    if (USE_POSTGRES_APP_DB) {
+      const assignmentResult = await db.query(
+        `SELECT id, language_level, class_id
+           FROM public.assignments`
+      );
 
-    const { data: submissions, error: subError } = await readClient
-      .from('submissions')
-      .select('id, assignment_id, student_id, writing_events, keystroke_log, teacher_review, final_text, draft_text, updated_at, submitted_at, started_at')
-      .in('assignment_id', assignmentIds);
-    if (subError) return res.status(400).json({ error: subError.message });
+      assignments = assignmentResult.rows;
 
-    // Exclude test accounts and consent-excluded students from the benchmark
-    // pool. Read via the service role: exclude_from_writing_behavior is not
-    // readable with a user token (consent stays invisible outside the server).
-    let { data: profiles, error: profError } = await supabase
-      .from('profiles')
-      .select('id, is_test_account, exclude_from_writing_behavior')
-      .or('is_test_account.eq.true,exclude_from_writing_behavior.eq.true');
-    if (profError && isMissingProfileFlagColumn(profError)) {
-      profiles = [];
-      profError = null;
+      const assignmentIds =
+        assignments.map((assignment) => assignment.id);
+
+      if (!assignmentIds.length) {
+        return res.json({ byLevel: {} });
+      }
+
+      const submissionResult = await db.query(
+        `SELECT
+           id,
+           assignment_id,
+           student_id,
+           writing_events,
+           keystroke_log,
+           teacher_review,
+           final_text,
+           draft_text,
+           updated_at,
+           submitted_at,
+           started_at
+         FROM public.submissions
+         WHERE assignment_id = ANY($1::uuid[])`,
+        [assignmentIds]
+      );
+
+      submissions = submissionResult.rows;
+
+      const profileResult = await db.query(
+        `SELECT
+           id,
+           is_test_account,
+           exclude_from_writing_behavior
+         FROM public.profiles
+         WHERE is_test_account = TRUE
+            OR exclude_from_writing_behavior = TRUE`
+      );
+
+      profiles = profileResult.rows;
+    } else {
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      const assignmentResult =
+        await readClient
+          .from('assignments')
+          .select(
+            'id, language_level, class_id'
+          );
+
+      if (assignmentResult.error) {
+        return res.status(400).json({
+          error:
+            assignmentResult.error.message,
+        });
+      }
+
+      assignments =
+        assignmentResult.data || [];
+
+      const assignmentIds =
+        assignments.map(
+          (assignment) =>
+            assignment.id
+        );
+
+      if (!assignmentIds.length) {
+        return res.json({ byLevel: {} });
+      }
+
+      const submissionResult =
+        await readClient
+          .from('submissions')
+          .select(
+            'id, assignment_id, student_id, writing_events, keystroke_log, teacher_review, final_text, draft_text, updated_at, submitted_at, started_at'
+          )
+          .in(
+            'assignment_id',
+            assignmentIds
+          );
+
+      if (submissionResult.error) {
+        return res.status(400).json({
+          error:
+            submissionResult.error.message,
+        });
+      }
+
+      submissions =
+        submissionResult.data || [];
+
+      let profileResult =
+        await supabase
+          .from('profiles')
+          .select(
+            'id, is_test_account, exclude_from_writing_behavior'
+          )
+          .or(
+            'is_test_account.eq.true,exclude_from_writing_behavior.eq.true'
+          );
+
+      if (
+        profileResult.error &&
+        isMissingProfileFlagColumn(
+          profileResult.error
+        )
+      ) {
+        profileResult = {
+          data: [],
+          error: null,
+        };
+      }
+
+      if (profileResult.error) {
+        return res.status(400).json({
+          error:
+            profileResult.error.message,
+        });
+      }
+
+      profiles =
+        profileResult.data || [];
     }
-    if (profError) return res.status(400).json({ error: profError.message });
 
-    const excludedStudentIds = new Set((profiles || []).map(p => p.id));
+    const excludedStudentIds =
+      new Set(
+        profiles.map(
+          (profile) =>
+            profile.id
+        )
+      );
 
-    // Build assignment lookups for the shared writing-process analyzer.
     const assignmentById = {};
-    for (const a of (assignments || [])) {
-      assignmentById[a.id] = a;
+
+    for (const assignment of assignments) {
+      assignmentById[assignment.id] =
+        assignment;
     }
 
-    // Group included submission metrics by CEFR level
-    const byLevel = groupBenchmarkMetricsByLevel(submissions, assignmentById, excludedStudentIds);
+    const byLevel =
+      groupBenchmarkMetricsByLevel(
+        submissions,
+        assignmentById,
+        excludedStudentIds
+      );
 
-    // Compute medians and ranges per level
-    const median = arr => {
+    const median = (arr) => {
       if (!arr.length) return null;
-      const sorted = [...arr].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+
+      const sorted =
+        [...arr].sort(
+          (a, b) => a - b
+        );
+
+      const mid =
+        Math.floor(
+          sorted.length / 2
+        );
+
+      return sorted.length % 2
+        ? sorted[mid]
+        : (
+            sorted[mid - 1] +
+            sorted[mid]
+          ) / 2;
     };
-    const round1 = v => v !== null ? Math.round(v * 10) / 10 : null;
+
+    const round1 = (value) =>
+      value !== null
+        ? Math.round(value * 10) / 10
+        : null;
 
     const result = {};
-    for (const [level, data] of Object.entries(byLevel)) {
+
+    for (
+      const [level, data]
+      of Object.entries(byLevel)
+    ) {
       result[level] = {
         level,
         total: data.total,
         included: data.included,
         excluded: data.excluded,
         measured: {
-          typingRate: round1(median(data.typingRates)),
-          longPausesPer100w: round1(median(data.longPausesPer100w)),
-          localRevisionsPer100w: round1(median(data.localRevisionsPer100w)),
-          productProcessRatio: round1(median(data.productProcessRatios)),
-          pasteShare: round1(median(data.pasteShares)),
+          typingRate:
+            round1(
+              median(
+                data.typingRates
+              )
+            ),
+          longPausesPer100w:
+            round1(
+              median(
+                data.longPausesPer100w
+              )
+            ),
+          localRevisionsPer100w:
+            round1(
+              median(
+                data.localRevisionsPer100w
+              )
+            ),
+          productProcessRatio:
+            round1(
+              median(
+                data.productProcessRatios
+              )
+            ),
+          pasteShare:
+            round1(
+              median(
+                data.pasteShares
+              )
+            ),
         },
       };
     }
 
-    res.json({ byLevel: result });
+    res.json({
+      byLevel: result,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -10359,49 +10525,221 @@ app.get('/api/admin/teachers', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
-    let { data, error } = await readClient
-      .from('profiles')
-      .select('id, name, role, created_at, is_test_account')
-      .in('role', ['teacher', 'admin'])
-      .order('created_at', { ascending: false });
-    if (error && isMissingProfileFlagColumn(error)) {
-      const retry = await readClient
-        .from('profiles')
-        .select('id, name, role, created_at')
-        .in('role', ['teacher', 'admin'])
-        .order('created_at', { ascending: false });
-      data = (retry.data || []).map(addDefaultProfileFlags);
-      error = retry.error;
+
+    let data = [];
+    let classes = [];
+    let assignments = [];
+    let members = [];
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const [
+          profileResult,
+          classResult,
+          assignmentResult,
+          memberResult,
+        ] = await Promise.all([
+          db.query(
+            `SELECT
+               id,
+               name,
+               role,
+               created_at,
+               is_test_account
+             FROM public.profiles
+             WHERE role = ANY($1::text[])
+             ORDER BY created_at DESC`,
+            [['teacher', 'admin']]
+          ),
+          db.query(
+            `SELECT
+               id,
+               teacher_id,
+               name
+             FROM public.classes`
+          ),
+          db.query(
+            `SELECT
+               id,
+               class_id,
+               status
+             FROM public.assignments`
+          ),
+          db.query(
+            `SELECT
+               class_id,
+               student_id
+             FROM public.class_members`
+          ),
+        ]);
+
+        data = profileResult.rows;
+        classes = classResult.rows;
+        assignments =
+          assignmentResult.rows;
+        members = memberResult.rows;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      let profileResult =
+        await readClient
+          .from('profiles')
+          .select(
+            'id, name, role, created_at, is_test_account'
+          )
+          .in(
+            'role',
+            ['teacher', 'admin']
+          )
+          .order(
+            'created_at',
+            { ascending: false }
+          );
+
+      if (
+        profileResult.error &&
+        isMissingProfileFlagColumn(
+          profileResult.error
+        )
+      ) {
+        const retry =
+          await readClient
+            .from('profiles')
+            .select(
+              'id, name, role, created_at'
+            )
+            .in(
+              'role',
+              ['teacher', 'admin']
+            )
+            .order(
+              'created_at',
+              { ascending: false }
+            );
+
+        profileResult.data =
+          (retry.data || [])
+            .map(
+              addDefaultProfileFlags
+            );
+
+        profileResult.error =
+          retry.error;
+      }
+
+      if (profileResult.error) {
+        error =
+          profileResult.error;
+      } else {
+        data =
+          profileResult.data || [];
+
+        const [
+          classResult,
+          assignmentResult,
+          memberResult,
+        ] = await Promise.all([
+          readClient
+            .from('classes')
+            .select(
+              'id, teacher_id, name'
+            ),
+          readClient
+            .from('assignments')
+            .select(
+              'id, class_id, status'
+            ),
+          readClient
+            .from('class_members')
+            .select(
+              'class_id, student_id'
+            ),
+        ]);
+
+        classes =
+          classResult.data || [];
+        assignments =
+          assignmentResult.data || [];
+        members =
+          memberResult.data || [];
+      }
     }
-    if (error) return res.status(400).json({ error: error.message });
-    // Get class counts per teacher
-    const { data: classes } = await readClient
-      .from('classes')
-      .select('id, teacher_id, name');
-    const { data: assignments } = await readClient
-      .from('assignments')
-      .select('id, class_id, status');
-    const { data: members } = await readClient
-      .from('class_members')
-      .select('class_id, student_id');
-    const teachers = (data || []).map(teacher => {
-      const teacherClasses = (classes || []).filter(c => c.teacher_id === teacher.id);
-      const classIds = teacherClasses.map(c => c.id);
-      const teacherAssignments = (assignments || []).filter(a => classIds.includes(a.class_id));
-      const teacherStudents = new Set((members || []).filter(m => classIds.includes(m.class_id)).map(m => m.student_id));
-      return {
-        ...teacher,
-        classCount: teacherClasses.length,
-        assignmentCount: teacherAssignments.length,
-        publishedCount: teacherAssignments.filter(a => a.status === 'published').length,
-        studentCount: teacherStudents.size,
-        classes: teacherClasses,
-      };
-    });
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    const teachers =
+      (data || []).map(
+        (teacher) => {
+          const teacherClasses =
+            classes.filter(
+              (classRow) =>
+                classRow.teacher_id ===
+                teacher.id
+            );
+
+          const classIds =
+            teacherClasses.map(
+              (classRow) =>
+                classRow.id
+            );
+
+          const teacherAssignments =
+            assignments.filter(
+              (assignment) =>
+                classIds.includes(
+                  assignment.class_id
+                )
+            );
+
+          const teacherStudents =
+            new Set(
+              members
+                .filter(
+                  (member) =>
+                    classIds.includes(
+                      member.class_id
+                    )
+                )
+                .map(
+                  (member) =>
+                    member.student_id
+                )
+            );
+
+          return {
+            ...teacher,
+            classCount:
+              teacherClasses.length,
+            assignmentCount:
+              teacherAssignments.length,
+            publishedCount:
+              teacherAssignments.filter(
+                (assignment) =>
+                  assignment.status ===
+                  'published'
+              ).length,
+            studentCount:
+              teacherStudents.size,
+            classes:
+              teacherClasses,
+          };
+        }
+      );
+
     res.json({ teachers });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -10409,36 +10747,213 @@ app.get('/api/admin/teachers/:teacherId/classes', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
-    let { data: classes, error } = await readClient
-      .from('classes')
-      .select('*, class_members(student_id, profiles(id, name, role, is_test_account))')
-      .eq('teacher_id', req.params.teacherId)
-      .order('created_at', { ascending: false });
-    if (error && isMissingProfileFlagColumn(error)) {
-      const retry = await readClient
-        .from('classes')
-        .select('*, class_members(student_id, profiles(id, name, role))')
-        .eq('teacher_id', req.params.teacherId)
-        .order('created_at', { ascending: false });
-      classes = (Array.isArray(retry.data) ? retry.data : []).map((cls) => ({
-        ...cls,
-        class_members: (Array.isArray(cls.class_members) ? cls.class_members : []).map((member) => ({
-          ...member,
-          profiles: addDefaultProfileFlags(member.profiles),
-        })),
-      }));
-      error = retry.error;
+
+    let classes = [];
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const classResult =
+          await db.query(
+            `SELECT *
+               FROM public.classes
+              WHERE teacher_id = $1
+              ORDER BY created_at DESC`,
+            [req.params.teacherId]
+          );
+
+        classes =
+          classResult.rows;
+
+        const classIds =
+          classes.map(
+            (classRow) =>
+              classRow.id
+          );
+
+        if (classIds.length) {
+          const memberResult =
+            await db.query(
+              `SELECT
+                 cm.class_id,
+                 cm.student_id,
+                 CASE
+                   WHEN p.id IS NULL THEN NULL
+                   ELSE jsonb_build_object(
+                     'id', p.id,
+                     'name', p.name,
+                     'role', p.role,
+                     'is_test_account',
+                       p.is_test_account
+                   )
+                 END AS profiles
+               FROM public.class_members cm
+               LEFT JOIN public.profiles p
+                 ON p.id = cm.student_id
+               WHERE cm.class_id = ANY($1::uuid[])`,
+              [classIds]
+            );
+
+          const membersByClass =
+            new Map();
+
+          for (
+            const member
+            of memberResult.rows
+          ) {
+            const key =
+              String(
+                member.class_id
+              );
+
+            if (
+              !membersByClass.has(key)
+            ) {
+              membersByClass.set(
+                key,
+                []
+              );
+            }
+
+            membersByClass
+              .get(key)
+              .push({
+                student_id:
+                  member.student_id,
+                profiles:
+                  member.profiles,
+              });
+          }
+
+          classes =
+            classes.map(
+              (classRow) => ({
+                ...classRow,
+                class_members:
+                  membersByClass.get(
+                    String(
+                      classRow.id
+                    )
+                  ) || [],
+              })
+            );
+        }
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      let result =
+        await readClient
+          .from('classes')
+          .select(
+            '*, class_members(student_id, profiles(id, name, role, is_test_account))'
+          )
+          .eq(
+            'teacher_id',
+            req.params.teacherId
+          )
+          .order(
+            'created_at',
+            { ascending: false }
+          );
+
+      if (
+        result.error &&
+        isMissingProfileFlagColumn(
+          result.error
+        )
+      ) {
+        const retry =
+          await readClient
+            .from('classes')
+            .select(
+              '*, class_members(student_id, profiles(id, name, role))'
+            )
+            .eq(
+              'teacher_id',
+              req.params.teacherId
+            )
+            .order(
+              'created_at',
+              { ascending: false }
+            );
+
+        classes =
+          (
+            Array.isArray(retry.data)
+              ? retry.data
+              : []
+          ).map(
+            (classRow) => ({
+              ...classRow,
+              class_members:
+                (
+                  Array.isArray(
+                    classRow.class_members
+                  )
+                    ? classRow.class_members
+                    : []
+                ).map(
+                  (member) => ({
+                    ...member,
+                    profiles:
+                      addDefaultProfileFlags(
+                        member.profiles
+                      ),
+                  })
+                ),
+            })
+          );
+
+        error =
+          retry.error;
+      } else {
+        classes =
+          result.data || [];
+
+        error =
+          result.error;
+      }
     }
-    if (error) return res.status(400).json({ error: error.message });
-    classes = (Array.isArray(classes) ? classes : []).map((cls) => ({
-      ...cls,
-      class_members: (Array.isArray(cls.class_members) ? cls.class_members : [])
-        .filter((member) => isStudentProfile(member.profiles)),
-    }));
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    classes =
+      (
+        Array.isArray(classes)
+          ? classes
+          : []
+      ).map(
+        (classRow) => ({
+          ...classRow,
+          class_members:
+            (
+              Array.isArray(
+                classRow.class_members
+              )
+                ? classRow.class_members
+                : []
+            ).filter(
+              (member) =>
+                isStudentProfile(
+                  member.profiles
+                )
+            ),
+        })
+      );
+
     res.json({ classes });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -10446,47 +10961,237 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
-    const assignPromise = readClient.from('assignments').select('*').eq('class_id', req.params.classId).order('created_at', { ascending: false });
-    let memberPromise = readClient.from('class_members').select('student_id, profiles(id, name, role, is_test_account)').eq('class_id', req.params.classId);
-    let [assignData, memberData] = await Promise.all([
-      assignPromise,
-      memberPromise
-    ]);
-    if (memberData.error && isMissingProfileFlagColumn(memberData.error)) {
-      memberData = await readClient.from('class_members').select('student_id, profiles(id, name, role)').eq('class_id', req.params.classId);
-      memberData.data = (Array.isArray(memberData.data) ? memberData.data : []).map((member) => ({
-        ...member,
-        profiles: addDefaultProfileFlags(member.profiles),
-      }));
+
+    let assignments = [];
+    let members = [];
+
+    if (USE_POSTGRES_APP_DB) {
+      const [
+        assignmentResult,
+        memberResult,
+      ] = await Promise.all([
+        db.query(
+          `SELECT *
+             FROM public.assignments
+            WHERE class_id = $1
+            ORDER BY created_at DESC`,
+          [req.params.classId]
+        ),
+        db.query(
+          `SELECT
+             cm.student_id,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'id', p.id,
+                 'name', p.name,
+                 'role', p.role,
+                 'is_test_account',
+                   p.is_test_account,
+                 'exclude_from_writing_behavior',
+                   p.exclude_from_writing_behavior
+               )
+             END AS profiles
+           FROM public.class_members cm
+           LEFT JOIN public.profiles p
+             ON p.id = cm.student_id
+           WHERE cm.class_id = $1`,
+          [req.params.classId]
+        ),
+      ]);
+
+      assignments =
+        assignmentResult.rows;
+
+      members =
+        memberResult.rows
+          .map(
+            (member) =>
+              member.profiles
+          )
+          .filter(
+            isStudentProfile
+          );
+    } else {
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      const assignPromise =
+        readClient
+          .from('assignments')
+          .select('*')
+          .eq(
+            'class_id',
+            req.params.classId
+          )
+          .order(
+            'created_at',
+            { ascending: false }
+          );
+
+      let memberPromise =
+        readClient
+          .from('class_members')
+          .select(
+            'student_id, profiles(id, name, role, is_test_account)'
+          )
+          .eq(
+            'class_id',
+            req.params.classId
+          );
+
+      let [
+        assignData,
+        memberData,
+      ] = await Promise.all([
+        assignPromise,
+        memberPromise,
+      ]);
+
+      if (
+        memberData.error &&
+        isMissingProfileFlagColumn(
+          memberData.error
+        )
+      ) {
+        memberData =
+          await readClient
+            .from('class_members')
+            .select(
+              'student_id, profiles(id, name, role)'
+            )
+            .eq(
+              'class_id',
+              req.params.classId
+            );
+
+        memberData.data =
+          (
+            Array.isArray(
+              memberData.data
+            )
+              ? memberData.data
+              : []
+          ).map(
+            (member) => ({
+              ...member,
+              profiles:
+                addDefaultProfileFlags(
+                  member.profiles
+                ),
+            })
+          );
+      }
+
+      if (assignData.error) {
+        return res.status(400).json({
+          error:
+            assignData.error.message,
+        });
+      }
+
+      if (memberData.error) {
+        return res.status(400).json({
+          error:
+            memberData.error.message,
+        });
+      }
+
+      assignments =
+        assignData.data || [];
+
+      members =
+        (memberData.data || [])
+          .map(
+            (member) =>
+              member.profiles
+          )
+          .filter(
+            isStudentProfile
+          );
+
+      if (members.length) {
+        const {
+          data: consentFlags,
+        } = await supabase
+          .from('profiles')
+          .select(
+            'id, exclude_from_writing_behavior'
+          )
+          .in(
+            'id',
+            members.map(
+              (member) =>
+                member.id
+            )
+          );
+
+        const consentById =
+          new Map(
+            (consentFlags || []).map(
+              (row) => [
+                row.id,
+                Boolean(
+                  row.exclude_from_writing_behavior
+                ),
+              ]
+            )
+          );
+
+        members =
+          members.map(
+            (member) => ({
+              ...member,
+              exclude_from_writing_behavior:
+                consentById.get(
+                  member.id
+                ) || false,
+            })
+          );
+      }
     }
-    if (assignData.error) return res.status(400).json({ error: assignData.error.message });
-    if (memberData.error) return res.status(400).json({ error: memberData.error.message });
-    const assignments = assignData.data || [];
-    let members = (memberData.data || []).map(m => m.profiles).filter(isStudentProfile);
-    // Merge the research-consent flag via the service role (the column is not
-    // readable with a user token) so the admin UI can show/toggle it.
-    if (members.length) {
-      const { data: consentFlags } = await supabase
-        .from('profiles')
-        .select('id, exclude_from_writing_behavior')
-        .in('id', members.map((member) => member.id));
-      const consentById = new Map((consentFlags || []).map((row) => [row.id, Boolean(row.exclude_from_writing_behavior)]));
-      members = members.map((member) => ({
-        ...member,
-        exclude_from_writing_behavior: consentById.get(member.id) || false,
-      }));
-    }
-    // Get submissions for all assignments in this class
-    const assignmentIds = assignments.map(a => a.id);
+
+    const assignmentIds =
+      assignments.map(
+        (assignment) =>
+          assignment.id
+      );
+
     let submissions = [];
+
     if (assignmentIds.length) {
-      const { data: subs } = await querySubmissionsForAssignments(assignmentIds, readClient);
-      submissions = subs || [];
+      const readClient =
+        getRequestScopedSupabase(req);
+
+      const {
+        data: submissionRows,
+        error: submissionError,
+      } =
+        await querySubmissionsForAssignments(
+          assignmentIds,
+          readClient
+        );
+
+      if (submissionError) {
+        return res.status(400).json({
+          error:
+            submissionError.message,
+        });
+      }
+
+      submissions =
+        submissionRows || [];
     }
-    res.json({ assignments, members, submissions });
+
+    res.json({
+      assignments,
+      members,
+      submissions,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -10494,37 +11199,149 @@ app.patch('/api/admin/students/:studentId/flags', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
+
     const updates = {};
-    if (req.body?.isTestAccount !== undefined) updates.is_test_account = Boolean(req.body.isTestAccount);
-    // Research-consent exclusion (IRB): set by the PI for non-consenting
-    // students. Admin-only — it is stripped from every other profile payload.
-    if (req.body?.excludeFromWritingBehavior !== undefined) {
-      updates.exclude_from_writing_behavior = Boolean(req.body.excludeFromWritingBehavior);
+
+    if (
+      req.body?.isTestAccount !== undefined
+    ) {
+      updates.is_test_account =
+        Boolean(
+          req.body.isTestAccount
+        );
     }
+
+    if (
+      req.body
+        ?.excludeFromWritingBehavior !==
+      undefined
+    ) {
+      updates.exclude_from_writing_behavior =
+        Boolean(
+          req.body
+            .excludeFromWritingBehavior
+        );
+    }
+
     if (!Object.keys(updates).length) {
-      return res.status(400).json({ error: 'No student flags provided.' });
+      return res.status(400).json({
+        error:
+          'No student flags provided.',
+      });
     }
-    const { data, error } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', req.params.studentId)
-      .eq('role', 'student')
-      .select('id, name, role, is_test_account, exclude_from_writing_behavior')
-      .maybeSingle();
+
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const allowedColumns =
+          new Set([
+            'is_test_account',
+            'exclude_from_writing_behavior',
+          ]);
+
+        const entries =
+          Object.entries(updates)
+            .filter(
+              ([key]) =>
+                allowedColumns.has(key)
+            );
+
+        const values =
+          entries.map(
+            ([, value]) =>
+              value
+          );
+
+        const setParts =
+          entries.map(
+            ([key], index) =>
+              `${key} = $${index + 1}`
+          );
+
+        values.push(
+          req.params.studentId
+        );
+
+        const { rows } =
+          await db.query(
+            `UPDATE public.profiles
+                SET ${setParts.join(', ')}
+              WHERE id = $${values.length}
+                AND role = 'student'
+            RETURNING
+              id,
+              name,
+              role,
+              is_test_account,
+              exclude_from_writing_behavior`,
+            values
+          );
+
+        data =
+          rows[0] || null;
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result =
+        await supabase
+          .from('profiles')
+          .update(updates)
+          .eq(
+            'id',
+            req.params.studentId
+          )
+          .eq(
+            'role',
+            'student'
+          )
+          .select(
+            'id, name, role, is_test_account, exclude_from_writing_behavior'
+          )
+          .maybeSingle();
+
+      data =
+        result.data;
+
+      error =
+        result.error;
+    }
+
     if (error) {
-      if (isMissingProfileFlagColumn(error)) {
+      if (
+        !USE_POSTGRES_APP_DB &&
+        isMissingProfileFlagColumn(error)
+      ) {
         return res.status(400).json({
-          error: 'Admin test-account flags are not active yet. Apply the latest profile admin flags migration, then try again.',
+          error:
+            'Admin test-account flags are not active yet. Apply the latest profile admin flags migration, then try again.',
           needsMigration: true,
-          migration: '20260507_profile_admin_flags.sql',
+          migration:
+            '20260507_profile_admin_flags.sql',
         });
       }
-      return res.status(400).json({ error: error.message });
+
+      return res.status(400).json({
+        error: error.message,
+      });
     }
-    if (!data) return res.status(404).json({ error: 'Student profile not found.' });
-    res.json({ profile: data });
+
+    if (!data) {
+      return res.status(404).json({
+        error:
+          'Student profile not found.',
+      });
+    }
+
+    res.json({
+      profile: data,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
