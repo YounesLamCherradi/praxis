@@ -5054,30 +5054,114 @@ app.post('/api/bug-reports', async (req, res) => {
       uploadedPath = attachmentPath;
     }
 
-    const { data, error } = await submissionWriteWithFallback(req, (client) =>
-      client.from('bug_reports').insert({
-        id: reportId,
-        reporter_id: user.id,
-        reporter_role: profile.role,
-        reporter_name: profile.name,
-        reporter_email: profile.email || user.email || null,
-        description,
-        attachment_path: uploadedPath,
-        attachment_name: attachment?.name || null,
-        attachment_mime_type: attachment?.mimeType || null,
-        attachment_size: attachment?.size || null,
-        route: String(req.body?.route || '').slice(0, 500) || null,
-        context: req.body?.context && typeof req.body.context === 'object'
-          ? req.body.context
-          : {},
-      }).select().single()
-    );
+    const reportContext =
+      req.body?.context &&
+      typeof req.body.context === 'object'
+        ? req.body.context
+        : {};
+
+    const reportRoute =
+      String(req.body?.route || '')
+        .slice(0, 500) || null;
+
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.bug_reports
+            (
+              id,
+              reporter_id,
+              reporter_role,
+              reporter_name,
+              reporter_email,
+              description,
+              attachment_path,
+              attachment_name,
+              attachment_mime_type,
+              attachment_size,
+              route,
+              context
+            )
+           VALUES
+            (
+              $1, $2, $3, $4,
+              $5, $6, $7, $8,
+              $9, $10, $11, $12::jsonb
+            )
+           RETURNING *`,
+          [
+            reportId,
+            user.id,
+            profile.role,
+            profile.name,
+            profile.email || user.email || null,
+            description,
+            uploadedPath,
+            attachment?.name || null,
+            attachment?.mimeType || null,
+            attachment?.size || null,
+            reportRoute,
+            JSON.stringify(reportContext),
+          ]
+        );
+
+        data = rows[0];
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result =
+        await submissionWriteWithFallback(
+          req,
+          (client) =>
+            client
+              .from('bug_reports')
+              .insert({
+                id: reportId,
+                reporter_id: user.id,
+                reporter_role: profile.role,
+                reporter_name: profile.name,
+                reporter_email:
+                  profile.email ||
+                  user.email ||
+                  null,
+                description,
+                attachment_path:
+                  uploadedPath,
+                attachment_name:
+                  attachment?.name || null,
+                attachment_mime_type:
+                  attachment?.mimeType || null,
+                attachment_size:
+                  attachment?.size || null,
+                route: reportRoute,
+                context: reportContext,
+              })
+              .select()
+              .single()
+        );
+
+      data = result.data;
+      error = result.error;
+    }
+
     if (error) {
       if (uploadedPath) {
-        await supabase.storage.from(BUG_REPORT_BUCKET).remove([uploadedPath]);
+        await supabase.storage
+          .from(BUG_REPORT_BUCKET)
+          .remove([uploadedPath]);
       }
-      return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+
+      return res
+        .status(isRlsDenial(error) ? 403 : 400)
+        .json({
+          error: error.message,
+        });
     }
+
     res.json({ report: data });
   } catch (error) {
     if (uploadedPath) {
@@ -5095,13 +5179,44 @@ app.get('/api/admin/bug-reports', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const { data, error } = await supabase
-      .from('bug_reports')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(500);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ reports: data || [] });
+    let data = [];
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT *
+             FROM public.bug_reports
+            ORDER BY created_at DESC
+            LIMIT 500`
+        );
+
+        data = rows;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const result = await supabase
+        .from('bug_reports')
+        .select('*')
+        .order('created_at', {
+          ascending: false,
+        })
+        .limit(500);
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    res.json({
+      reports: data || [],
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -5111,14 +5226,51 @@ app.get('/api/admin/bug-reports/:id/attachment', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const { data: report, error } = await supabase
-      .from('bug_reports')
-      .select('attachment_path')
-      .eq('id', req.params.id)
-      .maybeSingle();
-    if (error) return res.status(400).json({ error: error.message });
-    if (!report) return res.status(404).json({ error: 'Report not found.' });
-    if (!report.attachment_path) return res.status(404).json({ error: 'This report has no screenshot.' });
+    let report;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT attachment_path
+             FROM public.bug_reports
+            WHERE id = $1
+            LIMIT 1`,
+          [req.params.id]
+        );
+
+        report = rows[0] || null;
+      } catch (readError) {
+        error = readError;
+      }
+    } else {
+      const result = await supabase
+        .from('bug_reports')
+        .select('attachment_path')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      report = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    if (!report) {
+      return res.status(404).json({
+        error: 'Report not found.',
+      });
+    }
+
+    if (!report.attachment_path) {
+      return res.status(404).json({
+        error: 'This report has no screenshot.',
+      });
+    }
 
     const { data, error: signedUrlError } = await supabase.storage
       .from(BUG_REPORT_BUCKET)
@@ -5151,14 +5303,79 @@ app.patch('/api/admin/bug-reports/:id', async (req, res) => {
     if (req.body?.adminNotes !== undefined) {
       patch.admin_notes = String(req.body.adminNotes).slice(0, 5000);
     }
-    const { data, error } = await supabase
-      .from('bug_reports')
-      .update(patch)
-      .eq('id', req.params.id)
-      .select()
-      .maybeSingle();
-    if (error) return res.status(400).json({ error: error.message });
-    if (!data) return res.status(404).json({ error: 'Report not found.' });
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const allowedColumns = new Set([
+          'status',
+          'priority',
+          'admin_notes',
+          'resolved_at',
+        ]);
+
+        const entries = Object.entries(patch)
+          .filter(([key]) =>
+            allowedColumns.has(key)
+          );
+
+        if (!entries.length) {
+          return res.status(400).json({
+            error:
+              'No supported report changes were provided.',
+          });
+        }
+
+        const setParts = entries.map(
+          ([key], index) =>
+            `${key} = $${index + 1}`
+        );
+
+        setParts.push('updated_at = NOW()');
+
+        const values = entries.map(
+          ([, value]) => value
+        );
+
+        values.push(req.params.id);
+
+        const { rows } = await db.query(
+          `UPDATE public.bug_reports
+              SET ${setParts.join(', ')}
+            WHERE id = $${values.length}
+          RETURNING *`,
+          values
+        );
+
+        data = rows[0] || null;
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await supabase
+        .from('bug_reports')
+        .update(patch)
+        .eq('id', req.params.id)
+        .select()
+        .maybeSingle();
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    if (!data) {
+      return res.status(404).json({
+        error: 'Report not found.',
+      });
+    }
+
     res.json({ report: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
