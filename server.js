@@ -5493,6 +5493,38 @@ function sanitizeAssignmentPayload(payload = {}) {
   return sanitizePayload(payload, ASSIGNMENT_ALLOWED_FIELDS);
 }
 
+const POSTGRES_ASSIGNMENT_WRITABLE_COLUMNS = new Set([
+  'title',
+  'description',
+  'due_date',
+  'status',
+  'rubric',
+  'language_level',
+  'assignment_type_id',
+  'auto_outline_from_chat',
+  'prompt',
+  'brief',
+  'focus',
+  'assignment_type',
+  'word_count_min',
+  'word_count_max',
+  'idea_request_limit',
+  'feedback_request_limit',
+  'chat_time_limit',
+  'student_focus',
+  'deadline',
+  'uploaded_rubric_text',
+  'published_at',
+]);
+
+function buildPostgresAssignmentWrite(payload = {}) {
+  return Object.entries(payload)
+    .filter(([key, value]) =>
+      POSTGRES_ASSIGNMENT_WRITABLE_COLUMNS.has(key) &&
+      value !== undefined
+    );
+}
+
 async function assignmentWriteWithFallback(req, writeFn) {
   return writeWithRequestScopedFallback(req, writeFn);
 }
@@ -5520,27 +5552,55 @@ async function writeWithRequestScopedFallback(req, writeFn) {
 }
 
 async function queryAssignmentsForClass(req, classId, accessRole) {
+  if (USE_POSTGRES_APP_DB) {
+    const values = [classId];
+    let statusSql = '';
+
+    if (accessRole === 'student') {
+      values.push('published');
+      statusSql = ' AND status = $2';
+    }
+
+    const { rows } = await db.query(
+      `SELECT *
+         FROM public.assignments
+        WHERE class_id = $1
+          AND deleted_at IS NULL
+          ${statusSql}
+        ORDER BY created_at DESC`,
+      values
+    );
+
+    return { data: rows, error: null };
+  }
+
   const requestScopedSupabase = getRequestScopedSupabase(req);
   const candidates = [];
+
   if (requestScopedSupabase && requestScopedSupabase !== supabase) {
     candidates.push(requestScopedSupabase);
   }
+
   candidates.push(supabase);
 
   let lastError = null;
+
   for (let index = 0; index < candidates.length; index += 1) {
     const client = candidates[index];
+
     let query = client
       .from('assignments')
       .select('*')
       .eq('class_id', classId)
       .is('deleted_at', null)
       .order('created_at', { ascending: false });
+
     if (accessRole === 'student') {
       query = query.eq('status', 'published');
     }
 
     const { data, error } = await query;
+
     if (error) {
       lastError = error;
       continue;
@@ -5551,6 +5611,7 @@ async function queryAssignmentsForClass(req, classId, accessRole) {
     }
 
     const isLastCandidate = index === candidates.length - 1;
+
     if (accessRole !== 'teacher' || isLastCandidate) {
       return { data: data || [], error: null };
     }
@@ -5589,11 +5650,52 @@ app.post('/api/classes/:classId/assignments', async (req, res) => {
       return res.status(replay.response_status || 200).json(replay.response_body);
     }
     const payload = sanitizeAssignmentPayload(req.body);
-    const { data, error, label } = await assignmentWriteWithFallback(req, (client) => client
-      .from('assignments')
-      .insert({ ...payload, class_id: req.params.classId })
-      .select()
-      .single());
+
+    let data;
+    let error = null;
+    let label = '';
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const entries = buildPostgresAssignmentWrite(payload);
+
+        const columns = ['class_id', ...entries.map(([key]) => key)];
+        const values = [
+          req.params.classId,
+          ...entries.map(([, value]) => value),
+        ];
+
+        const placeholders = values
+          .map((_, index) => `$${index + 1}`)
+          .join(', ');
+
+        const { rows } = await db.query(
+          `INSERT INTO public.assignments
+            (${columns.join(', ')})
+           VALUES (${placeholders})
+           RETURNING *`,
+          values
+        );
+
+        data = rows[0];
+        label = 'postgres';
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await assignmentWriteWithFallback(
+        req,
+        (client) => client
+          .from('assignments')
+          .insert({ ...payload, class_id: req.params.classId })
+          .select()
+          .single()
+      );
+
+      data = result.data;
+      error = result.error;
+      label = result.label;
+    }
     if (error) {
       if (/row-level security policy/i.test(error.message || "")) {
         return res.status(400).json({
@@ -5656,14 +5758,62 @@ app.patch('/api/assignments/:id', async (req, res) => {
       ...sanitizeAssignmentPayload(req.body),
       version: expectedVersion + 1,
     };
-    const { data, error, label } = await assignmentWriteWithFallback(req, (client) => client
-      .from('assignments')
-      .update(payload)
-      .eq('id', req.params.id)
-      .eq('version', expectedVersion)
-      .is('deleted_at', null)
-      .select()
-      .maybeSingle());
+    let data;
+    let error = null;
+    let label = '';
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const entries = buildPostgresAssignmentWrite(payload);
+
+        const setParts = entries.map(
+          ([key], index) => `${key} = $${index + 1}`
+        );
+
+        const values = entries.map(([, value]) => value);
+
+        setParts.push(`version = $${values.length + 1}`);
+        values.push(expectedVersion + 1);
+
+        setParts.push('updated_at = NOW()');
+
+        values.push(req.params.id, expectedVersion);
+
+        const idIndex = values.length - 1;
+        const versionIndex = values.length;
+
+        const { rows } = await db.query(
+          `UPDATE public.assignments
+              SET ${setParts.join(', ')}
+            WHERE id = $${idIndex}
+              AND version = $${versionIndex}
+              AND deleted_at IS NULL
+          RETURNING *`,
+          values
+        );
+
+        data = rows[0] || null;
+        label = 'postgres';
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await assignmentWriteWithFallback(
+        req,
+        (client) => client
+          .from('assignments')
+          .update(payload)
+          .eq('id', req.params.id)
+          .eq('version', expectedVersion)
+          .is('deleted_at', null)
+          .select()
+          .maybeSingle()
+      );
+
+      data = result.data;
+      error = result.error;
+      label = result.label;
+    }
     if (error) {
       if (/row-level security policy/i.test(error.message || "")) {
         return res.status(400).json({
@@ -5718,17 +5868,56 @@ app.delete('/api/assignments/:id', async (req, res) => {
     if (!ownedAssignment) return res.status(403).json({ error: 'You can only delete assignments in your own classes.' });
 
     const deletedAt = new Date().toISOString();
-    const { data, error } = await supabase
-      .from('assignments')
-      .update({
-        deleted_at: deletedAt,
-        status: 'archived',
-        version: Number(ownedAssignment.version || 1) + 1,
-      })
-      .eq('id', req.params.id)
-      .select()
-      .single();
-    if (error) return res.status(400).json({ error: error.message });
+
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `UPDATE public.assignments
+              SET deleted_at = $2,
+                  status = 'archived',
+                  version = $3,
+                  updated_at = NOW()
+            WHERE id = $1
+          RETURNING *`,
+          [
+            req.params.id,
+            deletedAt,
+            Number(ownedAssignment.version || 1) + 1,
+          ]
+        );
+
+        data = rows[0] || null;
+
+        if (!data) {
+          return res.status(404).json({
+            error: 'Assignment not found.',
+          });
+        }
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await supabase
+        .from('assignments')
+        .update({
+          deleted_at: deletedAt,
+          status: 'archived',
+          version: Number(ownedAssignment.version || 1) + 1,
+        })
+        .eq('id', req.params.id)
+        .select()
+        .single();
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
     await saveAssignmentRevision(data, user.id, 'archived');
     res.json({ ok: true });
   } catch (error) {
