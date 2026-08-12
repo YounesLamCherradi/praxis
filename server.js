@@ -4285,6 +4285,42 @@ function generateClassInviteCode() {
 async function createClassWithUniqueInviteCode(client, classData) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const inviteCode = generateClassInviteCode();
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.classes
+            (
+              teacher_id,
+              name,
+              invite_code,
+              description,
+              semester,
+              is_published,
+              archived
+            )
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            classData.teacher_id,
+            classData.name,
+            inviteCode,
+            classData.description,
+            classData.semester,
+            classData.is_published,
+            classData.archived,
+          ]
+        );
+
+        return { data: rows[0], error: null };
+      } catch (error) {
+        if (error.code !== '23505') {
+          return { data: null, error };
+        }
+        continue;
+      }
+    }
+
     const { data, error } = await client
       .from('classes')
       .insert({ ...classData, invite_code: inviteCode })
@@ -4295,7 +4331,10 @@ async function createClassWithUniqueInviteCode(client, classData) {
     if (error.code !== '23505') return { data: null, error };
   }
 
-  return { data: null, error: new Error('Could not generate a unique course access code.') };
+  return {
+    data: null,
+    error: new Error('Could not generate a unique course access code.'),
+  };
 }
 
 // Get teacher's classes
@@ -4306,6 +4345,39 @@ app.get('/api/classes', async (req, res) => {
 
     // Authorization is established above and teacher_id scopes the result.
     // Use the server client so profile RLS does not erase nested roster names.
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT
+           c.*,
+           COALESCE(
+             jsonb_agg(
+               jsonb_build_object(
+                 'student_id', cm.student_id,
+                 'status', cm.status,
+                 'profiles', jsonb_build_object(
+                   'id', p.id,
+                   'name', p.name,
+                   'email', p.email
+                 )
+               )
+               ORDER BY cm.created_at
+             ) FILTER (WHERE cm.id IS NOT NULL),
+             '[]'::jsonb
+           ) AS class_members
+         FROM public.classes c
+         LEFT JOIN public.class_members cm
+           ON cm.class_id = c.id
+         LEFT JOIN public.profiles p
+           ON p.id = cm.student_id
+         WHERE c.teacher_id = $1
+         GROUP BY c.id
+         ORDER BY c.created_at DESC`,
+        [user.id]
+      );
+
+      return res.json({ classes: rows });
+    }
+
     const { data, error } = await supabase
       .from('classes')
       .select('*, class_members(student_id, status, profiles(id, name, email))')
@@ -4384,11 +4456,40 @@ app.post('/api/classes/join-by-code', async (req, res) => {
     const inviteCode = normalizeClassInviteCode(req.body?.code);
     if (!inviteCode) return res.status(400).json({ error: 'Please enter a valid course code.' });
 
-    const { data: classRow, error: classError } = await supabase
-      .from('classes')
-      .select('id, name, invite_code, description, semester, is_published, archived, teacher_id')
-      .ilike('invite_code', inviteCode)
-      .maybeSingle();
+    let classRow;
+    let classError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `SELECT
+             id,
+             name,
+             invite_code,
+             description,
+             semester,
+             is_published,
+             archived,
+             teacher_id
+           FROM public.classes
+           WHERE invite_code ILIKE $1
+           LIMIT 1`,
+          [inviteCode]
+        );
+        classRow = rows[0] || null;
+      } catch (error) {
+        classError = error;
+      }
+    } else {
+      const result = await supabase
+        .from('classes')
+        .select('id, name, invite_code, description, semester, is_published, archived, teacher_id')
+        .ilike('invite_code', inviteCode)
+        .maybeSingle();
+
+      classRow = result.data;
+      classError = result.error;
+    }
 
     if (classError) return res.status(400).json({ error: classError.message });
     if (!classRow) {
@@ -4408,17 +4509,40 @@ app.post('/api/classes/join-by-code', async (req, res) => {
       return res.status(409).json({ error: 'This course is currently unavailable. Please contact your instructor.' });
     }
 
-    const { data: membership, error: membershipError } = await writeWithRequestScopedFallback(
-      req,
-      (client) => client
-        .from('class_members')
-        .upsert(
-          { class_id: classRow.id, student_id: user.id, status: 'approved' },
-          { onConflict: 'class_id,student_id' }
-        )
-        .select('class_id, student_id, status')
-        .single()
-    );
+    let membership;
+    let membershipError = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const { rows } = await db.query(
+          `INSERT INTO public.class_members
+            (class_id, student_id, status)
+           VALUES ($1, $2, 'approved')
+           ON CONFLICT (class_id, student_id)
+           DO UPDATE SET status = EXCLUDED.status
+           RETURNING class_id, student_id, status`,
+          [classRow.id, user.id]
+        );
+        membership = rows[0];
+      } catch (error) {
+        membershipError = error;
+      }
+    } else {
+      const result = await writeWithRequestScopedFallback(
+        req,
+        (client) => client
+          .from('class_members')
+          .upsert(
+            { class_id: classRow.id, student_id: user.id, status: 'approved' },
+            { onConflict: 'class_id,student_id' }
+          )
+          .select('class_id, student_id, status')
+          .single()
+      );
+
+      membership = result.data;
+      membershipError = result.error;
+    }
     if (membershipError) return res.status(400).json({ error: membershipError.message });
 
     clearRateBucketEntry(joinCodeRateLimiter, studentKey);
@@ -4460,6 +4584,41 @@ app.patch('/api/classes/:classId', async (req, res) => {
       return res.status(400).json({ error: 'No supported course changes were provided.' });
     }
 
+    if (USE_POSTGRES_APP_DB) {
+      const allowedColumns = new Set([
+        'name',
+        'description',
+        'semester',
+        'is_published',
+        'archived',
+      ]);
+
+      const entries = Object.entries(patch)
+        .filter(([key]) => allowedColumns.has(key));
+
+      const setSql = entries
+        .map(([key], index) => `${key} = $${index + 1}`)
+        .join(', ');
+
+      const values = entries.map(([, value]) => value);
+      values.push(req.params.classId, user.id);
+
+      const { rows } = await db.query(
+        `UPDATE public.classes
+            SET ${setSql}
+          WHERE id = $${entries.length + 1}
+            AND teacher_id = $${entries.length + 2}
+        RETURNING *`,
+        values
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+
+      return res.json({ class: rows[0] });
+    }
+
     const { data, error } = await writeWithRequestScopedFallback(
       req,
       (client) => client
@@ -4494,13 +4653,34 @@ app.post('/api/classes/:classId/members', async (req, res) => {
     if (!studentProfile || studentProfile.role !== 'student') {
       return res.status(404).json({ error: 'No student found with that email' });
     }
-    const { error } = await writeWithRequestScopedFallback(req, (client) => client
-      .from('class_members')
-      .upsert(
-        { class_id: req.params.classId, student_id: authUser.id, status: 'approved' },
-        { onConflict: 'class_id,student_id' }
-      ));
-    if (error) return res.status(400).json({ error: error.message });
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `INSERT INTO public.class_members
+          (class_id, student_id, status)
+         VALUES ($1, $2, 'approved')
+         ON CONFLICT (class_id, student_id)
+         DO UPDATE SET status = EXCLUDED.status`,
+        [req.params.classId, authUser.id]
+      );
+    } else {
+      const { error } = await writeWithRequestScopedFallback(
+        req,
+        (client) => client
+          .from('class_members')
+          .upsert(
+            {
+              class_id: req.params.classId,
+              student_id: authUser.id,
+              status: 'approved',
+            },
+            { onConflict: 'class_id,student_id' }
+          )
+      );
+
+      if (error) {
+        return res.status(400).json({ error: error.message });
+      }
+    }
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -4531,12 +4711,37 @@ app.post('/api/classes/:classId/invitations', async (req, res) => {
       return res.status(403).json({ error: 'You can only invite students to your own courses.' });
     }
 
-    const { data: course, error: courseError } = await readClient
-      .from('classes')
-      .select('id, name, invite_code, semester, is_published, archived')
-      .eq('id', req.params.classId)
-      .single();
-    if (courseError) throw courseError;
+    let course;
+
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT
+           id,
+           name,
+           invite_code,
+           semester,
+           is_published,
+           archived
+         FROM public.classes
+         WHERE id = $1
+         LIMIT 1`,
+        [req.params.classId]
+      );
+
+      course = rows[0];
+      if (!course) {
+        return res.status(404).json({ error: 'Course not found.' });
+      }
+    } else {
+      const { data, error: courseError } = await readClient
+        .from('classes')
+        .select('id, name, invite_code, semester, is_published, archived')
+        .eq('id', req.params.classId)
+        .single();
+
+      if (courseError) throw courseError;
+      course = data;
+    }
     if (course.archived === true) {
       return res.status(400).json({ error: 'Restore this course before inviting students.' });
     }
