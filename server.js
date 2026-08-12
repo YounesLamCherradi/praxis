@@ -3326,7 +3326,7 @@ function pruneAiJobs() {
   }
 }
 
-async function executeAiJob({ jobId, targetPath, payload, cookie, localPort }) {
+async function executeAiJob({ jobId, targetPath, payload, cookie, baseUrl }) {
   const controller = new AbortController();
   const timeoutId = setTimeout(
     () => controller.abort(),
@@ -3334,7 +3334,7 @@ async function executeAiJob({ jobId, targetPath, payload, cookie, localPort }) {
   );
 
   try {
-    const response = await fetch(`http://127.0.0.1:${localPort}${targetPath}`, {
+    const response = await fetch(`${baseUrl}${targetPath}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3393,7 +3393,7 @@ app.post("/api/ai-jobs", async (req, res) => {
     targetPath,
     payload: req.body?.payload || {},
     cookie: String(req.headers.cookie || ""),
-    localPort: req.socket.localPort,
+    baseUrl: getRequestBaseUrl(req),
   });
 
   return res.status(202).json({ jobId, status: "processing" });
