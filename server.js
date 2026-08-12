@@ -7292,14 +7292,92 @@ app.patch('/api/submissions/:id', async (req, res) => {
     const responseSelection = isStudentOwner
       ? 'id, assignment_id, student_id, status, version, updated_at, submitted_at'
       : '*, profiles(id, name)';
-    const { data, error } = await submissionWriteWithFallback(req, (client) => client
-      .from('submissions')
-      .update(payload)
-      .eq('id', req.params.id)
-      .eq('version', Number(submission.version || 1))
-      .select(responseSelection)
-      .maybeSingle());
-    if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
+
+    let data;
+    let error = null;
+
+    if (USE_POSTGRES_APP_DB) {
+      try {
+        const entries =
+          buildPostgresStudentSubmissionEntries(payload);
+
+        if (!entries.length) {
+          return res.status(400).json({
+            error: 'No supported submission changes were provided.',
+          });
+        }
+
+        const setSql = entries
+          .map(([key], index) => `${key} = $${index + 1}`)
+          .join(', ');
+
+        const values = entries.map(([, value]) => value);
+
+        values.push(
+          req.params.id,
+          Number(submission.version || 1)
+        );
+
+        const idParam = values.length - 1;
+        const versionParam = values.length;
+
+        if (isStudentOwner) {
+          const { rows } = await db.query(
+            `UPDATE public.submissions
+                SET ${setSql}
+              WHERE id = $${idParam}
+                AND version = $${versionParam}
+            RETURNING
+              id,
+              assignment_id,
+              student_id,
+              status,
+              version,
+              updated_at,
+              submitted_at`,
+            values
+          );
+
+          data = rows[0] || null;
+        } else {
+          const { rows } = await db.query(
+            `UPDATE public.submissions
+                SET ${setSql}
+              WHERE id = $${idParam}
+                AND version = $${versionParam}
+            RETURNING id`,
+            values
+          );
+
+          data = rows[0]
+            ? await getPostgresSubmissionWithProfile(rows[0].id)
+            : null;
+        }
+      } catch (writeError) {
+        error = writeError;
+      }
+    } else {
+      const result = await submissionWriteWithFallback(
+        req,
+        (client) => client
+          .from('submissions')
+          .update(payload)
+          .eq('id', req.params.id)
+          .eq('version', Number(submission.version || 1))
+          .select(responseSelection)
+          .maybeSingle()
+      );
+
+      data = result.data;
+      error = result.error;
+    }
+
+    if (error) {
+      return res
+        .status(isRlsDenial(error) ? 403 : 400)
+        .json({ error: error.message });
+    }
+
     if (!data) {
       return res.status(409).json({
         error: 'Submission was modified elsewhere. Refresh before saving again.',
