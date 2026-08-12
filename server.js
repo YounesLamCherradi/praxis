@@ -2,6 +2,7 @@ const Sentry = require('./instrument');
 require('dotenv').config();
 const path = require('node:path');
 const express = require('express');
+const db = require('./db');
 const compression = require('compression');
 const crypto = require('node:crypto');
 // SMTP fallback (kept for possible future use):
@@ -122,6 +123,26 @@ app.get("/api/health", (req, res) => {
     environment: process.env.NODE_ENV || "development",
     timestamp: new Date().toISOString(),
   });
+});
+
+
+
+// Local PostgreSQL health check for the cPanel deployment.
+app.get("/api/health/postgres", async (req, res) => {
+  try {
+    await db.query("SELECT 1");
+    return res.status(200).json({
+      success: true,
+      postgres: "connected",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("[POSTGRES HEALTH]", error.message);
+    return res.status(500).json({
+      success: false,
+      postgres: "unavailable",
+    });
+  }
 });
 
 app.get('/api/setup/status', async (req, res) => {
