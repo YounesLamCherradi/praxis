@@ -619,11 +619,29 @@ function sanitizeProfileForClient(profile) {
 
 // Helper to get user profile including role
 async function getProfile(userId) {
+  if (USE_POSTGRES_APP_DB) {
+    try {
+      const { rows } = await db.query(
+        `SELECT *
+           FROM public.profiles
+          WHERE id = $1
+          LIMIT 1`,
+        [userId]
+      );
+
+      return rows[0] || null;
+    } catch (error) {
+      console.error('[POSTGRES PROFILE]', safeLogError(error));
+      return null;
+    }
+  }
+
   const { data, error } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', userId)
     .single();
+
   if (error) return null;
   return data;
 }
@@ -961,7 +979,19 @@ async function maybeCleanupOtpRecords() {
   if (now - otpCleanupLastRanAt < OTP_CLEANUP_INTERVAL_MS) return;
   otpCleanupLastRanAt = now;
 
-  const cutoffIso = new Date(now - OTP_RETENTION_HOURS * 60 * 60 * 1000).toISOString();
+  const cutoffIso = new Date(
+    now - OTP_RETENTION_HOURS * 60 * 60 * 1000
+  ).toISOString();
+
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `DELETE FROM public.auth_email_otps
+        WHERE created_at < $1`,
+      [cutoffIso]
+    );
+    return;
+  }
+
   const { error } = await supabase
     .from('auth_email_otps')
     .delete()
@@ -980,10 +1010,28 @@ function otpHash(email, purpose, code) {
 }
 
 function generateOtpCode() {
-  return String(crypto.randomInt(0, 1000000)).padStart(OTP_CODE_LENGTH, '0');
+  return String(crypto.randomInt(0, 1000000)).padStart(
+    OTP_CODE_LENGTH,
+    '0'
+  );
 }
 
 async function getLatestOtp(email, purpose) {
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `SELECT *
+         FROM public.auth_email_otps
+        WHERE email = $1
+          AND purpose = $2
+          AND consumed_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 1`,
+      [normalizeEmail(email), purpose]
+    );
+
+    return rows[0] || null;
+  }
+
   const { data, error } = await supabase
     .from('auth_email_otps')
     .select('*')
@@ -1001,8 +1049,46 @@ async function getLatestOtp(email, purpose) {
 async function createOtp(email, purpose) {
   const code = generateOtpCode();
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + OTP_TTL_MINUTES * 60 * 1000).toISOString();
-  const resendAvailableAt = new Date(now.getTime() + OTP_RESEND_SECONDS * 1000).toISOString();
+
+  const expiresAt = new Date(
+    now.getTime() + OTP_TTL_MINUTES * 60 * 1000
+  ).toISOString();
+
+  const resendAvailableAt = new Date(
+    now.getTime() + OTP_RESEND_SECONDS * 1000
+  ).toISOString();
+
+  if (USE_POSTGRES_APP_DB) {
+    const { rows } = await db.query(
+      `INSERT INTO public.auth_email_otps
+        (
+          email,
+          purpose,
+          code_hash,
+          attempts,
+          max_attempts,
+          expires_at,
+          resend_available_at
+        )
+       VALUES ($1, $2, $3, 0, $4, $5, $6)
+       RETURNING id, resend_available_at, expires_at`,
+      [
+        normalizeEmail(email),
+        purpose,
+        otpHash(email, purpose, code),
+        OTP_MAX_ATTEMPTS,
+        expiresAt,
+        resendAvailableAt,
+      ]
+    );
+
+    return {
+      code,
+      otpId: rows[0].id,
+      expiresAt,
+      resendAvailableAt,
+    };
+  }
 
   const { data, error } = await supabase
     .from('auth_email_otps')
@@ -1029,6 +1115,17 @@ async function createOtp(email, purpose) {
 }
 
 async function consumeOtpRecord(id) {
+  if (USE_POSTGRES_APP_DB) {
+    await db.query(
+      `UPDATE public.auth_email_otps
+          SET consumed_at = NOW()
+        WHERE id = $1
+          AND consumed_at IS NULL`,
+      [id]
+    );
+    return;
+  }
+
   await supabase
     .from('auth_email_otps')
     .update({ consumed_at: new Date().toISOString() })
@@ -1038,39 +1135,81 @@ async function consumeOtpRecord(id) {
 
 async function verifyOtpCode(email, purpose, code) {
   const latestOtp = await getLatestOtp(email, purpose);
+
   if (!latestOtp) {
-    return { ok: false, error: 'Invalid or expired verification code.' };
+    return {
+      ok: false,
+      error: 'Invalid or expired verification code.',
+    };
   }
 
   const now = new Date();
   const expiresAt = new Date(latestOtp.expires_at);
-  if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() < now.getTime()) {
+
+  if (
+    Number.isNaN(expiresAt.getTime()) ||
+    expiresAt.getTime() < now.getTime()
+  ) {
     await consumeOtpRecord(latestOtp.id);
-    return { ok: false, error: 'Invalid or expired verification code.' };
+
+    return {
+      ok: false,
+      error: 'Invalid or expired verification code.',
+    };
   }
 
   const incomingHash = otpHash(email, purpose, code);
+
   if (incomingHash !== latestOtp.code_hash) {
     const nextAttempts = Number(latestOtp.attempts || 0) + 1;
-    const maxAttempts = Number(latestOtp.max_attempts || OTP_MAX_ATTEMPTS);
-    const payload = { attempts: nextAttempts };
-    if (nextAttempts >= maxAttempts) {
-      payload.consumed_at = new Date().toISOString();
+    const maxAttempts = Number(
+      latestOtp.max_attempts || OTP_MAX_ATTEMPTS
+    );
+
+    if (USE_POSTGRES_APP_DB) {
+      await db.query(
+        `UPDATE public.auth_email_otps
+            SET attempts = $2,
+                consumed_at = CASE
+                  WHEN $3 THEN NOW()
+                  ELSE consumed_at
+                END
+          WHERE id = $1
+            AND consumed_at IS NULL`,
+        [
+          latestOtp.id,
+          nextAttempts,
+          nextAttempts >= maxAttempts,
+        ]
+      );
+    } else {
+      const payload = { attempts: nextAttempts };
+
+      if (nextAttempts >= maxAttempts) {
+        payload.consumed_at = new Date().toISOString();
+      }
+
+      await supabase
+        .from('auth_email_otps')
+        .update(payload)
+        .eq('id', latestOtp.id)
+        .is('consumed_at', null);
     }
 
-    await supabase
-      .from('auth_email_otps')
-      .update(payload)
-      .eq('id', latestOtp.id)
-      .is('consumed_at', null);
-
     if (nextAttempts >= maxAttempts) {
-      return { ok: false, error: 'Maximum attempts reached. Please request a new code.' };
+      return {
+        ok: false,
+        error:
+          'Maximum attempts reached. Please request a new code.',
+      };
     }
 
     return {
       ok: false,
-      error: `Invalid verification code. ${Math.max(0, maxAttempts - nextAttempts)} attempts remaining.`,
+      error: `Invalid verification code. ${Math.max(
+        0,
+        maxAttempts - nextAttempts
+      )} attempts remaining.`,
     };
   }
 
@@ -3309,10 +3448,47 @@ async function deleteSignupUser(userId, email) {
   }
 }
 
-async function createSignupProfile(userId, name, role, email = null) {
+async function createSignupProfile(
+  userId,
+  name,
+  role,
+  email = null
+) {
+  if (USE_POSTGRES_APP_DB) {
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO public.profiles
+          (id, name, role, email)
+         VALUES ($1, $2, $3, $4)
+         RETURNING *`,
+        [
+          userId,
+          name,
+          role,
+          normalizeEmail(email),
+        ]
+      );
+
+      return {
+        data: rows[0] || null,
+        error: null,
+      };
+    } catch (error) {
+      return {
+        data: null,
+        error,
+      };
+    }
+  }
+
   return supabase
     .from('profiles')
-    .insert({ id: userId, name, role, email })
+    .insert({
+      id: userId,
+      name,
+      role,
+      email,
+    })
     .select()
     .single();
 }
