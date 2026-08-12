@@ -2675,48 +2675,152 @@ async function processNotificationOutbox() {
 }
 
 async function processUpcomingDeadlineReminders() {
-  if (!canSendNotificationEmails() || deadlineReminderInFlight) return;
+  if (
+    !canSendNotificationEmails() ||
+    deadlineReminderInFlight
+  ) {
+    return;
+  }
+
   deadlineReminderInFlight = true;
+
   try {
     const now = Date.now();
-    const lowerBound = new Date(now + (24 * 60 * 60 * 1000) - DEADLINE_REMINDER_WINDOW_MS).toISOString();
-    const upperBound = new Date(now + 24 * 60 * 60 * 1000).toISOString();
-    const { data: assignments, error } = await supabase
-      .from('assignments')
-      .select('id, class_id, title, deadline, status')
-      .eq('status', 'published')
-      .gte('deadline', lowerBound)
-      .lte('deadline', upperBound);
-    if (error) throw error;
-    if (!assignments?.length) return;
 
-    const classIds = Array.from(new Set(assignments.map((assignment) => assignment.class_id).filter(Boolean)));
-    const { data: classRows, error: classError } = await supabase
-      .from('classes')
-      .select('id, name')
-      .in('id', classIds);
-    if (classError) throw classError;
-    const classNameMap = new Map((classRows || []).map((row) => [row.id, row.name]));
+    const lowerBound = new Date(
+      now +
+      (24 * 60 * 60 * 1000) -
+      DEADLINE_REMINDER_WINDOW_MS
+    ).toISOString();
+
+    const upperBound = new Date(
+      now + (24 * 60 * 60 * 1000)
+    ).toISOString();
+
+    let assignments = [];
+
+    if (USE_POSTGRES_APP_DB) {
+      const { rows } = await db.query(
+        `SELECT
+           a.id,
+           a.class_id,
+           a.title,
+           a.deadline,
+           a.status,
+           c.name AS class_name
+         FROM public.assignments a
+         LEFT JOIN public.classes c
+           ON c.id = a.class_id
+         WHERE a.status = 'published'
+           AND a.deadline >= $1::timestamptz
+           AND a.deadline <= $2::timestamptz`,
+        [
+          lowerBound,
+          upperBound,
+        ]
+      );
+
+      assignments = rows;
+    } else {
+      const {
+        data,
+        error,
+      } = await supabase
+        .from('assignments')
+        .select(
+          'id, class_id, title, deadline, status'
+        )
+        .eq('status', 'published')
+        .gte('deadline', lowerBound)
+        .lte('deadline', upperBound);
+
+      if (error) throw error;
+
+      assignments = data || [];
+
+      if (assignments.length) {
+        const classIds = Array.from(
+          new Set(
+            assignments
+              .map(
+                (assignment) =>
+                  assignment.class_id
+              )
+              .filter(Boolean)
+          )
+        );
+
+        const {
+          data: classRows,
+          error: classError,
+        } = await supabase
+          .from('classes')
+          .select('id, name')
+          .in('id', classIds);
+
+        if (classError) {
+          throw classError;
+        }
+
+        const classNameMap = new Map(
+          (classRows || []).map(
+            (row) => [
+              row.id,
+              row.name,
+            ]
+          )
+        );
+
+        assignments = assignments.map(
+          (assignment) => ({
+            ...assignment,
+            class_name:
+              classNameMap.get(
+                assignment.class_id
+              ) || null,
+          })
+        );
+      }
+    }
+
+    if (!assignments.length) {
+      return;
+    }
 
     for (const assignment of assignments) {
       await enqueueDomainEvent({
-        eventType: 'assignment_deadline_reminder',
+        eventType:
+          'assignment_deadline_reminder',
         aggregateType: 'assignment',
         aggregateId: assignment.id,
-        idempotencyKey: `assignment-deadline-reminder:${assignment.id}:${assignment.deadline}`,
+        idempotencyKey:
+          `assignment-deadline-reminder:` +
+          `${assignment.id}:` +
+          `${assignment.deadline}`,
         payload: {
           assignmentId: assignment.id,
           classId: assignment.class_id,
           deadline: assignment.deadline,
-          className: classNameMap.get(assignment.class_id) || 'your class',
+          className:
+            assignment.class_name ||
+            'your class',
         },
       });
     }
-    processNotificationOutbox().catch((error) => {
-      console.error('Deadline reminder outbox processing failed:', error);
-    });
+
+    processNotificationOutbox().catch(
+      (error) => {
+        console.error(
+          'Deadline reminder outbox processing failed:',
+          error
+        );
+      }
+    );
   } catch (error) {
-    console.error('Deadline reminder processing failed:', error);
+    console.error(
+      'Deadline reminder processing failed:',
+      error
+    );
   } finally {
     deadlineReminderInFlight = false;
   }
