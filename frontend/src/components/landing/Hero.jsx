@@ -79,13 +79,13 @@ export default function Hero() {
                 <span className="text-slate-900">s</span>
               </span>
 
-              <span className="hidden rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-widest text-blue-700 sm:inline-flex">
+              <span className="hidden rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 sm:inline-flex">
                 AUI Writing Platform
               </span>
             </div>
 
             <div className="space-y-4">
-              <h1 className="font-serif text-4xl font-black leading-[0.98] tracking-tight text-slate-950 sm:text-5xl lg:text-[4.25rem]">
+              <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight text-slate-950 sm:text-5xl lg:text-[4.25rem]">
                 Responsible AI writing support for the{" "}
                 <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 bg-clip-text text-transparent">
                   academic process

@@ -93,12 +93,12 @@ export default function PlatformDemo() {
 
       <div className="relative mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-10">
         <div className="praxis-slide mx-auto mb-7 max-w-4xl text-center">
-          <span className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 font-mono text-[10px] font-bold uppercase tracking-widest text-blue-700">
+          <span className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700">
             <ShieldCheck className="h-3.5 w-3.5" />
-            Platform Experience
+            Platform experience
           </span>
 
-          <h2 className="mt-3 font-serif text-3xl font-black tracking-tight text-slate-950 sm:text-4xl">
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
             Writing, review, and responsible AI in one workspace.
           </h2>
 
@@ -113,16 +113,16 @@ export default function PlatformDemo() {
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
             <div className="flex flex-col gap-3 border-b border-slate-100 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                  Role-Based Platform Features
+                <p className="text-xs font-semibold text-slate-500">
+                  Role-based platform features
                 </p>
 
-                <h3 className="mt-1 font-serif text-xl font-black text-slate-950">
+                <h3 className="mt-1 text-xl font-bold text-slate-950">
                   Built for instructors and students
                 </h3>
               </div>
 
-              <div className="flex items-center gap-2 font-mono text-[9px] font-bold uppercase">
+              <div className="flex items-center gap-2 text-xs font-semibold">
                 <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-blue-700">
                   <GraduationCap className="h-3.5 w-3.5" />
                   Instructor
