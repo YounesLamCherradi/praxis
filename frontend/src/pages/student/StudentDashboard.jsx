@@ -9,7 +9,6 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BadgeCheck,
-  Bell,
   BookOpen,
   Bug,
   CheckSquare,
@@ -304,7 +303,6 @@ export default function StudentDashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const handledDeepLinkRef = useRef("");
   const restoringDeepLinkRef = useRef(false);
-  const hasShownRemainingToastRef = useRef(false);
 
   const {
     signOut,
@@ -334,8 +332,6 @@ export default function StudentDashboard() {
   const [enrollError, setEnrollError] = useState("");
   const [enrollSuccess, setEnrollSuccess] = useState("");
   const [isJoiningCourse, setIsJoiningCourse] = useState(false);
-  const [showRemainingAssignmentsToast, setShowRemainingAssignmentsToast] =
-    useState(false);
   const hasJoinedCourses = classes.length > 0;
 
   useEffect(() => {
@@ -567,106 +563,6 @@ export default function StudentDashboard() {
   );
 
   const totalAssignmentsCount = assignments.length;
-
-  const draftCount = useMemo(
-    () =>
-      currentStudentSubmissions.filter((submission) => {
-        const status = normalizeStudentDashboardStatus(submission.status);
-
-        return (
-          status === "draft" ||
-          status === "reopened" ||
-          status === "missing" ||
-          (status === "late" &&
-            !hasDashboardSubmissionEvidence(submission))
-        );
-      }).length,
-    [currentStudentSubmissions]
-  );
-
-  const pendingReviewCount = useMemo(
-    () =>
-      currentStudentSubmissions.filter((submission) => {
-        const status = normalizeStudentDashboardStatus(submission.status);
-
-        return (
-          (status === "submitted" || status === "late") &&
-          hasDashboardSubmissionEvidence(submission)
-        );
-      }).length,
-    [currentStudentSubmissions]
-  );
-
-  const submittedCount = useMemo(
-    () =>
-      currentStudentSubmissions.filter((submission) => {
-        const status = normalizeStudentDashboardStatus(submission.status);
-
-        return (
-          status === "submitted" ||
-          status === "graded" ||
-          (status === "late" && hasDashboardSubmissionEvidence(submission))
-        );
-      }).length,
-    [currentStudentSubmissions]
-  );
-
-  const visibleAssignments = useMemo(
-    () =>
-      assignments.filter(
-        (assignment) =>
-          currentClassId === "__all__" ||
-          String(assignment?.classId) === String(currentClassId)
-      ),
-    [assignments, currentClassId]
-  );
-
-  const remainingAssignmentsCount = useMemo(() => {
-    const submissionByAssignment = new Map(
-      currentStudentSubmissions.map((submission) => [
-        String(submission.assignmentId),
-        submission,
-      ])
-    );
-
-    return visibleAssignments.filter((assignment) => {
-      const submission = submissionByAssignment.get(String(assignment.id));
-      if (!submission) return true;
-
-      const status = normalizeStudentDashboardStatus(submission.status);
-      if (status === "graded" || status === "submitted") return false;
-
-      return !(
-        status === "late" && hasDashboardSubmissionEvidence(submission)
-      );
-    }).length;
-  }, [currentStudentSubmissions, visibleAssignments]);
-
-  useEffect(() => {
-    if (
-      !hasJoinedCourses ||
-      workspaceSyncState.status === "loading" ||
-      hasShownRemainingToastRef.current
-    ) {
-      return;
-    }
-
-    hasShownRemainingToastRef.current = true;
-
-    const showTimeoutId = window.setTimeout(
-      () => setShowRemainingAssignmentsToast(true),
-      0
-    );
-    const hideTimeoutId = window.setTimeout(
-      () => setShowRemainingAssignmentsToast(false),
-      5000
-    );
-
-    return () => {
-      window.clearTimeout(showTimeoutId);
-      window.clearTimeout(hideTimeoutId);
-    };
-  }, [hasJoinedCourses, workspaceSyncState.status]);
 
   const studentNotifications = useMemo(() => {
     const currentSubmissionByAssignment =
@@ -1327,6 +1223,7 @@ export default function StudentDashboard() {
       try {
         const joined = await joinCourseByCode(enteredCode);
         await queryClient.invalidateQueries({ queryKey: queryKeys.studentCourses });
+        await queryClient.invalidateQueries({ queryKey: queryKeys.studentWorkspace });
         matchedCourse = localMatchedCourse
           ? {
               ...joined.class,
@@ -1610,6 +1507,11 @@ export default function StudentDashboard() {
                 </span>
               </button>
 
+              <div className="relative ml-5 space-y-1 border-l border-blue-200/80 pb-1 pl-3 pt-2">
+                <p className="mb-1 px-2 text-[9px] font-semibold uppercase tracking-wider text-slate-400">
+                  Joined courses
+                </p>
+
               {classes.map((course) => {
                 const classCount = assignments.filter(
                   (assignment) =>
@@ -1626,15 +1528,15 @@ export default function StudentDashboard() {
                     key={course.id}
                     type="button"
                     onClick={() => navigateToCourseWorkspace(course.id)}
-                    className={`group flex w-full cursor-pointer items-center justify-between rounded-xl px-3.5 py-3 text-left text-xs font-bold transition-all ${
+                    className={`group relative flex w-full cursor-pointer items-center justify-between rounded-lg px-2.5 py-2.5 text-left text-[11px] font-semibold transition-all before:absolute before:-left-3 before:top-1/2 before:h-px before:w-3 before:bg-blue-200/80 ${
                       isSelected
-                        ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
-                        : "text-slate-600 hover:bg-white hover:text-slate-900"
+                        ? "bg-blue-50 text-blue-700 ring-1 ring-blue-200"
+                        : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
                     }`}
                   >
-                    <div className="flex items-center gap-2.5 truncate">
+                    <div className="flex min-w-0 items-center gap-2 truncate">
                       <BookOpen
-                        className={`w-4 h-4 stroke-[1.8] shrink-0 ${
+                        className={`h-3.5 w-3.5 shrink-0 stroke-[1.8] ${
                           isSelected
                             ? "text-blue-600"
                             : "text-slate-400"
@@ -1658,6 +1560,7 @@ export default function StudentDashboard() {
                   </button>
                 );
               })}
+              </div>
             </div>
 
             <div className="space-y-2.5 border-t border-blue-100 pt-5">
@@ -1685,7 +1588,13 @@ export default function StudentDashboard() {
                 </span>
               </div>
 
-              <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+              <div
+                className={
+                  studentNotifications.length === 0
+                    ? "overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm"
+                    : "space-y-1.5"
+                }
+              >
                 {studentNotifications.length === 0 ? (
                   <div className="flex items-center gap-3 px-3.5 py-3.5">
                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
@@ -1701,24 +1610,7 @@ export default function StudentDashboard() {
                     </div>
                   </div>
                 ) : (
-                  <>
-                <div className="flex items-center gap-2.5 border-b border-slate-100 px-3.5 py-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                    <Bell className="h-4 w-4" />
-                  </div>
-
-                  <div className="min-w-0">
-                    <p className="text-[10px] font-bold text-slate-700">
-                      Assignment updates
-                    </p>
-
-                    <p className="truncate text-[9px] text-slate-400">
-                      What’s new in your courses
-                    </p>
-                  </div>
-                </div>
-
-                  <div className="space-y-1.5 p-2">
+                  <div className="space-y-1.5">
                     {studentNotifications.map(
                       (notification) => {
                         const isReopened =
@@ -1800,7 +1692,6 @@ export default function StudentDashboard() {
                       }
                     )}
                   </div>
-                  </>
                 )}
               </div>
             </div>
@@ -1966,48 +1857,6 @@ export default function StudentDashboard() {
                 : "max-w-7xl"
             }`}
           >
-            {showRemainingAssignmentsToast && !selectedAssignmentId && (
-              <div
-                role="status"
-                aria-live="polite"
-                className={`fixed bottom-5 right-5 z-50 flex max-w-sm items-center gap-3 rounded-2xl border bg-white px-4 py-3 shadow-xl animate-fade-in-up ${
-                  remainingAssignmentsCount === 0
-                    ? "border-emerald-200 shadow-emerald-950/10"
-                    : "border-blue-200 shadow-blue-950/10"
-                }`}
-              >
-                <div
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-white ${
-                    remainingAssignmentsCount === 0
-                      ? "bg-emerald-600"
-                      : "bg-blue-600"
-                  }`}
-                >
-                  {remainingAssignmentsCount === 0 ? (
-                    <BadgeCheck className="h-4 w-4" />
-                  ) : (
-                    <BookOpen className="h-4 w-4" />
-                  )}
-                </div>
-                <div>
-                  <p className="text-sm font-bold text-slate-900">
-                    {remainingAssignmentsCount === 0
-                      ? "You’re all caught up"
-                      : `You have ${remainingAssignmentsCount} ${
-                          remainingAssignmentsCount === 1
-                            ? "assignment"
-                            : "assignments"
-                        } left`}
-                  </p>
-                  <p className="mt-0.5 text-[11px] text-slate-500">
-                    {remainingAssignmentsCount === 0
-                      ? "There is no unfinished work right now."
-                      : "Choose an assignment below to keep working."}
-                  </p>
-                </div>
-              </div>
-            )}
-
             <Suspense
               fallback={
                 <div
@@ -2022,97 +1871,8 @@ export default function StudentDashboard() {
                 <ActiveAssignmentWorkflow />
               ) : (
                 hasJoinedCourses ? (
-                <div className="space-y-6">
-                {currentClassId === "__all__" ? (
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3 animate-fade-in-up [animation-delay:100ms]">
-                    <StudentMetricCard
-                      cardType="draft"
-                      icon={FileText}
-                      label="Active Drafts"
-                      value={`${draftCount} Active ${
-                        draftCount === 1 ? "assignment" : "assignments"
-                      }`}
-                      description="Assignments ready for you to continue writing."
-                      tone="blue"
-                    />
-                    <StudentMetricCard
-                      cardType="pending"
-                      icon={Clock}
-                      label="Awaiting Review"
-                      value={`${pendingReviewCount} ${
-                        pendingReviewCount === 1 ? "assignment" : "assignments"
-                      }`}
-                      description="Submitted work waiting for instructor review."
-                      tone="indigo"
-                    />
-                    <StudentMetricCard
-                      cardType="verified"
-                      icon={ShieldCheck}
-                      label="Submitted Work"
-                      value={`${submittedCount} ${
-                        submittedCount === 1 ? "assignment" : "assignments"
-                      }`}
-                      description="Assignments you have already submitted."
-                      tone="sky"
-                    />
-                  </div>
-                ) : (
-                <div className={`flex items-center gap-4 rounded-2xl border px-5 py-4 shadow-sm animate-fade-in-up [animation-delay:100ms] ${
-                  remainingAssignmentsCount === 0
-                    ? "border-emerald-200 bg-gradient-to-r from-emerald-50 to-white"
-                    : "border-blue-200 bg-gradient-to-r from-blue-50 to-white"
-                }`}>
-                  <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${
-                    remainingAssignmentsCount === 0
-                      ? "border-emerald-200 bg-white text-emerald-600"
-                      : "border-blue-200 bg-white text-blue-600"
-                  }`}>
-                    {remainingAssignmentsCount === 0 ? (
-                      <BadgeCheck className="h-5 w-5" />
-                    ) : (
-                      <BookOpen className="h-5 w-5" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-bold text-slate-900">
-                      {remainingAssignmentsCount === 0
-                        ? "You’re all caught up"
-                        : `${remainingAssignmentsCount} ${
-                            remainingAssignmentsCount === 1
-                              ? "assignment"
-                              : "assignments"
-                          } left`}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {remainingAssignmentsCount === 0
-                        ? "You have completed all currently available assignments."
-                        : "Select an unfinished assignment below to continue your work."}
-                    </p>
-                  </div>
-                  <span className={`hidden shrink-0 rounded-full border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${
-                    remainingAssignmentsCount === 0
-                      ? "border-emerald-200 bg-emerald-100 text-emerald-700"
-                      : "border-blue-200 bg-blue-100 text-blue-700"
-                  }`}>
-                    {remainingAssignmentsCount === 0 ? "Complete" : "In progress"}
-                  </span>
-                </div>
-                )}
-
-                <div className="space-y-2 animate-fade-in-up [animation-delay:150ms]">
-                  <div className="space-y-1">
-                    <h2 className="font-serif text-2xl font-black text-slate-900">
-                      Your assignments
-                    </h2>
-
-                    <p className="text-xs text-slate-400 font-medium">
-                      Select an active assignment to start drafting,
-                      receive AI guidance, and submit your work.
-                    </p>
-                  </div>
-
-                    <AssignmentTray />
-                  </div>
+                <div className="space-y-4 animate-fade-in-up [animation-delay:100ms]">
+                  <AssignmentTray />
                 </div>
                 ) : (
                   <section className="flex min-h-[58vh] items-center justify-center animate-fade-in-up">

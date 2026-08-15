@@ -1395,7 +1395,7 @@ export default function AdminDashboard() {
   } = useAuth();
 
   const [activeTab, setActiveTab] =
-    useState("overview");
+    useState("instructors");
 
   const [isSidebarOpen, setIsSidebarOpen] =
     useState(false);
@@ -1404,6 +1404,11 @@ export default function AdminDashboard() {
     useState(() =>
       getPraxisData()
     );
+
+  const [remoteTeachers, setRemoteTeachers] = useState([]);
+  const [remoteClassDetails, setRemoteClassDetails] = useState({});
+  const [hasLoadedRemoteAdmin, setHasLoadedRemoteAdmin] = useState(false);
+  const [isLoadingAdminData, setIsLoadingAdminData] = useState(true);
 
   const [
     selectedTeacherKey,
@@ -1505,30 +1510,111 @@ export default function AdminDashboard() {
     setBugFileInputKey,
   ] = useState(0);
 
-  const classes =
-    safeArray(data.classes);
+  const remoteClasses = useMemo(
+    () => remoteTeachers.flatMap((teacher) =>
+      safeArray(teacher.classes).map((course) => ({
+        ...course,
+        teacherId: course.teacherId || course.teacher_id || teacher.id,
+        teacher_id: course.teacher_id || course.teacherId || teacher.id,
+        teacherName: teacher.name,
+        teacherEmail: teacher.email || "",
+      }))
+    ),
+    [remoteTeachers]
+  );
 
-  const enrollments =
-    safeArray(data.enrollments);
+  const remoteDetailValues = useMemo(
+    () => Object.values(remoteClassDetails),
+    [remoteClassDetails]
+  );
 
-  const assignments =
-    safeArray(data.assignments);
+  const remoteAssignments = useMemo(
+    () => remoteDetailValues.flatMap((detail) => safeArray(detail.assignments)),
+    [remoteDetailValues]
+  );
 
-  const submissions =
-    safeArray(data.submissions);
+  const remoteSubmissions = useMemo(
+    () => remoteDetailValues.flatMap((detail) => safeArray(detail.submissions)),
+    [remoteDetailValues]
+  );
 
-  const storedUsers =
-    safeArray(data.users);
+  const remoteEnrollments = useMemo(
+    () => remoteDetailValues.flatMap((detail) =>
+      safeArray(detail.members).map((student) => ({
+        id: `${detail.classId}:${student.id}`,
+        classId: detail.classId,
+        class_id: detail.classId,
+        studentId: student.id,
+        student_id: student.id,
+        studentName: student.name,
+        studentEmail: student.email || "",
+      }))
+    ),
+    [remoteDetailValues]
+  );
+
+  const remoteUsers = useMemo(
+    () => [
+      ...remoteTeachers.map((teacher) => ({
+        id: teacher.id,
+        name: teacher.name,
+        email: teacher.email || "",
+        role: "teacher",
+      })),
+      ...remoteDetailValues.flatMap((detail) =>
+        safeArray(detail.members).map((student) => ({
+          id: student.id,
+          name: student.name,
+          email: student.email || "",
+          role: "student",
+        }))
+      ),
+    ],
+    [remoteTeachers, remoteDetailValues]
+  );
+
+  const classes = hasLoadedRemoteAdmin
+    ? remoteClasses
+    : safeArray(data.classes);
+
+  const enrollments = hasLoadedRemoteAdmin
+    ? remoteEnrollments
+    : safeArray(data.enrollments);
+
+  const assignments = hasLoadedRemoteAdmin
+    ? remoteAssignments
+    : safeArray(data.assignments);
+
+  const submissions = hasLoadedRemoteAdmin
+    ? remoteSubmissions
+    : safeArray(data.submissions);
+
+  const storedUsers = hasLoadedRemoteAdmin
+    ? remoteUsers
+    : safeArray(data.users);
 
   const processAnalyses =
     safeArray(
       data.processAnalyses
     );
 
-  const adminStudentFlags = useMemo(
-    () => data.adminStudentFlags || {},
-    [data.adminStudentFlags]
-  );
+  const adminStudentFlags = useMemo(() => {
+    if (!hasLoadedRemoteAdmin) {
+      return data.adminStudentFlags || {};
+    }
+
+    return Object.fromEntries(
+      remoteDetailValues.flatMap((detail) =>
+        safeArray(detail.members).map((student) => [
+          getStudentKey(student),
+          {
+            isTestAccount: Boolean(student.is_test_account),
+            excludeFromResearch: Boolean(student.exclude_from_writing_behavior),
+          },
+        ])
+      )
+    );
+  }, [data.adminStudentFlags, hasLoadedRemoteAdmin, remoteDetailValues]);
 
   const withdrawalLog =
     safeArray(
@@ -1618,22 +1704,45 @@ export default function AdminDashboard() {
     );
 
   const instructors =
-    useMemo(
-      () =>
-        deriveInstructors({
+    useMemo(() => {
+      const derived = deriveInstructors({
           users:
             workspaceUsers,
           classes,
           assignments,
           enrollments,
-        }),
-      [
+        });
+
+      if (!hasLoadedRemoteAdmin) {
+        return derived;
+      }
+
+      const derivedById = new Map(
+        derived.map((instructor) => [String(instructor.id), instructor])
+      );
+
+      return remoteTeachers.map((teacher) => {
+        const current = derivedById.get(String(teacher.id));
+        return {
+          id: teacher.id,
+          key: getTeacherKey(teacher) || String(teacher.id),
+          name: teacher.name || "Instructor",
+          email: teacher.email || "",
+          classes: current?.classes || safeArray(teacher.classes),
+          assignments: current?.assignments || [],
+          students: current?.students || [],
+          assignmentCount: Number(teacher.assignmentCount || 0),
+          studentCount: Number(teacher.studentCount || 0),
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name));
+    }, [
         workspaceUsers,
         classes,
         assignments,
         enrollments,
-      ]
-    );
+        hasLoadedRemoteAdmin,
+        remoteTeachers,
+      ]);
 
   const selectedTeacher =
     useMemo(
@@ -2066,10 +2175,64 @@ export default function AdminDashboard() {
       ]
     );
 
-  function refreshData() {
-    setData(
-      getPraxisData()
-    );
+  async function refreshData() {
+    setData(getPraxisData());
+    setIsLoadingAdminData(true);
+
+    try {
+      const response = await authenticatedFetch("/api/admin/teachers", {
+        credentials: "include",
+      });
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error || "Could not load instructors.");
+      }
+
+      setRemoteTeachers(safeArray(payload?.teachers));
+      setHasLoadedRemoteAdmin(true);
+      setSystemError("");
+    } catch (error) {
+      setSystemError(
+        error?.message || "Could not load instructors from the server."
+      );
+    } finally {
+      setIsLoadingAdminData(false);
+    }
+  }
+
+  async function loadRemoteClassDetail(classId) {
+    if (!classId || remoteClassDetails[String(classId)]) {
+      return;
+    }
+
+    setIsLoadingAdminData(true);
+    try {
+      const response = await authenticatedFetch(
+        `/api/admin/classes/${encodeURIComponent(classId)}/detail`,
+        { credentials: "include" }
+      );
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(payload?.error || "Could not load course details.");
+      }
+
+      setRemoteClassDetails((current) => ({
+        ...current,
+        [String(classId)]: {
+          classId,
+          assignments: safeArray(payload?.assignments),
+          members: safeArray(payload?.members),
+          submissions: safeArray(payload?.submissions),
+        },
+      }));
+      setSystemError("");
+    } catch (error) {
+      setSystemError(error?.message || "Could not load course details.");
+    } finally {
+      setIsLoadingAdminData(false);
+    }
   }
 
   function persistData(
@@ -2155,6 +2318,10 @@ export default function AdminDashboard() {
     setSelectedClassId(
       course.id
     );
+
+    if (hasLoadedRemoteAdmin) {
+      loadRemoteClassDetail(course.id);
+    }
 
     setSelectedAssignmentId(
       null
@@ -2534,7 +2701,7 @@ export default function AdminDashboard() {
     }
   }
 
-  function updateStudentFlags(
+  async function updateStudentFlags(
     student,
     patch
   ) {
@@ -2546,6 +2713,50 @@ export default function AdminDashboard() {
         "This student has no stable identifier."
       );
 
+      return;
+    }
+
+    if (hasLoadedRemoteAdmin) {
+      try {
+        const response = await authenticatedFetch(
+          `/api/admin/students/${encodeURIComponent(student.id)}/flags`,
+          {
+            method: "PATCH",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...(patch.isTestAccount !== undefined
+                ? { isTestAccount: Boolean(patch.isTestAccount) }
+                : {}),
+              ...(patch.excludeFromResearch !== undefined
+                ? { excludeFromWritingBehavior: Boolean(patch.excludeFromResearch) }
+                : {}),
+            }),
+          }
+        );
+        const payload = await response.json();
+        if (!response.ok || payload?.error) {
+          throw new Error(payload?.error || "Could not update student research settings.");
+        }
+
+        setRemoteClassDetails((current) =>
+          Object.fromEntries(Object.entries(current).map(([classId, detail]) => [
+            classId,
+            {
+              ...detail,
+              members: safeArray(detail.members).map((member) =>
+                String(member.id) === String(student.id)
+                  ? { ...member, ...payload.profile }
+                  : member
+              ),
+            },
+          ]))
+        );
+        setSystemMessage("Student research settings updated.");
+        setSystemError("");
+      } catch (error) {
+        setSystemError(error?.message || "Could not update student research settings.");
+      }
       return;
     }
 
@@ -2992,8 +3203,23 @@ export default function AdminDashboard() {
       : "Instructors";
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900 md:flex">
+    <div className="admin-dashboard relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900 md:flex">
       <style>{`
+        .admin-dashboard .font-serif,
+        .admin-dashboard .font-mono {
+          font-family: inherit;
+        }
+
+        .admin-dashboard .uppercase {
+          text-transform: none;
+        }
+
+        .admin-dashboard .tracking-widest,
+        .admin-dashboard .tracking-wider,
+        .admin-dashboard .tracking-wide {
+          letter-spacing: normal;
+        }
+
         .blueprint-grid {
           background-image:
             linear-gradient(
@@ -3044,15 +3270,15 @@ export default function AdminDashboard() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex h-full w-[17rem] shrink-0 flex-col justify-between bg-slate-950 text-slate-200 shadow-2xl transition-transform duration-200 md:relative md:z-20 md:w-68 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex h-full w-64 shrink-0 flex-col justify-between border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-64 md:translate-x-0 ${
           isSidebarOpen
             ? "translate-x-0"
             : "-translate-x-full"
         }`}
       >
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center gap-3 border-b border-slate-800/80 p-6">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-400/20 bg-white shadow-md shadow-blue-500/10">
+          <div className="flex items-center gap-3 border-b border-blue-100/80 px-5 py-5">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
@@ -3062,40 +3288,24 @@ export default function AdminDashboard() {
 
             <div>
               <h1 className="text-xl font-bold leading-none tracking-tight">
-                <span className="text-blue-400">
-                  p
-                </span>
-
-                <span className="text-white">
-                  raxis
-                </span>
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-600">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-600">i</span>
+                <span className="text-slate-900">s</span>
               </h1>
 
-              <p className="mt-1.5 font-mono text-[9px] font-bold uppercase tracking-wider text-blue-300">
-                Admin Dashboard
+              <p className="mt-1.5 text-xs font-medium text-slate-500">
+                Your admin space
               </p>
             </div>
           </div>
 
-          <div className="flex-1 space-y-7 overflow-y-auto p-5">
+          <div className="flex-1 space-y-7 overflow-y-auto p-4">
             <div className="space-y-1.5">
-              <span className="mb-2 block px-3 font-mono text-[9px] font-bold uppercase tracking-widest text-slate-500">
+              <span className="mb-2 block px-2 text-xs font-semibold text-slate-600">
                 Oversight
               </span>
-
-              <AdminNavButton
-                active={
-                  activeTab ===
-                  "overview"
-                }
-                icon={
-                  ClipboardList
-                }
-                label="Overview"
-                onClick={
-                  openOverview
-                }
-              />
 
               <AdminNavButton
                 active={
@@ -3141,15 +3351,15 @@ export default function AdminDashboard() {
               <AdminNavButton
                 active={
                   activeTab ===
-                  "system"
+                  "exports"
                 }
-                icon={Database}
-                label="System"
+                icon={Download}
+                label="Exports"
                 onClick={() => {
                   setIsSidebarOpen(false);
 
                   setActiveTab(
-                    "system"
+                    "exports"
                   );
 
                   resetHierarchy();
@@ -3157,12 +3367,12 @@ export default function AdminDashboard() {
               />
             </div>
 
-            <div className="space-y-2 border-t border-slate-800/80 pt-5">
-              <span className="block px-3 font-mono text-[9px] font-bold uppercase tracking-widest text-slate-500">
+            <div className="space-y-2 border-t border-slate-200 pt-5">
+              <span className="block px-2 text-xs font-semibold text-slate-600">
                 Research status
               </span>
 
-              <div className="space-y-3 rounded-2xl border border-slate-800/60 bg-slate-950/45 p-4 shadow-inner">
+              <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <SidebarStat
                   label="Eligible"
                   value={
@@ -3189,17 +3399,23 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        <div className="relative border-t border-slate-800/80 bg-slate-950/20 p-4">
+        <div className="relative border-t border-blue-100 bg-white/60 p-4">
           {isAccountMenuOpen && (
-            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-slate-700/90 bg-slate-950 shadow-[0_24px_55px_rgba(0,0,0,0.45)]">
-              <div className="border-b border-slate-800 px-3.5 py-3">
-                <p className="truncate text-xs font-bold text-white">
-                  {currentAdminName}
-                </p>
-
-                <p className="mt-0.5 truncate font-mono text-[9px] text-slate-400">
-                  {currentAdminEmail}
-                </p>
+            <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+              <div className="border-b border-slate-100 px-3.5 py-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-bold text-white shadow-md shadow-blue-600/20">
+                    {getInitials(currentAdminName)}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-slate-800">
+                      {currentAdminName}
+                    </p>
+                    <p className="mt-0.5 truncate text-[9px] text-slate-400">
+                      {currentAdminEmail}
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-1 p-2">
@@ -3208,9 +3424,9 @@ export default function AdminDashboard() {
                   onClick={
                     openPasswordPanel
                   }
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-blue-500/10 hover:text-blue-200"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-slate-700 transition-all hover:bg-blue-50 hover:text-blue-700"
                 >
-                  <KeyRound className="h-4 w-4 text-blue-300" />
+                  <KeyRound className="h-4 w-4 text-blue-600" />
 
                   <span className="flex-1">
                     Change Password
@@ -3223,7 +3439,7 @@ export default function AdminDashboard() {
                   onClick={
                     handleLogout
                   }
-                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:bg-red-500/10 hover:text-red-300"
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-semibold text-slate-700 transition-all hover:bg-red-50 hover:text-red-700"
                 >
                   <LogOut className="h-4 w-4" />
                   Log Out
@@ -3235,11 +3451,11 @@ export default function AdminDashboard() {
           <button
             type="button"
             onClick={openBugReportForm}
-            className="mb-2 flex w-full items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-900/70 px-3 py-2.5 text-left text-xs font-bold text-slate-300 transition-all hover:border-blue-500/40 hover:bg-blue-500/10 hover:text-blue-200"
+            className="mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700"
             aria-label="Report a bug"
           >
-            <Megaphone className="h-4 w-4 text-blue-300" />
-            <span className="flex-1">Report a Bug</span>
+            <Megaphone className="h-4 w-4 text-slate-400" />
+            <span className="flex-1">Share feedback</span>
           </button>
 
           <button
@@ -3252,30 +3468,29 @@ export default function AdminDashboard() {
             }
             className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
               isAccountMenuOpen
-                ? "border-blue-500/40 bg-blue-500/10"
-                : "border-transparent hover:border-slate-800 hover:bg-slate-900/70"
+                ? "border-blue-200 bg-white shadow-sm"
+                : "border-transparent hover:border-blue-100 hover:bg-white"
             }`}
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 font-mono text-xs font-black text-white shadow-md shadow-blue-600/20">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-bold text-white shadow-md shadow-blue-600/20">
               {getInitials(
                 currentAdminName
               )}
             </div>
 
             <div className="min-w-0 flex-1">
-              <h4 className="truncate text-xs font-bold text-white">
+              <p className="text-[9px] font-medium text-slate-400">
+                Welcome back,
+              </p>
+              <h4 className="truncate text-xs font-bold text-slate-800">
                 {currentAdminName}
               </h4>
-
-              <p className="truncate font-mono text-[9px] text-slate-400">
-                {currentAdminEmail}
-              </p>
             </div>
 
             <ChevronDown
-              className={`h-4 w-4 shrink-0 text-slate-500 transition-transform ${
+              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
                 isAccountMenuOpen
-                  ? "rotate-180 text-blue-300"
+                  ? "rotate-180 text-blue-600"
                   : ""
               }`}
             />
@@ -3306,11 +3521,11 @@ export default function AdminDashboard() {
 
             <ChevronRight className="hidden h-3.5 w-3.5 shrink-0 text-slate-300 sm:inline" />
 
-            <span className="truncate font-mono font-bold uppercase tracking-wider text-slate-950">
+            <span className="truncate font-semibold text-slate-950">
               {activeTab ===
               "instructors"
                 ? hierarchyTitle
-                : `${activeTab} Panel`}
+                : `${activeTab.charAt(0).toUpperCase()}${activeTab.slice(1)}`}
             </span>
           </div>
 
@@ -3331,7 +3546,7 @@ export default function AdminDashboard() {
           </div>
         </header>
 
-        <div className="blueprint-grid relative flex-1 overflow-y-auto p-8">
+        <div className="blueprint-grid relative flex-1 overflow-y-auto p-5 sm:p-6 lg:p-8">
           <div className="relative z-10 mx-auto flex min-h-full max-w-7xl flex-col space-y-7">
             {(systemMessage ||
               systemError) && (
@@ -3373,27 +3588,9 @@ export default function AdminDashboard() {
             )}
 
             {activeTab ===
-              "overview" && (
-              <OverviewPanel
-                stats={stats}
-                instructors={instructors}
-                processMetricRows={
-                  processMetricRows
-                }
-                onOpenInstructors={
-                  openInstructors
-                }
-                onOpenResearch={() =>
-                  setActiveTab(
-                    "research"
-                  )
-                }
-              />
-            )}
-
-            {activeTab ===
               "instructors" && (
               <InstructorsHierarchy
+                isLoading={isLoadingAdminData}
                 instructors={
                   filteredInstructors
                 }
@@ -3509,19 +3706,11 @@ export default function AdminDashboard() {
             )}
 
             {activeTab ===
-              "system" && (
-              <SystemPanel
-                data={data}
-                stats={stats}
-                analyses={
-                  processAnalyses
-                }
-                onRefresh={
-                  refreshData
-                }
-                onCopyDevelopmentSnapshot={
-                  copyDevelopmentSnapshot
-                }
+              "exports" && (
+              <ResearchExportsPanel
+                withdrawalLog={withdrawalLog}
+                onDownloadMetrics={downloadProcessMetrics}
+                onDownloadReflections={downloadReflections}
               />
             )}
           </div>
@@ -3856,8 +4045,8 @@ function OverviewPanel({
   return (
     <div className="animate-fade-in-up space-y-6">
       <div>
-        <h2 className="font-serif text-2xl font-black text-slate-900">
-          Institutional Overview
+        <h2 className="text-2xl font-bold text-slate-900">
+          Admin overview
         </h2>
 
         <p className="mt-1 text-sm text-slate-400">
@@ -3892,7 +4081,7 @@ function OverviewPanel({
 
         <AdminMetricCard
           icon={FlaskConical}
-          label="Research Eligible"
+          label="Research eligible"
           value={
             stats.eligibleResearchSubmissions
           }
@@ -3903,7 +4092,7 @@ function OverviewPanel({
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <Panel
-          title="Instructor Workspaces"
+          title="Instructor workspaces"
           subtitle="Open an instructor to inspect their classes and assignments."
           rightAction={
             <button
@@ -3911,7 +4100,7 @@ function OverviewPanel({
               onClick={onOpenInstructors}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white hover:bg-blue-700"
             >
-              View Instructors
+              View instructors
               <ChevronRight className="h-4 w-4" />
             </button>
           }
@@ -3961,7 +4150,7 @@ function OverviewPanel({
         </Panel>
 
         <Panel
-          title="Research Readiness"
+          title="Research readiness"
           subtitle="Only eligible, current, genuinely submitted work enters research analytics."
           rightAction={
             <button
@@ -3969,7 +4158,7 @@ function OverviewPanel({
               onClick={onOpenResearch}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
             >
-              Research Tools
+              Research tools
               <ChevronRight className="h-4 w-4" />
             </button>
           }
@@ -4012,6 +4201,7 @@ function OverviewPanel({
 ========================================================= */
 
 function InstructorsHierarchy({
+  isLoading,
   instructors,
   teacherSearch,
   setTeacherSearch,
@@ -4049,7 +4239,9 @@ function InstructorsHierarchy({
           />
         </div>
 
-        {instructors.length === 0 ? (
+        {isLoading && instructors.length === 0 ? (
+          <EmptyState text="Loading instructors..." />
+        ) : instructors.length === 0 ? (
           <EmptyState text="No instructors found." />
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -4097,14 +4289,14 @@ function InstructorsHierarchy({
                     <MiniStat
                       label="Assignments"
                       value={
-                        instructor.assignments.length
+                        instructor.assignmentCount ?? instructor.assignments.length
                       }
                     />
 
                     <MiniStat
                       label="Students"
                       value={
-                        instructor.students.length
+                        instructor.studentCount ?? instructor.students.length
                       }
                     />
                   </div>
@@ -4161,7 +4353,7 @@ function InstructorsHierarchy({
               icon={BookOpen}
               label="Assignments"
               value={
-                selectedTeacher.assignments.length
+                selectedTeacher.assignmentCount ?? selectedTeacher.assignments.length
               }
               description="Across this instructor’s classes"
               tone="indigo"
@@ -4171,7 +4363,7 @@ function InstructorsHierarchy({
               icon={Users}
               label="Students"
               value={
-                selectedTeacher.students.length
+                selectedTeacher.studentCount ?? selectedTeacher.students.length
               }
               description="Unique enrolled students"
               tone="sky"
@@ -4192,19 +4384,13 @@ function InstructorsHierarchy({
               {selectedTeacher.classes.map(
                 (course) => {
                   const assignmentCount =
-                    selectedTeacher.assignments.filter(
+                    course.assignmentCount ?? selectedTeacher.assignments.filter(
                       (assignment) =>
-                        classMatchesAssignment(
-                          course,
-                          assignment
-                        )
+                        classMatchesAssignment(course, assignment)
                     ).length;
 
                   const studentCount =
-                    selectedTeacher.students.filter(
-                      (student) =>
-                        true
-                    ).length;
+                    course.studentCount ?? selectedTeacher.students.length;
 
                   return (
                     <button
@@ -4959,8 +5145,6 @@ function ResearchPanel({
   lastRun,
   withdrawalLog,
   onRecompute,
-  onDownloadMetrics,
-  onDownloadReflections,
 }) {
   return (
     <div className="animate-fade-in-up space-y-6">
@@ -4970,7 +5154,7 @@ function ResearchPanel({
         </h2>
 
         <p className="mt-1 text-sm text-slate-400">
-          Manage admin-only research inclusion, pseudonymized exports, CEFR benchmarks, and process-analysis status.
+          Review eligible writing data and keep process analysis current.
         </p>
       </div>
 
@@ -5015,33 +5199,6 @@ function ResearchPanel({
           tone="sky"
         />
       </div>
-
-      <Panel
-        title="Research Exports"
-        subtitle="Exports use pseudonyms and exclude test accounts and research-excluded students."
-      >
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <SystemActionCard
-            icon={Download}
-            title="Process Metrics CSV"
-            description="Pseudonymized word count, writing duration, event totals, paste evidence, Coach use, and feedback-use metrics."
-            action="Download Metrics"
-            onClick={
-              onDownloadMetrics
-            }
-          />
-
-          <SystemActionCard
-            icon={Download}
-            title="Student Reflections CSV"
-            description="Pseudonymized student reflection responses for eligible submissions."
-            action="Download Reflections"
-            onClick={
-              onDownloadReflections
-            }
-          />
-        </div>
-      </Panel>
 
       <Panel
         title="CEFR Writing-Process Benchmarks"
@@ -5098,7 +5255,7 @@ function ResearchPanel({
         </div>
       </Panel>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6">
         <Panel
           title="Process Analysis"
           subtitle="Recompute missing or outdated analyses for eligible submissions."
@@ -5156,52 +5313,73 @@ function ResearchPanel({
           </p>
         </Panel>
 
-        <Panel
-          title="Anonymous Withdrawal Log"
-          subtitle="Only deletion date and record counts are retained - no student identity."
-        >
-          {withdrawalLog.length ===
-          0 ? (
-            <EmptyState text="No research withdrawals have been processed." />
-          ) : (
-            <div className="space-y-3">
-              {[...withdrawalLog]
-                .reverse()
-                .slice(0, 8)
-                .map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3"
-                  >
-                    <p className="font-mono text-[10px] font-bold text-slate-700">
-                      {getReadableDate(
-                        entry.deletedAt
-                      )}
-                    </p>
-
-                    <p className="mt-1 text-[10px] leading-relaxed text-slate-400">
-                      {
-                        entry.deleted
-                          ?.submissions
-                      }{" "}
-                      submissions ·{" "}
-                      {
-                        entry.deleted
-                          ?.analyses
-                      }{" "}
-                      analyses ·{" "}
-                      {
-                        entry.deleted
-                          ?.memberships
-                      }{" "}
-                      memberships
-                    </p>
-                  </div>
-                ))}
-            </div>
-          )}
-        </Panel>
       </div>
+    </div>
+  );
+}
+
+function ResearchExportsPanel({
+  withdrawalLog,
+  onDownloadMetrics,
+  onDownloadReflections,
+}) {
+  return (
+    <div className="animate-fade-in-up space-y-6">
+      <div>
+        <h2 className="text-2xl font-bold text-slate-900">
+          Export research data
+        </h2>
+        <p className="mt-1 text-sm text-slate-400">
+          Download pseudonymized records. Test accounts and research-excluded students are omitted automatically.
+        </p>
+      </div>
+
+      <Panel
+        title="Choose an export"
+        subtitle="Select the dataset needed for the current research task."
+      >
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <SystemActionCard
+            icon={Download}
+            title="Process metrics"
+            description="Word count, writing duration, event totals, paste evidence, Coach use, and feedback-use metrics."
+            action="Download metrics CSV"
+            onClick={onDownloadMetrics}
+          />
+          <SystemActionCard
+            icon={Download}
+            title="Student reflections"
+            description="Student reflection responses for eligible submissions."
+            action="Download reflections CSV"
+            onClick={onDownloadReflections}
+          />
+        </div>
+      </Panel>
+
+      <Panel
+        title="Anonymous withdrawal log"
+        subtitle="Only deletion dates and record counts are retained. No student identity is stored."
+      >
+        {withdrawalLog.length === 0 ? (
+          <EmptyState text="No research withdrawals have been processed." />
+        ) : (
+          <div className="space-y-3">
+            {[...withdrawalLog].reverse().slice(0, 8).map((entry) => (
+              <div
+                key={entry.id}
+                className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3"
+              >
+                <p className="text-xs font-semibold text-slate-700">
+                  {getReadableDate(entry.deletedAt)}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  {entry.deleted?.submissions} submissions · {entry.deleted?.analyses} analyses · {entry.deleted?.memberships} memberships
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
     </div>
   );
 }
@@ -5346,18 +5524,18 @@ function AdminNavButton({
     <button
       type="button"
       onClick={onClick}
-      className={`group flex w-full items-center justify-between rounded-xl border px-3.5 py-3 text-left text-xs font-bold transition-all ${
+      className={`group flex w-full items-center justify-between rounded-xl px-3.5 py-3 text-left text-xs font-bold transition-all ${
         active
-          ? "border-slate-700 bg-slate-800/80 text-white shadow-inner"
-          : "border-transparent text-slate-400 hover:bg-slate-800/30 hover:text-white"
+          ? "bg-white text-blue-700 shadow-sm ring-1 ring-blue-200"
+          : "text-slate-600 hover:bg-white hover:text-slate-900"
       }`}
     >
       <div className="flex items-center gap-2.5">
         <Icon
           className={`h-4 w-4 stroke-[1.8] ${
             active
-              ? "text-blue-300"
-              : "text-slate-500"
+              ? "text-blue-600"
+              : "text-slate-400"
           }`}
         />
 
@@ -5366,13 +5544,13 @@ function AdminNavButton({
 
       {badge !== undefined && (
         <span
-          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-bold ${
+          className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${
             active
               ? badgeTone ===
                 "indigo"
                 ? "bg-indigo-500 text-white"
                 : "bg-blue-600 text-white"
-              : "bg-slate-800 text-slate-500"
+              : "bg-slate-200/70 text-slate-500"
           }`}
         >
           {badge}
@@ -5388,16 +5566,16 @@ function SidebarStat({
   tone,
 }) {
   return (
-    <div className="flex items-center justify-between border-b border-slate-800/50 pb-2 text-[10px] last:border-b-0 last:pb-0">
-      <span className="font-mono text-slate-400">
+    <div className="flex items-center justify-between border-b border-slate-100 pb-2 text-xs last:border-b-0 last:pb-0">
+      <span className="font-medium text-slate-500">
         {label}
       </span>
 
       <span
-        className={`font-mono font-black ${
+        className={`font-bold ${
           tone === "blue"
-            ? "text-blue-400"
-            : "text-white"
+            ? "text-blue-600"
+            : "text-slate-900"
         }`}
       >
         {value}
@@ -5454,16 +5632,16 @@ function AdminMetricCard({
 
       <div className="min-w-0 space-y-1">
         <span
-          className={`inline-block rounded border px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-widest ${selected.label}`}
+          className={`inline-block rounded-md border px-2 py-0.5 text-xs font-semibold ${selected.label}`}
         >
           {label}
         </span>
 
-        <h4 className="font-serif text-xl font-bold text-slate-900">
+        <h4 className="text-xl font-bold text-slate-900">
           {value}
         </h4>
 
-        <p className="text-[11px] font-medium text-slate-400">
+        <p className="text-xs font-medium text-slate-500">
           {description}
         </p>
       </div>
@@ -5481,12 +5659,12 @@ function Panel({
     <div className="animate-fade-in-up space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h3 className="font-serif text-xl font-bold text-slate-900">
+          <h3 className="text-xl font-bold text-slate-900">
             {title}
           </h3>
 
           {subtitle && (
-            <p className="mt-1 text-xs font-medium leading-relaxed text-slate-400">
+            <p className="mt-1 text-sm font-medium leading-relaxed text-slate-500">
               {subtitle}
             </p>
           )}
@@ -5529,7 +5707,7 @@ function StatusBadge({
 }) {
   return (
     <span
-      className={`inline-flex w-fit rounded border px-2 py-1 font-mono text-[9px] font-bold uppercase ${getStatusClass(
+      className={`inline-flex w-fit rounded-md border px-2 py-1 text-xs font-semibold ${getStatusClass(
         status
       )}`}
     >
@@ -5542,7 +5720,7 @@ function EmptyState({
   text,
 }) {
   return (
-    <div className="p-8 text-center font-mono text-xs text-slate-400">
+    <div className="p-8 text-center text-sm text-slate-500">
       {text}
     </div>
   );
@@ -5588,11 +5766,11 @@ function MiniStat({
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-      <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
+      <p className="text-xs font-semibold text-slate-500">
         {label}
       </p>
 
-      <p className="mt-1 break-words font-serif text-lg font-bold text-slate-900">
+      <p className="mt-1 break-words text-lg font-bold text-slate-900">
         {value}
       </p>
     </div>
