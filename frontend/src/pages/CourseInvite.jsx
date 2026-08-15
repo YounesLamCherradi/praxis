@@ -35,6 +35,7 @@ export default function CourseInvite() {
       .then((result) => {
         const joinedClass = result?.class || {};
         queryClient.invalidateQueries({ queryKey: queryKeys.studentCourses });
+        queryClient.invalidateQueries({ queryKey: queryKeys.studentWorkspace });
         clearPendingCourseInvite();
         const params = new URLSearchParams({
           joinedCode: code,

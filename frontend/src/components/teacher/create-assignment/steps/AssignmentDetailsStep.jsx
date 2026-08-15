@@ -34,7 +34,6 @@ const STUDENT_LEVELS = [
   "B2",
   "C1",
   "C2",
-  "Mixed level",
 ];
 
 function getClassValue(cls) {

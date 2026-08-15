@@ -150,8 +150,8 @@ export default function Login() {
               Back to Home
             </span>
 
-            <span className="text-[9px] font-mono text-slate-500 mt-0.5 uppercase tracking-wider">
-              praxis website
+            <span className="mt-0.5 text-[11px] font-medium text-slate-500">
+              Praxis website
             </span>
           </div>
         </button>
@@ -174,12 +174,12 @@ export default function Login() {
                 <span className="text-slate-900">raxis</span>
               </span>
 
-              <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-lg">
+              <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                 AUI Writing Platform
               </span>
             </div>
 
-            <h1 className="font-serif text-5xl xl:text-6xl font-black tracking-tight leading-[0.98] text-slate-950">
+            <h1 className="text-5xl font-extrabold leading-[1.05] tracking-tight text-slate-950 xl:text-6xl">
               Secure access to your writing workspace.
             </h1>
 
@@ -222,26 +222,26 @@ export default function Login() {
                   />
                 </div>
 
-                <h2 className="text-2xl font-serif font-black text-slate-950">
+                <h2 className="text-2xl font-bold text-slate-950">
                   Welcome back
                 </h2>
 
-                <p className="text-xs font-mono uppercase text-blue-700 font-bold tracking-wider mt-1">
-                  AUI secure access
+                <p className="mt-1 text-sm font-medium text-slate-500">
+                  Secure access for the AUI community
                 </p>
               </div>
 
               {error && (
-                <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-medium">
+                <div id="auth-error" role="alert" className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-medium">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
               )}
 
-              <form className="space-y-5" onSubmit={handleSubmit}>
+              <form id="auth-signin-form" className="space-y-5" onSubmit={handleSubmit}>
                 <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                    Campus Email
+                  <label htmlFor="login-email" className="block text-sm font-semibold text-slate-700">
+                    Campus email
                   </label>
 
                   <div className="mt-1.5 relative rounded-xl shadow-sm">
@@ -250,7 +250,10 @@ export default function Login() {
                     </div>
 
                     <input
+                      id="login-email"
                       type="email"
+                      name="email"
+                      autoComplete="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="username@aui.ma"
@@ -261,7 +264,7 @@ export default function Login() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
+                  <label htmlFor="login-password" className="block text-sm font-semibold text-slate-700">
                     Password
                   </label>
 
@@ -271,7 +274,10 @@ export default function Login() {
                     </div>
 
                     <input
+                      id="login-password"
                       type="password"
+                      name="password"
+                      autoComplete="current-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
@@ -292,7 +298,7 @@ export default function Login() {
                     Remember me
                   </label>
 
-                  <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] font-mono text-slate-400">
+                  <span className="hidden sm:inline-flex items-center gap-1.5 text-xs font-medium text-slate-400">
                     <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
                     @aui.ma only
                   </span>
@@ -302,7 +308,7 @@ export default function Login() {
                   <button
                     type="button"
                     onClick={() => setShowForgotPassword(true)}
-                    className="text-xs font-bold text-blue-700 hover:text-blue-800"
+                    className="inline-flex min-h-11 items-center text-xs font-bold text-blue-700 hover:text-blue-800"
                   >
                     Forgot password?
                   </button>
@@ -334,16 +340,13 @@ export default function Login() {
                   onClick={() =>
                     navigate(inviteCode ? `/signup?invite=${encodeURIComponent(inviteCode)}` : "/signup")
                   }
-                  className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
+                  className="inline-flex min-h-11 items-center font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none px-1 align-middle"
                 >
                   Register here
                 </button>
               </div>
             </div>
 
-            <div className="mt-5 text-center text-[10px] font-mono text-slate-400 uppercase tracking-wider">
-              Praxis · AUI Writing Platform · Secure Workspace
-            </div>
           </div>
         </div>
       </div>

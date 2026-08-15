@@ -20,7 +20,6 @@ import {
   deleteTeacherCourse,
   getTeacherCourses,
   removeStudentFromCourse,
-  sendCourseInvitation,
   updateTeacherCourse,
 } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
@@ -64,7 +63,6 @@ const UPCOMING_ACADEMIC_SEMESTERS = buildAcademicSemesterOptions();
 import {
   Home,
   BookOpen,
-  Layers,
   Archive,
   Bell,
   Bug,
@@ -72,7 +70,6 @@ import {
   FileCheck2,
   RotateCcw,
   LogOut,
-  Loader2,
   ChevronDown,
   ChevronRight,
   Plus,
@@ -80,7 +77,6 @@ import {
   Sparkle,
   ShieldAlert,
   CheckSquare,
-  ShieldCheck,
   Settings,
   Edit3,
   UserPlus,
@@ -90,6 +86,7 @@ import {
   EyeOff,
   ImagePlus,
   KeyRound,
+  Lock,
   Megaphone,
   MessageSquare,
   Menu,
@@ -372,10 +369,8 @@ export default function TeacherDashboard() {
   const [isInviteCoursePickerOpen, setIsInviteCoursePickerOpen] =
     useState(false);
   const [inviteCourseId, setInviteCourseId] = useState("");
-  const [inviteStudentEmail, setInviteStudentEmail] = useState("");
   const [inviteEmailError, setInviteEmailError] = useState("");
   const [inviteEmailSuccess, setInviteEmailSuccess] = useState("");
-  const [isSendingInviteEmail, setIsSendingInviteEmail] = useState(false);
 
   const [manageCourseForm, setManageCourseForm] = useState({
     name: "",
@@ -749,6 +744,7 @@ export default function TeacherDashboard() {
 
       const newClass = await createTeacherCourse(courseDraft);
       await queryClient.invalidateQueries({ queryKey: queryKeys.teacherCourses });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teacherWorkspace });
 
       if (typeof setClasses === "function") {
         setClasses([...classes, newClass]);
@@ -768,7 +764,6 @@ export default function TeacherDashboard() {
     }
   };
 
-  const totalClassesCount = activeCourses.length;
   const totalAssignmentsCount = activeAssignments.length;
 
   const pendingReviews = useMemo(
@@ -1059,38 +1054,41 @@ export default function TeacherDashboard() {
     setInviteCourseId(
       availableCourses.length === 1 ? String(availableCourses[0].id) : ""
     );
-    setInviteStudentEmail("");
     setInviteEmailError("");
     setInviteEmailSuccess("");
     setIsInviteCoursePickerOpen(true);
   }
 
-  async function handleSendStudentInvitation(event) {
+  async function handleCopyStudentInvitation(event) {
     event.preventDefault();
-    const email = inviteStudentEmail.trim().toLowerCase();
-
     setInviteEmailError("");
     setInviteEmailSuccess("");
     if (!inviteCourseId) {
       setInviteEmailError("Choose a course.");
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setInviteEmailError("Enter a valid student email address.");
+
+    const course = classes.find(
+      (item) => String(item?.id) === String(inviteCourseId)
+    );
+    if (!course) {
+      setInviteEmailError("The selected course could not be found.");
+      return;
+    }
+    if (course.isPublished === false) {
+      setInviteEmailError("Publish this course before copying its invitation.");
       return;
     }
 
-    setIsSendingInviteEmail(true);
     try {
-      await sendCourseInvitation(inviteCourseId, email);
-      setInviteEmailSuccess(`Invitation sent to ${email}.`);
-      setInviteStudentEmail("");
+      await writeClipboardText(
+        buildCourseInviteMessage(course, undefined, teacherIdentity.name)
+      );
+      setInviteEmailSuccess("Invitation copied. Paste it into email, WhatsApp, or any message.");
     } catch (error) {
       setInviteEmailError(
-        error?.message || "The invitation could not be sent. Please try again."
+        error?.message || "The invitation could not be copied. Please try again."
       );
-    } finally {
-      setIsSendingInviteEmail(false);
     }
   }
 
@@ -1299,6 +1297,7 @@ export default function TeacherDashboard() {
       const backendClassId = managedClass.backendId || managedClass.id;
       await deleteTeacherCourse(backendClassId);
       await queryClient.invalidateQueries({ queryKey: queryKeys.teacherCourses });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.teacherWorkspace });
 
     const data = getPraxisData();
     const archivedAt = new Date().toISOString();
@@ -1735,7 +1734,7 @@ export default function TeacherDashboard() {
           <div className="flex-1 space-y-7 overflow-y-auto p-4">
             <div className="space-y-1.5">
               <div className="mb-2 flex items-center px-2">
-                <span className="text-xs font-bold text-slate-700">
+                <span className="text-xs font-semibold text-slate-600">
                   Teaching
                 </span>
               </div>
@@ -1761,7 +1760,7 @@ export default function TeacherDashboard() {
             </div>
 
             <div className="space-y-1.5">
-              <span className="mb-2 block px-2 text-xs font-bold text-slate-700">
+              <span className="mb-2 block px-2 text-xs font-semibold text-slate-600">
                 Connect
               </span>
 
@@ -1782,7 +1781,7 @@ export default function TeacherDashboard() {
               >
                 <div className="flex items-center gap-2">
                   <Bell className={`h-4 w-4 ${sidebarNotifications.length > 0 ? "text-blue-600" : "text-slate-400"}`} />
-                  <span className="text-xs font-bold text-slate-700">Reviews</span>
+                  <span className="text-xs font-semibold text-slate-700">Reviews</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span
@@ -2036,7 +2035,7 @@ export default function TeacherDashboard() {
               }
             >
               <UserPlus className="h-4 w-4" />
-              <span className="hidden sm:inline">Invite Students</span>
+              <span className="hidden sm:inline">Invite students</span>
               <span className="sm:hidden">Invite</span>
             </button>
 
@@ -2048,7 +2047,7 @@ export default function TeacherDashboard() {
               className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98]"
             >
               <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Create Course</span>
+              <span className="hidden sm:inline">Create course</span>
               <span className="sm:hidden">Create</span>
             </button>
           </div>}
@@ -2059,9 +2058,8 @@ export default function TeacherDashboard() {
             {activeTab === "overview" && (
               <OverviewPanel
                 classes={classes}
+                assignments={activeAssignments}
                 isWorkspaceLoading={isWorkspaceLoading}
-                totalClassesCount={totalClassesCount}
-                totalAssignmentsCount={totalAssignmentsCount}
                 pendingReviewsCount={pendingReviewsCount}
                 computeCourseStatus={computeCourseStatus}
                 getClassEnrollments={getClassEnrollments}
@@ -2145,7 +2143,7 @@ export default function TeacherDashboard() {
                   Invite students
                 </h2>
                 <p className="mt-1 text-xs leading-relaxed text-slate-500">
-                  Choose a course and send a Praxis invitation by email.
+                  Choose a course, copy its invitation, and share it anywhere.
                 </p>
               </div>
 
@@ -2159,7 +2157,7 @@ export default function TeacherDashboard() {
               </button>
             </div>
 
-            <form onSubmit={handleSendStudentInvitation} className="mt-5 space-y-4">
+            <form onSubmit={handleCopyStudentInvitation} className="mt-5 space-y-4">
               <div className="space-y-1.5">
                 <label
                   htmlFor="invite-course"
@@ -2188,31 +2186,9 @@ export default function TeacherDashboard() {
                 </select>
               </div>
 
-              <div className="space-y-1.5">
-                <label
-                  htmlFor="invite-student-email"
-                  className="block text-[10px] font-bold text-slate-500"
-                >
-                  Student email
-                </label>
-                <input
-                  id="invite-student-email"
-                  type="email"
-                  required
-                  value={inviteStudentEmail}
-                  onChange={(event) => {
-                    setInviteStudentEmail(event.target.value);
-                    setInviteEmailError("");
-                    setInviteEmailSuccess("");
-                  }}
-                  placeholder="student@example.com"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-300 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                />
-              </div>
-
               <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 text-[11px] leading-relaxed text-slate-600">
-                The email includes the course name, instructor, access code,
-                and a secure link to join Praxis.
+                The copied message includes the course name, instructor, access
+                code, and a secure link to join Praxis.
               </div>
 
               {inviteEmailError && (
@@ -2230,19 +2206,15 @@ export default function TeacherDashboard() {
 
               <button
                 type="submit"
-                disabled={
-                  isSendingInviteEmail ||
-                  !inviteCourseId ||
-                  !inviteStudentEmail.trim()
-                }
+                disabled={!inviteCourseId}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isSendingInviteEmail ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                {inviteEmailSuccess ? (
+                  <CheckSquare className="h-4 w-4" />
                 ) : (
-                  <Send className="h-4 w-4" />
+                  <Copy className="h-4 w-4" />
                 )}
-                {isSendingInviteEmail ? "Sending invitation..." : "Send Invitation"}
+                {inviteEmailSuccess ? "Invitation copied" : "Copy invitation"}
               </button>
             </form>
           </div>
@@ -2320,9 +2292,8 @@ export default function TeacherDashboard() {
 
 function OverviewPanel({
   classes,
+  assignments,
   isWorkspaceLoading,
-  totalClassesCount,
-  totalAssignmentsCount,
   pendingReviewsCount,
   computeCourseStatus,
   getClassEnrollments,
@@ -2378,7 +2349,7 @@ function OverviewPanel({
             <p className="mt-5 text-[10px] font-bold text-blue-600">
               Welcome to your teaching space
             </p>
-            <h2 className="mt-1 text-2xl font-black text-slate-900 sm:text-3xl">
+            <h2 className="mt-1 text-2xl font-bold text-slate-900 sm:text-3xl">
               Create your first course
             </h2>
             <p className="mt-2 max-w-lg text-sm leading-relaxed text-slate-500">
@@ -2386,137 +2357,92 @@ function OverviewPanel({
             </p>
             <span className="mt-6 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-colors group-hover:bg-blue-700">
               <Plus className="h-4 w-4" />
-              Create Course
+              Create course
             </span>
           </button>
         </section>
       ) : (
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-4 animate-fade-in-up">
-        <button
-          type="button"
-          onClick={onCreateAssignment}
-          className="group rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 to-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg"
-        >
-          <div className="flex items-start justify-between gap-5">
-            <div className="flex items-start gap-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm shadow-blue-600/20">
-                <Plus className="h-5 w-5" />
-              </div>
-
-              <div>
-                <p className="text-[10px] font-bold text-blue-600">
-                  Start something new
-                </p>
-
-                <h2 className="mt-1 text-lg font-bold text-slate-900">
-                  Create an assignment
-                </h2>
-
-                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
-                  Create and publish a writing assignment for one of your courses.
-                </p>
-              </div>
+      <section className="overflow-hidden rounded-3xl border border-blue-200 bg-white shadow-sm animate-fade-in-up">
+        <div className="flex flex-col gap-6 bg-gradient-to-br from-blue-50 via-white to-white p-6 sm:p-7 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-start gap-4">
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+              pendingReviewsCount > 0
+                ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
+                : "border border-emerald-100 bg-emerald-50 text-emerald-600"
+            }`}>
+              {pendingReviewsCount > 0 ? (
+                <FileCheck2 className="h-6 w-6" />
+              ) : (
+                <CheckSquare className="h-6 w-6" />
+              )}
             </div>
 
-            <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-blue-300 transition-transform group-hover:translate-x-1 group-hover:text-blue-600" />
+            <div>
+              <p className="text-xs font-semibold text-blue-600">
+                Today
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950 sm:text-2xl">
+                {pendingReviewsCount > 0
+                  ? `${pendingReviewsCount} ${pendingReviewsCount === 1 ? "submission needs" : "submissions need"} your feedback`
+                  : "You’re all caught up"}
+              </h2>
+              <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-500">
+                {pendingReviewsCount > 0
+                  ? "Review student writing and send feedback while the work is fresh."
+                  : "No student submissions are waiting for review. You can start something new when you’re ready."}
+              </p>
+            </div>
           </div>
-        </button>
 
-        <button
-          type="button"
-          onClick={onOpenReviews}
-          disabled={pendingReviewsCount === 0}
-          className={`group text-left rounded-2xl border p-5 shadow-sm transition-all ${
-            pendingReviewsCount > 0
-              ? "border-blue-200 bg-white hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-lg"
-              : "cursor-not-allowed border-slate-200 bg-slate-50 opacity-75"
-          }`}
-        >
-          <div className="flex items-start justify-between gap-5">
-            <div className="flex items-start gap-4">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-                <CheckSquare className="h-5 w-5" />
-              </div>
-
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-[10px] font-bold text-blue-600">
-                    Student work
-                  </p>
-
-                  {pendingReviewsCount > 0 && (
-                    <span className="rounded-full bg-blue-600 px-2 py-0.5 text-[9px] font-bold text-white">
-                      {pendingReviewsCount} pending
-                    </span>
-                  )}
-                </div>
-
-                <h2 className="mt-1 text-lg font-bold text-slate-950">
-                  Review student work
-                </h2>
-
-                <p className="mt-1 max-w-md text-xs leading-relaxed text-slate-500">
-                  {pendingReviewsCount > 0
-                    ? "Open the next assignment with pending submissions and continue grading."
-                    : "There are no student submissions waiting for review."}
-                </p>
-              </div>
-            </div>
-
-            <ChevronRight
-              className={`mt-1 h-5 w-5 shrink-0 transition-transform ${
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={onOpenReviews}
+              disabled={pendingReviewsCount === 0}
+              aria-label={
                 pendingReviewsCount > 0
-                  ? "text-slate-300 group-hover:translate-x-1 group-hover:text-blue-600"
-                  : "text-slate-300"
+                  ? `Review ${pendingReviewsCount} pending ${pendingReviewsCount === 1 ? "submission" : "submissions"}`
+                  : "Nothing to grade; no submissions are waiting"
+              }
+              className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
+                pendingReviewsCount > 0
+                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:-translate-y-0.5 hover:bg-blue-700"
+                  : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
               }`}
-            />
+            >
+              {pendingReviewsCount > 0 ? (
+                <FileCheck2 className="h-4 w-4" />
+              ) : (
+                <Lock className="h-4 w-4" />
+              )}
+              {pendingReviewsCount > 0 ? "Review submissions" : "Nothing to grade"}
+            </button>
+            <button
+              type="button"
+              onClick={onCreateAssignment}
+              className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all hover:-translate-y-0.5 ${
+                pendingReviewsCount > 0
+                  ? "border border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:text-blue-700"
+                  : "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
+              }`}
+            >
+              <Plus className="h-4 w-4" />
+              Create assignment
+            </button>
           </div>
-        </button>
+        </div>
       </section>
-      )}
-
-      {(totalClassesCount > 0 ||
-        totalAssignmentsCount > 0 ||
-        pendingReviewsCount > 0) && (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up [animation-delay:100ms]">
-        <MetricCard
-          cardType="classes"
-          icon={Layers}
-          label="Active Courses"
-          value={`${totalClassesCount} ${totalClassesCount === 1 ? "course" : "courses"}`}
-          description="Courses you are currently teaching."
-          tone="blue"
-        />
-
-        <MetricCard
-          cardType="assignments"
-          icon={BookOpen}
-          label="Assignments"
-          value={`${totalAssignmentsCount} ${totalAssignmentsCount === 1 ? "assignment" : "assignments"}`}
-          description="Writing assignments across your courses."
-          tone="indigo"
-        />
-
-        <MetricCard
-          cardType="reviews"
-          icon={ShieldCheck}
-          label="Pending Reviews"
-          value={`${pendingReviewsCount} ${pendingReviewsCount === 1 ? "submission" : "submissions"}`}
-          description="Student work waiting for your feedback."
-          tone="sky"
-        />
-      </div>
       )}
 
       {classes.length > 0 && (
       <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-4 animate-fade-in-up [animation-delay:150ms]">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h3 className="text-lg font-bold text-slate-900">
+            <h3 className="text-lg font-semibold text-slate-900">
               Your courses
             </h3>
 
-            <p className="text-xs text-slate-400 font-medium">
+            <p className="mt-0.5 text-sm text-slate-500">
               Open a course to manage students, assignments, and its access code.
             </p>
           </div>
@@ -2530,7 +2456,7 @@ function OverviewPanel({
               type="button"
               onClick={() => setCourseFilter("current")}
               aria-pressed={courseFilter === "current"}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
                 courseFilter === "current"
                   ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
                   : "text-slate-500 hover:text-slate-900"
@@ -2538,7 +2464,7 @@ function OverviewPanel({
             >
               Current
               <span
-                className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] ${
+                className={`rounded-full px-1.5 py-0.5 text-[10px] ${
                   courseFilter === "current"
                     ? "bg-blue-50 text-blue-700"
                     : "bg-slate-200/70 text-slate-500"
@@ -2552,7 +2478,7 @@ function OverviewPanel({
               type="button"
               onClick={() => setCourseFilter("past")}
               aria-pressed={courseFilter === "past"}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-[10px] font-bold transition-all ${
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
                 courseFilter === "past"
                   ? "bg-white text-amber-700 shadow-sm ring-1 ring-slate-200"
                   : "text-slate-500 hover:text-slate-900"
@@ -2560,7 +2486,7 @@ function OverviewPanel({
             >
               Past
               <span
-                className={`rounded-full px-1.5 py-0.5 font-mono text-[9px] ${
+                className={`rounded-full px-1.5 py-0.5 text-[10px] ${
                   courseFilter === "past"
                     ? "bg-amber-50 text-amber-700"
                     : "bg-slate-200/70 text-slate-500"
@@ -2573,9 +2499,9 @@ function OverviewPanel({
         </div>
 
         {displayedCourses.length === 0 ? (
-          <div className="border border-dashed border-slate-200 rounded-xl p-10 text-center text-xs text-slate-400 font-mono">
+          <div className="rounded-xl border border-dashed border-slate-200 p-10 text-center text-sm text-slate-500">
             {courseFilter === "current"
-              ? 'No current courses. Use "Create Course" in the top-right corner to add one.'
+              ? 'No current courses. Use "Create course" in the top-right corner to add one.'
               : "No past courses yet. Archived courses will appear here."}
           </div>
         ) : (
@@ -2583,6 +2509,9 @@ function OverviewPanel({
             {displayedCourses.map((cls) => {
               const status = computeCourseStatus(cls);
               const classEnrollments = getClassEnrollments(cls);
+              const courseAssignments = assignments.filter(
+                (assignment) => String(assignment?.classId) === String(cls.id)
+              );
               const isRosterOpen = expandedClassId === cls.id;
 
               return (
@@ -2598,18 +2527,18 @@ function OverviewPanel({
                     <div className="flex items-start justify-between gap-2">
                       <div className="space-y-0.5 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] font-mono bg-slate-200/60 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase shrink-0">
+                          <span className="shrink-0 rounded bg-slate-200/60 px-2 py-1 text-[10px] font-medium text-slate-600">
                             {cls.semester}
                           </span>
 
                           <span
-                            className={`text-[9px] font-mono border px-1.5 py-0.5 rounded font-bold uppercase shrink-0 ${status.styles}`}
+                            className={`shrink-0 rounded border px-2 py-1 text-[10px] font-semibold ${status.styles}`}
                           >
                             {status.text}
                           </span>
                         </div>
 
-                        <h5 className="mt-1 truncate text-sm font-bold text-slate-900">
+                        <h5 className="mt-1.5 truncate text-base font-semibold text-slate-900">
                           {cls.name}
                         </h5>
                       </div>
@@ -2619,9 +2548,18 @@ function OverviewPanel({
                       </span>
                     </div>
 
-                    <p className="text-[11px] text-slate-400 font-medium line-clamp-2 leading-relaxed">
+                    <p className="line-clamp-2 text-xs leading-relaxed text-slate-500">
                       {cls.description}
                     </p>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-medium text-slate-500">
+                      <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                        {classEnrollments.length} {classEnrollments.length === 1 ? "student" : "students"}
+                      </span>
+                      <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                        {courseAssignments.length} {courseAssignments.length === 1 ? "assignment" : "assignments"}
+                      </span>
+                    </div>
 
                   </div>
 
@@ -2630,10 +2568,10 @@ function OverviewPanel({
                       <button
                         type="button"
                         onClick={() => openCourseManager(cls)}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-[10px] font-bold text-white shadow-sm shadow-blue-600/15 transition-all hover:bg-blue-700"
+                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-xs font-semibold text-white shadow-sm shadow-blue-600/15 transition-all hover:bg-blue-700"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
-                        Manage Course
+                        Manage course
                       </button>
 
                       <button
@@ -2641,7 +2579,7 @@ function OverviewPanel({
                         onClick={() =>
                           setExpandedClassId(isRosterOpen ? null : cls.id)
                         }
-                        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
                       >
                         <span>Students</span>
                         <span>{isRosterOpen ? "Hide" : "Show"}</span>
@@ -2651,7 +2589,7 @@ function OverviewPanel({
                     {isRosterOpen && (
                       <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2">
                         {classEnrollments.length === 0 ? (
-                          <p className="text-[10px] text-slate-400 font-mono">
+                          <p className="text-xs text-slate-500">
                             No students enrolled yet.
                           </p>
                         ) : (
@@ -2661,16 +2599,16 @@ function OverviewPanel({
                               className="flex items-center justify-between gap-2 bg-[#F8FAFC] border border-slate-100 rounded-lg px-3 py-2"
                             >
                               <div className="min-w-0">
-                                <p className="text-[10px] font-bold text-slate-800 truncate">
+                                <p className="truncate text-xs font-semibold text-slate-800">
                                   {enrollment.studentName || "Student"}
                                 </p>
 
-                                <p className="text-[9px] font-mono text-slate-400 truncate">
+                                <p className="truncate text-[11px] text-slate-500">
                                   {enrollment.studentEmail}
                                 </p>
                               </div>
 
-                              <span className="text-[8px] font-mono font-bold uppercase bg-blue-600/10 text-blue-600 px-2 py-0.5 rounded">
+                              <span className="rounded bg-blue-600/10 px-2 py-0.5 text-[10px] font-medium text-blue-600">
                                 Enrolled
                               </span>
                             </div>
@@ -2874,7 +2812,6 @@ function CourseManagerModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
       <div
-        onClick={closeCourseManager}
         className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs transition-opacity"
       />
 
@@ -3852,54 +3789,5 @@ function SidebarButton({
         </span>
       )}
     </button>
-  );
-}
-
-function MetricCard({ icon: Icon, label, value, description, tone, cardType }) {
-  const toneStyles = {
-    blue: {
-      icon: "bg-blue-50 border-blue-100 text-blue-700",
-      label: "text-blue-700 bg-blue-50 border-blue-100",
-    },
-    indigo: {
-      icon: "bg-indigo-500/10 border-indigo-500/20 text-indigo-600",
-      label: "text-indigo-700 bg-indigo-500/5 border-indigo-500/10",
-    },
-    sky: {
-      icon: "bg-sky-50 border-sky-100 text-sky-700",
-      label: "text-sky-700 bg-sky-50 border-sky-100",
-    },
-  };
-
-  const styles = toneStyles[tone] || toneStyles.blue;
-
-  return (
-    <div
-      className={`bg-white border border-slate-200/80 rounded-2xl p-5 flex items-start gap-4 transition-all duration-300 hover:-translate-y-1 ${
-        cardType ? `glow-box-${cardType}` : ""
-      } cursor-default`}
-    >
-      <div
-        className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${styles.icon}`}
-      >
-        <Icon className="w-5 h-5 stroke-[1.8]" />
-      </div>
-
-      <div className="space-y-1 min-w-0">
-        <span
-          className={`text-[9px] font-mono font-bold tracking-widest uppercase px-2 py-0.5 rounded border inline-block ${styles.label}`}
-        >
-          {label}
-        </span>
-
-        <h4 className="text-lg font-bold text-slate-900">
-          {value}
-        </h4>
-
-        <p className="text-[11px] text-slate-400 font-medium">
-          {description}
-        </p>
-      </div>
-    </div>
   );
 }

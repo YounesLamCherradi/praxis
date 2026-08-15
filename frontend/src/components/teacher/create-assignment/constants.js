@@ -34,7 +34,6 @@ export const STUDENT_LEVELS = [
   "B2",
   "C1",
   "C2",
-  "Mixed level",
 ];
 
 export const DEFAULT_CRITERIA = [

@@ -7,7 +7,8 @@ test.describe("Authentication", () => {
 
     const { getErrors } = collectPageErrors(page);
     await login(page, "teacher");
-    await expect(page.getByText(/class work/i).first()).toBeVisible();
+    await expect(page).toHaveURL(/\/teacher(?:\?|$)/);
+    await expect(page.getByRole("button", { name: /create assignment/i }).first()).toBeVisible();
     expect(getErrors(), "no JS errors on teacher dashboard").toEqual([]);
   });
 
@@ -16,7 +17,8 @@ test.describe("Authentication", () => {
 
     const { getErrors } = collectPageErrors(page);
     await login(page, "student");
-    await expect(page.getByText(/student view/i).first()).toBeVisible();
+    await expect(page).toHaveURL(/\/student(?:\?|$)/);
+    await expect(page.getByRole("button", { name: /enter course code/i })).toBeVisible();
     expect(getErrors(), "no JS errors on student dashboard").toEqual([]);
   });
 
@@ -25,12 +27,10 @@ test.describe("Authentication", () => {
 
     const { getErrors } = collectPageErrors(page);
     const { email } = getCredentials("teacher");
-    await page.goto("/index.html");
-    await page.getByPlaceholder("Email").first().fill(email);
-    await page.getByPlaceholder("Password", { exact: true }).fill("definitely-not-the-real-password-123");
-
-    // VERIFY: This scopes the click to the visible sign-in form, not the auth tab.
-    await page.locator("#auth-signin-form").getByRole("button", { name: /^sign in$/i }).click();
+    await page.goto("/login");
+    await page.getByLabel(/campus email/i).fill(email);
+    await page.getByLabel(/^password$/i).fill("definitely-not-the-real-password-123");
+    await page.getByRole("button", { name: /sign in to portal/i }).click();
 
     await expect(page.locator("#auth-error")).toBeVisible({ timeout: 20_000 });
     await expect(page.locator("#auth-error")).toContainText(/invalid|wrong|password|email|credentials|login/i);
@@ -41,6 +41,26 @@ test.describe("Authentication", () => {
       "no JS errors during failed login (beyond expected auth error)"
     ).toEqual([]);
   });
+
+  for (const account of [
+    { route: "/signup", heading: "Student registration" },
+    { route: "/instructor-signup", heading: "Instructor registration" },
+  ]) {
+    test(`${account.heading} is accessible on mobile`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(account.route);
+
+      await expect(page.getByRole("heading", { name: account.heading })).toBeVisible();
+      await expect(page.getByLabel(/full name/i)).toHaveAttribute("autocomplete", "name");
+      await expect(page.getByLabel(/campus email address/i)).toHaveAttribute("autocomplete", "email");
+      await expect(page.getByLabel(/create password/i)).toHaveAttribute("autocomplete", "new-password");
+
+      const hasHorizontalOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > window.innerWidth
+      );
+      expect(hasHorizontalOverflow).toBe(false);
+    });
+  }
 
   test("logged-in user can log out", async ({ page }) => {
     test.skip(!hasCredentials("teacher"), "Set TEACHER_EMAIL and TEACHER_PASSWORD to run this test.");

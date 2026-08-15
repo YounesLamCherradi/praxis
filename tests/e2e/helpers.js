@@ -22,29 +22,25 @@ function hasAllCredentials() {
 async function login(page, role) {
   const { email, password } = getCredentials(role);
 
-  await page.goto("/index.html");
+  await page.goto("/login");
+  await page.getByLabel(/campus email/i).fill(email);
+  await page.getByLabel(/^password$/i).fill(password);
+  await page.getByRole("button", { name: /sign in to portal/i }).click();
 
-  // The sign-in form uses placeholder text rather than visible labels.
-  await page.getByPlaceholder("Email").first().fill(email);
-  await page.getByPlaceholder("Password", { exact: true }).fill(password);
-
-  // VERIFY: This scopes the button to the sign-in form because the auth tabs also
-  // contain visible "Sign in" text.
-  await page.locator("#auth-signin-form").getByRole("button", { name: /^sign in$/i }).click();
-
-  // "Sign out" is now inside the avatar <details> dropdown and hidden until opened.
-  // Wait for the avatar trigger (aria-label="Account menu") which is always visible
-  // after a successful login. Use attribute selector — Playwright's getByRole('button')
-  // does not match <summary> elements even when their implicit ARIA role is button.
-  await expect(page.locator('[aria-label="Account menu"]')).toBeVisible({ timeout: 30_000 });
+  // Both redesigned workspaces expose a role-specific account-menu button once
+  // authentication and profile routing have completed.
+  await expect(
+    page.getByRole("button", { name: /open (?:instructor|student) account menu/i })
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 async function logout(page) {
-  // Sign out is inside the avatar dropdown — open it first.
-  const accountMenu = page.locator('[aria-label="Account menu"]');
+  const accountMenu = page.getByRole("button", {
+    name: /open (?:instructor|student) account menu/i,
+  });
   await accountMenu.click();
-  await page.getByRole("button", { name: /sign out/i }).click();
-  await expect(page.getByRole("button", { name: /^sign in$/i }).last()).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: /log out/i }).click();
+  await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible({ timeout: 15_000 });
 }
 
 async function selectTeacherTestClass(page) {

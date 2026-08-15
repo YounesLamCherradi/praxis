@@ -115,12 +115,12 @@ export default function WhatWeOffer() {
 
       <div className="relative z-10 max-w-7xl mx-auto px-6 lg:px-8">
         <div className="max-w-3xl mx-auto text-center mb-12 offer-slide">
-          <span className="inline-flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-blue-300 bg-blue-500/10 px-3.5 py-1.5 rounded-full border border-blue-400/20">
+          <span className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-3.5 py-1.5 text-xs font-semibold text-blue-300">
             <Sparkles className="w-3.5 h-3.5" />
-            Key Features
+            Key features
           </span>
 
-          <h2 className="mt-4 text-3xl sm:text-5xl font-serif font-black text-white tracking-tight">
+          <h2 className="mt-4 text-3xl font-bold tracking-tight text-white sm:text-5xl">
             What Praxis offers
           </h2>
 

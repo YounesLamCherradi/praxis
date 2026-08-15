@@ -125,6 +125,37 @@ test("combined grading workspace keeps AI, rubric, feedback, annotations, and sa
     profiles: null,
     version: 1,
   };
+  await page.route("**/api/teacher/workspace", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      classes: [{
+        id: "class_e2e",
+        name: "English E2E",
+        invite_code: "ENG-E2E",
+        teacher_id: "teacher_e2e",
+        is_published: true,
+        class_members: [{
+          student_id: "student_e2e",
+          status: "approved",
+          profiles: {
+            id: "student_e2e",
+            name: "Ava Tester",
+            email: "ava@test.local",
+          },
+        }],
+      }],
+      assignments: [{
+        id: "assignment_e2e",
+        class_id: "class_e2e",
+        title: fixture.assignments[0].title,
+        prompt: "Review the argument.",
+        status: "published",
+        rubric: fixture.assignments[0].rubricSchema,
+      }],
+      submissions: [{ ...databaseSubmission, detail_loaded: false }],
+    }),
+  }));
   await page.route("**/api/classes/class_e2e/submissions", (route) => route.fulfill({
     status: 200,
     contentType: "application/json",

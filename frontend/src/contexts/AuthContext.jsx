@@ -14,6 +14,14 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  async function discardAuthenticatedQueries() {
+    // Allow observers to finish cancellation before removing their cache.
+    // Calling clear() directly reports normal logout cancellation as an error
+    // from every in-flight workspace query.
+    await queryClient.cancelQueries(undefined, { silent: true });
+    queryClient.removeQueries();
+  }
+
   useEffect(() => {
     let active = true;
 
@@ -49,7 +57,7 @@ export function AuthProvider({ children }) {
   async function signIn(email, password, stayLoggedIn = true) {
     // Query keys are shared by route, so remove the previous account's
     // authenticated data before establishing a different session.
-    queryClient.clear();
+    await discardAuthenticatedQueries();
     const profile = await AuthService.signIn(
       email,
       password,
@@ -62,7 +70,7 @@ export function AuthProvider({ children }) {
   }
 
   async function signUp(name, email, password, role, otpCode = "") {
-    queryClient.clear();
+    await discardAuthenticatedQueries();
     const profile = otpCode
       ? await AuthService.signUpWithCode(
           name,
@@ -84,8 +92,9 @@ export function AuthProvider({ children }) {
   }
 
   async function signOut() {
+    await queryClient.cancelQueries(undefined, { silent: true });
     await AuthService.signOut();
-    queryClient.clear();
+    queryClient.removeQueries();
     setUser(null);
   }
 

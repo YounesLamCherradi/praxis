@@ -316,9 +316,33 @@ export async function getTeacherSubmissions() {
   return (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission);
 }
 
+export async function getTeacherWorkspaceSnapshot() {
+  const data = await request("/api/teacher/workspace");
+  return {
+    classes: (Array.isArray(data.classes) ? data.classes : []).map(normalizeCourse),
+    assignments: (Array.isArray(data.assignments) ? data.assignments : []).map(normalizeAssignment),
+    submissions: (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission),
+  };
+}
+
+export async function getStudentWorkspaceSnapshot() {
+  const data = await request("/api/student/workspace");
+  return {
+    classes: (Array.isArray(data.classes) ? data.classes : []).map(normalizeCourse),
+    pendingClasses: (Array.isArray(data.pendingClasses) ? data.pendingClasses : []).map(normalizeCourse),
+    assignments: (Array.isArray(data.assignments) ? data.assignments : []).map(normalizeAssignment),
+    submissions: (Array.isArray(data.submissions) ? data.submissions : []).map(normalizeSubmission),
+  };
+}
+
 export async function getSubmissionDetails(submissionId) {
   const data = await request(`/api/submissions/${encodeURIComponent(submissionId)}`);
-  return normalizeSubmission(data.submission);
+  return {
+    ...normalizeSubmission(data.submission),
+    attempts: (Array.isArray(data.attempts) ? data.attempts : [data.submission])
+      .filter(Boolean)
+      .map(normalizeSubmission),
+  };
 }
 
 export function buildTeacherReviewPayload(submission = {}) {
@@ -574,3 +598,4 @@ export async function submitMyAssignment(assignmentId, submission) {
   }
 }
 import { requestJson } from "./auth.js";
+import { normalizeCourse } from "./courseApi.js";

@@ -10,12 +10,11 @@ import {
   getPraxisData,
   savePraxisData,
 } from "../services/praxisMockStore";
-import { getStudentCourses } from "../services/courseApi";
 import {
   getOrCreateMySubmission,
-  getStudentAssignments,
   getStudentSubmissions,
   getStudentSubmissionSummaries,
+  getStudentWorkspaceSnapshot,
   saveMySubmission,
   submitMyAssignment,
 } from "../services/teacherApi";
@@ -131,11 +130,31 @@ function getAiFeedbackEntries(submission = {}) {
 }
 
 function loadStudentStepOverrides() {
-  return {};
+  if (typeof window === "undefined") return {};
+  const profile = getCurrentStudentProfile();
+  const studentKey = String(profile.id || profile.email || "student").toLowerCase();
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(`praxis_student_steps:${studentKey}`) || "{}"
+    );
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function saveStudentStepOverrides(overrides = {}) {
-  void overrides;
+  if (typeof window === "undefined") return;
+  const profile = getCurrentStudentProfile();
+  const studentKey = String(profile.id || profile.email || "student").toLowerCase();
+  try {
+    window.localStorage.setItem(
+      `praxis_student_steps:${studentKey}`,
+      JSON.stringify(overrides || {})
+    );
+  } catch {
+    // Workflow remains usable when storage is unavailable.
+  }
 }
 
 function notifyPraxisDataChanged() {
@@ -150,9 +169,10 @@ function refreshStudentSubmissionsAfterMutation() {
   // The mutation response is authoritative. A follow-up cache refresh can fail
   // independently (for example, while an expired session cookie is being
   // refreshed) and must never turn a successful submit into a failure message.
-  return queryClient.invalidateQueries({
-    queryKey: queryKeys.studentSubmissions,
-  }).catch((error) => {
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: queryKeys.studentSubmissions }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.studentWorkspace }),
+  ]).catch((error) => {
     console.warn("Submission saved, but the submission cache could not refresh:", error);
   });
 }
@@ -1527,6 +1547,13 @@ function getDeadlineDate(
 const sharedPersistentSaveQueues = new Map();
 const sharedDurableSubmissionRefs = new Map();
 
+function isExpectedQueryCancellation(error) {
+  return (
+    error?.name === "CancelledError" ||
+    error?.constructor?.name === "CancelledError"
+  );
+}
+
 function getStudentPersistenceKey(assignmentId, submission = null) {
   const profile = getCurrentStudentProfile();
   const studentKey = submission?.studentId || profile.id || profile.email;
@@ -1626,8 +1653,27 @@ export function StudentWorkspaceProvider({
 
   const [
     typedText,
-    setTypedText,
+    setTypedTextState,
   ] = useState("");
+  const typedTextRef = useRef("");
+  const typedTextDirtyRef = useRef(false);
+  const typedTextAssignmentRef = useRef("");
+
+  function setTypedText(nextValue) {
+    // Mark the editor dirty synchronously. React may defer execution of the
+    // state-updater callback, while a hydration effect from the same event
+    // batch can run first.
+    typedTextDirtyRef.current = true;
+    if (typeof nextValue !== "function") {
+      typedTextRef.current = String(nextValue ?? "");
+    }
+    setTypedTextState((current) => {
+      const resolved =
+        typeof nextValue === "function" ? nextValue(current) : nextValue;
+      typedTextRef.current = String(resolved ?? "");
+      return resolved;
+    });
+  }
 
   const [
     studentWorkflowNotice,
@@ -1759,11 +1805,12 @@ export function StudentWorkspaceProvider({
       }));
       syncPromise = (async () => {
        try {
-        const { classes: backendClasses } = await queryClient.fetchQuery({
-          queryKey: queryKeys.studentCourses,
-          queryFn: getStudentCourses,
-          staleTime: 30_000,
+        const workspaceSnapshot = await queryClient.fetchQuery({
+          queryKey: queryKeys.studentWorkspace,
+          queryFn: getStudentWorkspaceSnapshot,
+          staleTime: 2 * 60_000,
         });
+        const backendClasses = workspaceSnapshot.classes;
         if (!active) return;
 
         const profile = getCurrentStudentProfile();
@@ -1814,29 +1861,19 @@ export function StudentWorkspaceProvider({
           }
         });
 
-        const [assignmentGroups, backendSubmissions] = await Promise.all([
-          Promise.all(
-            backendClasses.map(async (course) => {
-              const rows = await queryClient.fetchQuery({
-                queryKey: queryKeys.classAssignments(course.id),
-                queryFn: () => getStudentAssignments(course.id),
-                staleTime: 30_000,
-              });
-              return rows.map((assignment) => ({
-                ...assignment,
-                classId: course.id,
-                classCode: course.code || "",
-                className: course.name || "",
-              }));
-            })
-          ),
-          queryClient.fetchQuery({
-            queryKey: [...queryKeys.studentSubmissions, "all"],
-            queryFn: () => getStudentSubmissions([]),
-            staleTime: 30_000,
-          }),
-        ]);
-        const backendAssignments = assignmentGroups.flat();
+        const coursesById = new Map(
+          backendClasses.map((course) => [String(course.backendId || course.id), course])
+        );
+        const backendAssignments = workspaceSnapshot.assignments.map((assignment) => {
+          const course = coursesById.get(String(assignment.classId));
+          return {
+            ...assignment,
+            classId: course?.id || assignment.classId,
+            classCode: course?.code || "",
+            className: course?.name || "",
+          };
+        });
+        const backendSubmissions = workspaceSnapshot.submissions;
         const persistedSubmissions = backendSubmissions.map((submission) => {
           const assignment = backendAssignments.find(
             (entry) => String(entry.id) === String(submission.assignmentId)
@@ -1934,7 +1971,9 @@ export function StudentWorkspaceProvider({
           });
         }
       } catch (error) {
-        console.error("Could not load enrolled courses from Supabase:", error);
+        if (!isExpectedQueryCancellation(error)) {
+          console.error("Could not load enrolled courses from Supabase:", error);
+        }
         if (active) {
           setWorkspaceSyncState((current) => ({
             ...current,
@@ -2209,9 +2248,31 @@ export function StudentWorkspaceProvider({
 
   useEffect(() => {
     if (!selectedAssignmentId) {
-      setTypedText("");
+      typedTextAssignmentRef.current = "";
+      typedTextDirtyRef.current = false;
+      typedTextRef.current = "";
+      setTypedTextState("");
       return;
     }
+
+    const assignmentKey = String(selectedAssignmentId);
+    const assignmentChanged = typedTextAssignmentRef.current !== assignmentKey;
+    const persistedText =
+      studentStep >= 3
+        ? getFinalText(activeSubmission) || getDraftText(activeSubmission)
+        : getDraftText(activeSubmission);
+
+    if (assignmentChanged) {
+      typedTextAssignmentRef.current = assignmentKey;
+      typedTextDirtyRef.current = false;
+      typedTextRef.current = String(persistedText || "");
+      setTypedTextState(persistedText || "");
+      return;
+    }
+
+    // Creating the durable database row changes activeSubmission.id. That
+    // late hydration must never replace text already entered in this editor.
+    if (typedTextDirtyRef.current) return;
 
     /*
       Hydrate when the assignment or attempt changes.
@@ -2219,16 +2280,13 @@ export function StudentWorkspaceProvider({
       the exact latest Draft/Final text into typedText.
     */
     if (studentStep >= 3) {
-      setTypedText(
-        getFinalText(activeSubmission) ||
-          getDraftText(activeSubmission)
-      );
+      typedTextRef.current = String(persistedText || "");
+      setTypedTextState(persistedText || "");
       return;
     }
 
-    setTypedText(
-      getDraftText(activeSubmission)
-    );
+    typedTextRef.current = String(persistedText || "");
+    setTypedTextState(persistedText || "");
   }, [
     selectedAssignmentId,
     activeSubmission?.id,
@@ -4011,17 +4069,17 @@ export function StudentWorkspaceProvider({
 
     clearStudentWorkflowNotice();
     saveActiveStudentAssignmentId(assignmentId);
+    typedTextAssignmentRef.current = String(assignmentId);
+    typedTextDirtyRef.current = false;
     setSelectedAssignmentId(assignmentId);
     setStudentStep(nextStep);
 
-    if (nextStep >= 3) {
-      setTypedText(
-        getFinalText(submission) ||
-          getDraftText(submission)
-      );
-    } else {
-      setTypedText(getDraftText(submission));
-    }
+    const openingText =
+      nextStep >= 3
+        ? getFinalText(submission) || getDraftText(submission)
+        : getDraftText(submission);
+    typedTextRef.current = String(openingText || "");
+    setTypedTextState(openingText || "");
 
     return true;
   }

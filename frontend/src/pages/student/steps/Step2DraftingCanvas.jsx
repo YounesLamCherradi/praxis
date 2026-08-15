@@ -830,11 +830,12 @@ export default function Step2DraftingCanvas() {
       )
     );
 
+    let persistence = null;
     if (
       assignmentId &&
       typeof saveDraftProgress === "function"
     ) {
-      saveDraftProgress(assignmentId, {
+      persistence = saveDraftProgress(assignmentId, {
         draftText: nextValue,
         content: nextValue,
         wordCount: countWords(nextValue),
@@ -852,7 +853,7 @@ export default function Step2DraftingCanvas() {
       });
     }
 
-    return savedAt;
+    return { savedAt, persistence };
   }
 
   function scheduleAutosave(nextValue) {
@@ -862,9 +863,12 @@ export default function Step2DraftingCanvas() {
       clearTimeout(autosaveTimerRef.current);
     }
 
-    autosaveTimerRef.current = setTimeout(() => {
+    autosaveTimerRef.current = setTimeout(async () => {
       try {
-        const savedAt = persistWritingEvidence(nextValue);
+        const { savedAt, persistence } = persistWritingEvidence(nextValue);
+        if (persistence && typeof persistence.then === "function") {
+          await persistence;
+        }
 
         setLastSavedAt(savedAt);
         setSaveStatus("saved");
@@ -1117,7 +1121,7 @@ export default function Step2DraftingCanvas() {
     }
   }
 
-  function handleBlur() {
+  async function handleBlur() {
     /*
      * Switching browser tabs can throttle the normal debounced autosave.
      * Flush the exact controlled-editor value before any focus-triggered
@@ -1129,9 +1133,17 @@ export default function Step2DraftingCanvas() {
       autosaveTimerRef.current = null;
     }
 
-    const savedAt = persistWritingEvidence(draftValue);
+    const { savedAt, persistence } = persistWritingEvidence(draftValue);
     setLastSavedAt(savedAt);
-    setSaveStatus("saved");
+    setSaveStatus("saving");
+    try {
+      if (persistence && typeof persistence.then === "function") {
+        await persistence;
+      }
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+    }
 
     if (!settings.trackFocusLoss) return;
 
@@ -1176,7 +1188,7 @@ export default function Step2DraftingCanvas() {
 
   }
 
-  function handleReviewDraft() {
+  async function handleReviewDraft() {
     if (!hasDraftText) {
       showWarning(
         "Write part of your draft before continuing."
@@ -1194,11 +1206,21 @@ export default function Step2DraftingCanvas() {
       autosaveTimerRef.current = null;
     }
 
-    const savedAt =
+    const { savedAt, persistence } =
       persistWritingEvidence(draftValue);
 
     setLastSavedAt(savedAt);
-    setSaveStatus("saved");
+    setSaveStatus("saving");
+    try {
+      if (persistence && typeof persistence.then === "function") {
+        await persistence;
+      }
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+      showWarning("Your draft is safe in this browser, but it could not be saved online. Try again before continuing.");
+      return;
+    }
 
     const feedbackRequestKey = `praxis-request-inline-feedback:${assignmentId}`;
     try {
@@ -1225,7 +1247,7 @@ export default function Step2DraftingCanvas() {
     }
   }
 
-  function handleContinueForward() {
+  async function handleContinueForward() {
     if (!hasDraftText) {
       showWarning("Write part of your draft before continuing.");
       return;
@@ -1236,9 +1258,19 @@ export default function Step2DraftingCanvas() {
       autosaveTimerRef.current = null;
     }
 
-    const savedAt = persistWritingEvidence(draftValue);
+    const { savedAt, persistence } = persistWritingEvidence(draftValue);
     setLastSavedAt(savedAt);
-    setSaveStatus("saved");
+    setSaveStatus("saving");
+    try {
+      if (persistence && typeof persistence.then === "function") {
+        await persistence;
+      }
+      setSaveStatus("saved");
+    } catch {
+      setSaveStatus("error");
+      showWarning("Your draft is safe in this browser, but it could not be saved online. Try again before continuing.");
+      return;
+    }
 
     goToStudentStep(4, {
       draftText: draftValue,

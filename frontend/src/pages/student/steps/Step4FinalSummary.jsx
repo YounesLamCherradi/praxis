@@ -167,27 +167,13 @@ function getLatestAiFeedback(feedbackHistory = []) {
   });
 }
 
-function wrapPdfText(value, maxLength = 88) {
-  const words = String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ")
-    .filter(Boolean);
-  const lines = [];
-  let line = "";
-
-  words.forEach((word) => {
-    const next = line ? `${line} ${word}` : word;
-    if (next.length <= maxLength) {
-      line = next;
-      return;
-    }
-    if (line) lines.push(line);
-    line = word;
-  });
-
-  if (line) lines.push(line);
-  return lines.length ? lines : [""];
+function escapeReportHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function downloadGradeReportPdf({ assignment, submission, rubric }) {
@@ -199,107 +185,97 @@ function downloadGradeReportPdf({ assignment, submission, rubric }) {
     Number(submission.rubricTotal || rubric?.totalPoints || 0) ||
     criteria.reduce((sum, criterion) => sum + Number(criterion.points || 0), 0) ||
     100;
-  const lines = [
-    "PRAXIS GRADE REPORT",
-    "",
-    `Assignment: ${assignment?.title || submission.assignmentTitle || "Assignment"}`,
-    `Attempt: ${Number(submission.attemptNumber || 1)}`,
-    `Submitted: ${formatDateTime(submission.submittedAt) || "Not recorded"}`,
-    `Reviewed: ${formatDateTime(submission.reviewedAt) || "Not recorded"}`,
-    `Final grade: ${submission.score} / ${total}`,
-    "",
-    "INSTRUCTOR FEEDBACK",
-    ...wrapPdfText(submission.feedback || "No overall feedback was provided."),
-  ];
-
-  if (criteria.length) {
-    lines.push("", "RUBRIC RESULTS");
-    criteria.forEach((criterion) => {
-      const entry = getRubricScoreEntry(rubricScores, criterion.id);
-      lines.push(
-        "",
-        `${criterion.name}: ${entry.score ?? "-"} / ${criterion.points}`,
-        ...wrapPdfText(
-          [entry.bandLabel, entry.comment].filter(Boolean).join(" - ") ||
-            "No criterion-specific feedback was provided."
-        )
-      );
-    });
-  }
-
+  const score = submission.score ?? "—";
+  const studentName =
+    submission.studentName || submission._studentName || submission.name || "Student";
+  const finalText = getSubmissionText(submission);
+  const draftText = String(submission.draftText || submission.typedText || finalText || "");
+  const draftWordCount = countWords(draftText);
+  const finalWordCount = countWords(finalText);
   const annotations = safeArray(submission.annotations);
-  if (annotations.length) {
-    lines.push("", "HIGHLIGHTED NOTES");
-    annotations.forEach((annotation, index) => {
-      lines.push(
-        "",
-        ...wrapPdfText(
-          `${index + 1}. ${annotation.selectedText ? `\"${annotation.selectedText}\" - ` : ""}${
-            annotation.comment || annotation.feedback || annotation.note || "Instructor note"
-          }`
-        )
-      );
-    });
-  }
+  const normalizedAnnotations = normalizeAnnotationRanges(finalText, annotations);
+  const chat = safeArray(
+    submission.planningChatMessages?.length
+      ? submission.planningChatMessages
+      : submission.planningChat?.length
+        ? submission.planningChat
+        : submission.chatHistory
+  );
+  const events = safeArray(submission.writingEvents);
 
-  const ascii = (value) =>
-    String(value || "")
-      .normalize("NFKD")
-      .replace(/[^\x20-\x7E]/g, "?")
-      .replace(/\\/g, "\\\\")
-      .replace(/\(/g, "\\(")
-      .replace(/\)/g, "\\)");
-  const pages = [];
-  for (let index = 0; index < lines.length; index += 48) {
-    pages.push(lines.slice(index, index + 48));
-  }
-
-  const objects = [];
-  const pageRefs = pages.map((_, index) => 4 + index * 2);
-  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
-  objects[2] = `<< /Type /Pages /Kids [${pageRefs.map((ref) => `${ref} 0 R`).join(" ")}] /Count ${pages.length} >>`;
-  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
-
-  pages.forEach((pageLines, index) => {
-    const pageRef = 4 + index * 2;
-    const contentRef = pageRef + 1;
-    const stream = [
-      "BT",
-      "/F1 10 Tf",
-      "50 790 Td",
-      "14 TL",
-      ...pageLines.map((line) => `(${ascii(line)}) Tj T*`),
-      "ET",
-    ].join("\n");
-    objects[pageRef] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentRef} 0 R >>`;
-    objects[contentRef] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  let cursor = 0;
+  const annotatedParts = [];
+  normalizedAnnotations.forEach((annotation, index) => {
+    annotatedParts.push(escapeReportHtml(finalText.slice(cursor, annotation.rangeStart)));
+    annotatedParts.push(
+      `<mark id="report-highlight-${index}" role="link" tabindex="0" onclick="jumpToReportItem('report-comment-${index}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();jumpToReportItem('report-comment-${index}')}" title="Open instructor comment">${escapeReportHtml(finalText.slice(annotation.rangeStart, annotation.rangeEnd))}<sup>${escapeReportHtml(annotation.code || "NOTE")} ${index + 1}</sup></mark>`
+    );
+    cursor = annotation.rangeEnd;
   });
+  annotatedParts.push(escapeReportHtml(finalText.slice(cursor)));
 
-  let pdf = "%PDF-1.4\n";
-  const offsets = [0];
-  for (let index = 1; index < objects.length; index += 1) {
-    offsets[index] = pdf.length;
-    pdf += `${index} 0 obj\n${objects[index]}\nendobj\n`;
-  }
-  const xrefOffset = pdf.length;
-  pdf += `xref\n0 ${objects.length}\n0000000000 65535 f \n`;
-  for (let index = 1; index < objects.length; index += 1) {
-    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
-  }
-  pdf += `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  const rubricRows = criteria.map((criterion) => {
+    const entry = getRubricScoreEntry(rubricScores, criterion.id);
+    const matchedBand = safeArray(criterion.bands).find(
+      (band) => Number(band.points) === Number(entry.score)
+    );
+    const label = entry.bandLabel || matchedBand?.label || "Not scored";
+    const detail = entry.comment || matchedBand?.description || "";
+    return `<tr><td><strong>${escapeReportHtml(criterion.name)}</strong>${criterion.description ? `<small>${escapeReportHtml(criterion.description)}</small>` : ""}</td><td><strong>${escapeReportHtml(label)}</strong>${detail ? `<small>${escapeReportHtml(detail)}</small>` : ""}</td><td class="score">${entry.score ?? "—"} / ${criterion.points}</td></tr>`;
+  }).join("");
 
-  const blobUrl = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
-  const link = document.createElement("a");
-  const safeTitle = String(assignment?.title || "assignment")
-    .replace(/[^a-z0-9]+/gi, "-")
-    .replace(/^-|-$/g, "")
-    .toLowerCase();
-  link.href = blobUrl;
-  link.download = `${safeTitle || "assignment"}-grade.pdf`;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+  const chatRows = chat.map((message) => {
+    const isCoach = String(message?.role || "").toLowerCase() === "assistant";
+    const createdAt = message?.createdAt || message?.timestamp;
+    return `<div class="message-row ${isCoach ? "coach" : "student"}"><div class="avatar">${isCoach ? "P" : escapeReportHtml(String(studentName).slice(0, 1).toUpperCase())}</div><div class="message"><div class="message-meta"><strong>${isCoach ? "Praxis coach" : escapeReportHtml(studentName)}</strong>${createdAt ? `<time>${escapeReportHtml(formatDateTime(createdAt))}</time>` : ""}</div><p>${escapeReportHtml(message?.content || message?.text || "")}</p></div></div>`;
+  }).join("");
+
+  const insertionCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("insert")).length;
+  const deletionCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("delete")).length;
+  const pasteCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("paste")).length;
+  const changedCharacters = events.reduce(
+    (sum, event) => sum + Math.abs(Number(event?.delta || event?.addedChars || event?.deletedChars || 0)), 0
+  );
+  const eventRows = [
+    ["Insertions", `${insertionCount} events`],
+    ["Deletions", `${deletionCount} events`],
+    ["Pastes", `${pasteCount} events`],
+    ["Total characters changed", changedCharacters.toLocaleString()],
+    ["Total editing events", events.length.toLocaleString()],
+  ].map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`).join("");
+
+  const annotationRows = normalizedAnnotations.map((annotation, index) => {
+    const code = annotation.code || "NOTE";
+    const meaning = annotation.label || (code === "GOOD" ? "Positive feedback" : code === "NOTE" ? "Instructor note" : "Revision note");
+    const comment = annotation.comment || annotation.feedback || annotation.note || "";
+    return `<tr id="report-comment-${index}" class="annotation-row" tabindex="0" onclick="jumpToReportItem('report-highlight-${index}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();jumpToReportItem('report-highlight-${index}')}" title="Return to highlighted text"><td><strong>${escapeReportHtml(code)} ${index + 1}</strong><small>${escapeReportHtml(meaning)}</small></td><td>“${escapeReportHtml(annotation.selectedText || "")}”</td><td>${escapeReportHtml(comment)}</td></tr>`;
+  }).join("");
+
+  const reflection =
+    submission.reflections?.improved || submission.reflectionText || submission.reflection || "—";
+  const title = assignment?.title || submission.assignmentTitle || "Assignment";
+  const prompt = assignment?.prompt || assignment?.description || submission.assignmentPrompt || "No assignment prompt recorded.";
+  const deadline = assignment?.deadline || assignment?.dueDate || assignment?.dueAt;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeReportHtml(title)} — Grade report</title><style>
+    @page{size:letter;margin:15mm 14mm 17mm}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:#172033;font:11pt/1.5 Georgia,"Times New Roman",serif;background:#f5f8ff}main{max-width:820px;margin:28px auto;padding:28px 32px;background:#fff;border:1px solid #dbe5f2;border-radius:18px;box-shadow:0 18px 45px rgba(30,64,175,.08)}.brand{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:3px solid #2563eb}.brand-name{color:#1745d1;font:700 18px Arial,sans-serif;letter-spacing:.02em}.report-label{color:#64748b;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.12em}h1{font-size:22px;line-height:1.25;margin:20px 0 8px;color:#0f172a}h2{color:#1d4ed8;font-size:15px;margin:25px 0 10px;padding-bottom:5px;border-bottom:1px solid #bfdbfe;break-after:avoid}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:25px;padding-bottom:5px;border-bottom:1px solid #bfdbfe}.section-heading h2{margin:0;padding:0;border:0}.count-badge{display:inline-flex;align-items:center;border:1px solid #bfdbfe;border-radius:999px;padding:3px 8px;background:#eff6ff;color:#1d4ed8;font:700 9px Arial,sans-serif}.meta{color:#52627a;font-size:10.5pt;margin-bottom:20px}.meta strong{color:#172033}.summary{display:grid;grid-template-columns:130px 1fr;gap:14px;align-items:center;background:#eff6ff;border:1px solid #bfdbfe;border-left:5px solid #2563eb;border-radius:12px;padding:14px 16px}.grade{font:700 25px Arial,sans-serif;color:#1745d1}.feedback{border-left:1px solid #bfdbfe;padding-left:14px}.feedback strong{display:block;color:#334155;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}table{width:100%;border-collapse:separate;border-spacing:0;font-size:10pt;border:1px solid #dbe5f2;border-radius:10px;overflow:hidden}th{text-align:left;color:#334155;background:#eaf2ff;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em}th,td{padding:8px 9px;border-bottom:1px solid #dbe5f2;vertical-align:top}tbody tr:last-child td{border-bottom:0}td.score{white-space:nowrap;color:#1745d1;font-weight:700}small{display:block;color:#64748b;font-size:9pt;margin-top:3px}.chat-thread{max-height:430px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin;padding:14px;background:linear-gradient(180deg,#f8fbff,#f5f8ff);border:1px solid #dbeafe;border-radius:14px}.chat-thread::-webkit-scrollbar,.scroll-text::-webkit-scrollbar{width:8px}.chat-thread::-webkit-scrollbar-track,.scroll-text::-webkit-scrollbar-track{background:#eaf2ff;border-radius:999px}.chat-thread::-webkit-scrollbar-thumb,.scroll-text::-webkit-scrollbar-thumb{background:#93b4f8;border:2px solid #eaf2ff;border-radius:999px}.message-row{display:flex;align-items:flex-end;gap:8px;margin:10px 0;break-inside:avoid}.message-row:first-child{margin-top:0}.message-row:last-child{margin-bottom:0}.message-row.student{flex-direction:row-reverse}.avatar{display:flex;width:28px;height:28px;flex:0 0 28px;align-items:center;justify-content:center;border-radius:10px;background:#2563eb;color:#fff;font:700 10px Arial,sans-serif;box-shadow:0 3px 8px #2563eb25}.message-row.student .avatar{background:#10b981}.message{max-width:78%;padding:9px 12px;border:1px solid #dbe5f2;border-radius:6px 14px 14px 14px;background:#fff;box-shadow:0 3px 10px rgba(30,64,175,.05)}.message-row.student .message{border-color:#a7f3d0;border-radius:14px 6px 14px 14px;background:#ecfdf5}.message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.message strong{color:#52627a;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.07em}.message time{color:#94a3b8;font:8px Arial,sans-serif;white-space:nowrap}.message p{margin:3px 0 0}.text-box{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #dbe5f2;border-radius:10px;padding:14px;font-size:10.5pt}.scroll-text{max-height:360px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin}mark{background:#fef3c7;border-bottom:2px solid #f59e0b;border-radius:3px;padding:1px 2px;cursor:pointer;transition:box-shadow .2s,background .2s}mark:hover,mark:focus{background:#fde68a;outline:none;box-shadow:0 0 0 3px rgba(245,158,11,.2)}sup{color:#b45309;font:700 7px Arial,sans-serif;margin-left:2px}.annotation-row{cursor:pointer;transition:background .2s,box-shadow .2s}.annotation-row:hover,.annotation-row:focus{background:#eff6ff;outline:none}.report-focus{animation:reportPulse 1.5s ease}@keyframes reportPulse{0%,100%{box-shadow:none}20%,70%{box-shadow:inset 0 0 0 3px rgba(37,99,235,.32);background:#dbeafe}}.empty{color:#64748b;font-style:italic}.print-action{position:sticky;top:12px;float:right;border:0;border-radius:999px;padding:9px 16px;color:white;background:#1769ff;font:700 12px Arial,sans-serif;cursor:pointer;box-shadow:0 5px 15px #2563eb33}.footer-note{margin-top:28px;padding-top:10px;border-top:1px solid #dbe5f2;color:#64748b;font:9px Arial,sans-serif}.section{break-inside:auto}@media print{body{background:#fff}main{max-width:none;margin:0;padding:0;border:0;border-radius:0;box-shadow:none}.print-action{display:none}.brand{margin-top:0}h2{margin-top:18px}.section-heading{margin-top:18px}.count-badge{background:#fff}.chat-thread{max-height:none;overflow:visible;padding:0;background:#fff;border:0;border-radius:0}.scroll-text{max-height:none;overflow:visible}.message-row,tr,.summary{break-inside:avoid}.text-box{break-inside:auto}.annotation-row{cursor:default}.footer-note{position:running(reportFooter)}}
+  </style><script>function jumpToReportItem(id){var target=document.getElementById(id);if(!target)return;target.scrollIntoView({behavior:'smooth',block:'center'});target.classList.remove('report-focus');void target.offsetWidth;target.classList.add('report-focus');window.setTimeout(function(){target.classList.remove('report-focus')},1600)}</script></head><body><main><button class="print-action" onclick="window.print()">Print / Save PDF</button><header class="brand"><span class="brand-name">praxis</span><span class="report-label">Student grade report</span></header>
+    <h1>${escapeReportHtml(title)}</h1><div class="meta">Student: <strong>${escapeReportHtml(studentName)}</strong> &nbsp;·&nbsp; Status: <strong>${escapeReportHtml(getStatusLabel(submission.status))}</strong> &nbsp;·&nbsp; Attempt: <strong>${Number(submission.attemptNumber || 1)}</strong><br>Submitted: <strong>${escapeReportHtml(formatDateTime(submission.submittedAt) || "Not recorded")}</strong>${deadline ? ` &nbsp;·&nbsp; Due: <strong>${escapeReportHtml(formatDateTime(deadline))}</strong>` : ""}</div>
+    <section><h2>Assignment</h2><p>${escapeReportHtml(prompt)}</p></section>
+    <section><h2>Teacher grade summary</h2><div class="summary"><div><span class="report-label">Final grade</span><div class="grade">${escapeReportHtml(score)} / ${total}</div></div><div class="feedback"><strong>Overall feedback</strong>${escapeReportHtml(submission.feedback || "No overall feedback was provided.")}</div></div></section>
+    <section><h2>Rubric breakdown</h2><table><thead><tr><th>Criterion</th><th>Selected band</th><th>Score</th></tr></thead><tbody>${rubricRows || '<tr><td colspan="3" class="empty">No rubric available.</td></tr>'}</tbody></table></section>
+    <section><div class="section-heading"><h2>1 — Coaching conversation</h2><span class="count-badge">${chat.length} ${chat.length === 1 ? "message" : "messages"}</span></div><div class="chat-thread">${chatRows || '<p class="empty">No conversation recorded.</p>'}</div></section>
+    <section><h2>2 — Draft writing log</h2><table><thead><tr><th>Event type</th><th>Summary</th></tr></thead><tbody>${eventRows}</tbody></table><div class="section-heading"><h2>Draft text</h2><span class="count-badge">${draftWordCount} ${draftWordCount === 1 ? "word" : "words"}</span></div><div class="text-box scroll-text">${escapeReportHtml(draftText || "No draft recorded.")}</div></section>
+    <section><div class="section-heading"><h2>3 — Final submission</h2><span class="count-badge">${finalWordCount} ${finalWordCount === 1 ? "word" : "words"}</span></div><div class="text-box scroll-text">${annotatedParts.join("") || "No final submission recorded."}</div></section>
+    ${normalizedAnnotations.length ? `<section><h2>Teacher annotations</h2><table><thead><tr><th>Code</th><th>Selected text</th><th>Comment</th></tr></thead><tbody>${annotationRows}</tbody></table></section>` : ""}
+    <section><h2>Reflection — what I improved</h2><p>${escapeReportHtml(reflection)}</p></section><div class="footer-note">Generated by Praxis · ${escapeReportHtml(formatDateTime(new Date()))}</div>
+  </main></body></html>`;
+
+  const report = window.open("", "_blank");
+  if (!report) return;
+  report.document.open();
+  report.document.write(html);
+  report.document.close();
+  report.focus();
 }
 
 /* =====================================================
@@ -943,15 +919,18 @@ function TeacherFeedbackModal({
   ];
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483646]">
-      <button
-        type="button"
-        aria-label="Close instructor feedback"
-        onClick={onClose}
-        className="absolute inset-0 bg-slate-950/35 backdrop-blur-[2px]"
+    <div className="fixed inset-0 z-[2147483646] flex items-center justify-center p-0 sm:p-4">
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 bg-slate-950/45 backdrop-blur-[3px]"
       />
 
-      <aside className="absolute inset-y-0 right-0 flex w-[min(96vw,760px)] flex-col border-l border-slate-200 bg-[#F8FAFC] shadow-2xl animate-slide-in-right">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="instructor-review-title"
+        className="relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden bg-[#F8FAFC] shadow-2xl sm:h-[min(92vh,900px)] sm:w-[min(94vw,1100px)] sm:rounded-3xl sm:border sm:border-slate-200 animate-fade-in-up"
+      >
         <header className="shrink-0 border-b border-slate-200 bg-white">
           <div className="flex items-start justify-between gap-4 px-5 py-3.5">
             <div className="min-w-0">
@@ -963,7 +942,7 @@ function TeacherFeedbackModal({
                 </p>
               </div>
 
-              <h2 className="mt-1 truncate font-serif text-lg font-bold text-slate-950">
+              <h2 id="instructor-review-title" className="mt-1 truncate font-serif text-lg font-bold text-slate-950">
                 {assignment?.title ||
                   submission.assignmentTitle ||
                   "Assignment Feedback"}
@@ -999,6 +978,7 @@ function TeacherFeedbackModal({
             <button
               type="button"
               onClick={onClose}
+              aria-label="Close instructor review"
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-white hover:text-slate-900"
             >
               <X className="h-4 w-4" />
@@ -1284,7 +1264,7 @@ function TeacherFeedbackModal({
             Done Reviewing
           </button>
         </footer>
-      </aside>
+      </section>
     </div>,
     document.body
   );

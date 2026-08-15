@@ -3900,7 +3900,16 @@ app.get('/api/notifications/diagnose-submission', async (req, res) => {
 app.get('/api/auth/me', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    if (!user) {
+      // A visitor with no refresh cookie is simply anonymous. Returning 200
+      // prevents every public login/signup page from producing a failed
+      // request and attempting a refresh that cannot succeed. A browser with
+      // a refresh cookie still receives 401 so restoreSession can renew it.
+      if (!getCookieValue(req, 'praxis_rt')) {
+        return res.json({ profile: null, authenticated: false });
+      }
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
     const profile = await getProfile(user.id);
     if (!profile) return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
     res.json({ profile: sanitizeProfileForClient(profile) });
@@ -3960,6 +3969,51 @@ app.get('/api/classes', async (req, res) => {
     res.json({ classes: data });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Load the teacher dashboard as one consistent snapshot. Existing per-course
+// endpoints remain available for focused refreshes and mutations.
+app.get('/api/teacher/workspace', async (req, res) => {
+  try {
+    const { user, error: teacherError, status } = await requireTeacherProfile(req);
+    if (teacherError) return res.status(status).json({ error: teacherError });
+
+    const { data: classes, error: classError } = await supabase
+      .from('classes')
+      .select('*, class_members(student_id, status, profiles(id, name, email))')
+      .eq('teacher_id', user.id)
+      .order('created_at', { ascending: false });
+    if (classError) return res.status(400).json({ error: classError.message });
+
+    const classIds = (classes || []).map((entry) => entry.id).filter(Boolean);
+    if (!classIds.length) {
+      return res.json({ classes: [], assignments: [], submissions: [] });
+    }
+
+    const { data: assignments, error: assignmentError } = await supabase
+      .from('assignments')
+      .select('*')
+      .in('class_id', classIds)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false });
+    if (assignmentError) return res.status(400).json({ error: assignmentError.message });
+
+    const assignmentIds = (assignments || []).map((entry) => entry.id).filter(Boolean);
+    const { data: submissions, error: submissionError } = assignmentIds.length
+      ? await querySubmissionSummariesForAssignments(assignmentIds, supabase)
+      : { data: [], error: null };
+    if (submissionError) return res.status(400).json({ error: submissionError.message });
+
+    res.set('Cache-Control', 'private, no-cache');
+    return res.json({
+      classes: classes || [],
+      assignments: assignments || [],
+      submissions: submissions || [],
+    });
+  } catch (error) {
+    console.error('Unexpected teacher workspace failure:', safeLogError(error));
+    return res.status(500).json({ error: 'Could not load the teaching workspace right now.' });
   }
 });
 
@@ -4417,6 +4471,96 @@ app.get('/api/student/classes', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Student bootstrap equivalent of the teacher snapshot. Draft content is
+// intentionally included because students must be able to continue writing
+// immediately; teacher list snapshots omit that heavy content.
+app.get('/api/student/workspace', async (req, res) => {
+  try {
+    const user = await getUser(req);
+    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const readClient = getRequestScopedSupabase(req);
+
+    const { data: memberships, error: membershipError } = await readClient
+      .from('class_members')
+      .select('class_id, status')
+      .eq('student_id', user.id);
+    if (membershipError) return res.status(400).json({ error: membershipError.message });
+
+    const classIds = Array.from(new Set((memberships || []).map((entry) => entry.class_id).filter(Boolean)));
+    if (!classIds.length) {
+      return res.json({ classes: [], pendingClasses: [], assignments: [], submissions: [] });
+    }
+
+    const [{ data: classRows, error: classError }, { data: assignments, error: assignmentError }] =
+      await Promise.all([
+        supabase
+          .from('classes')
+          .select('id, name, teacher_id, invite_code, description, semester, is_published, archived, profiles(name)')
+          .in('id', classIds),
+        readClient
+          .from('assignments')
+          .select('*')
+          .in('class_id', classIds)
+          .is('deleted_at', null)
+          .eq('status', 'published')
+          .order('created_at', { ascending: false }),
+      ]);
+    if (classError) return res.status(400).json({ error: classError.message });
+    if (assignmentError) return res.status(400).json({ error: assignmentError.message });
+
+    const classesById = new Map((classRows || []).map((entry) => [String(entry.id), entry]));
+    const activeClasses = [];
+    const pendingClasses = [];
+    (memberships || []).forEach((membership) => {
+      const course = classesById.get(String(membership.class_id));
+      if (!course) return;
+      if (membership.status === 'pending') pendingClasses.push(course);
+      else activeClasses.push(course);
+    });
+
+    const assignmentIds = (assignments || []).map((entry) => entry.id).filter(Boolean);
+    let submissions = [];
+    if (assignmentIds.length) {
+      const { data, error } = await readClient
+        .from('submissions')
+        .select([
+          'id', 'assignment_id', 'student_id', 'status', 'draft_text', 'final_text',
+          'outline', 'chat_history', 'feedback_history', 'self_assessment', 'teacher_review',
+          'chat_started_at', 'chat_skipped_at', 'chat_expired_at', 'chat_elapsed_ms',
+          'started_at', 'submitted_at', 'created_at', 'updated_at', 'version',
+        ].join(','))
+        .eq('student_id', user.id)
+        .in('assignment_id', assignmentIds);
+      if (error) return res.status(400).json({ error: error.message });
+      const submissionIds = (data || []).map((entry) => entry.id).filter(Boolean);
+      let revisions = [];
+      if (submissionIds.length) {
+        const { data: revisionRows, error: revisionError } = await supabase
+          .from('submission_revisions')
+          .select('submission_id, revision_number, snapshot, change_type, created_at')
+          .in('submission_id', submissionIds)
+          .in('change_type', ['submitted', 'reviewed'])
+          .order('revision_number', { ascending: true });
+        if (revisionError) return res.status(400).json({ error: revisionError.message });
+        revisions = revisionRows || [];
+      }
+      submissions = buildSubmissionAttemptList(data || [], revisions)
+        .map(normalizeStudentVisibleSubmission);
+    }
+
+    res.set('Cache-Control', 'private, no-cache');
+    return res.json({
+      classes: activeClasses,
+      pendingClasses,
+      assignments: assignments || [],
+      submissions,
+    });
+  } catch (error) {
+    console.error('Unexpected student workspace failure:', safeLogError(error));
+    return res.status(500).json({ error: 'Could not load your workspace right now.' });
   }
 });
 
@@ -5065,6 +5209,25 @@ app.delete('/api/assignments/:id', async (req, res) => {
 
 // ── Submissions endpoints ────────────────────────────────────
 
+async function querySubmissionSummariesForAssignments(assignmentIds, client = supabase) {
+  if (!Array.isArray(assignmentIds) || assignmentIds.length === 0) {
+    return { data: [], error: null };
+  }
+  const { data, error } = await client
+    .from('submissions')
+    .select([
+      'id', 'assignment_id', 'student_id', 'status', 'self_assessment',
+      'teacher_review', 'submitted_at', 'started_at', 'created_at', 'updated_at',
+      'version', 'profiles(id, name, email)',
+    ].join(','))
+    .in('assignment_id', assignmentIds)
+    .is('deleted_at', null);
+  return {
+    data: (data || []).map((submission) => ({ ...submission, detail_loaded: false })),
+    error,
+  };
+}
+
 async function querySubmissionsForAssignments(
   assignmentIds,
   client = supabase,
@@ -5267,6 +5430,7 @@ app.get('/api/student/submissions', async (req, res) => {
       .from('assignments')
       .select('id')
       .in('class_id', classIds)
+      .is('deleted_at', null)
       .eq('status', 'published');
     if (requestedAssignmentIds.length) {
       assignmentQuery = assignmentQuery.in('id', requestedAssignmentIds);
@@ -5701,7 +5865,22 @@ app.get('/api/submissions/:id', async (req, res) => {
       .maybeSingle();
     if (error) return res.status(isRlsDenial(error) ? 403 : 400).json({ error: error.message });
     if (!data) return res.status(404).json({ error: 'Submission not found' });
-    res.json({ submission: { ...data, detail_loaded: true } });
+    const { data: revisionRows, error: revisionError } = await supabase
+      .from('submission_revisions')
+      .select('submission_id, revision_number, snapshot, change_type, created_at')
+      .eq('submission_id', data.id)
+      .in('change_type', ['submitted', 'reviewed'])
+      .order('revision_number', { ascending: true });
+    if (revisionError) return res.status(400).json({ error: revisionError.message });
+    const attempts = buildSubmissionAttemptList([data], revisionRows || []).map((attempt) => ({
+      ...attempt,
+      detail_loaded: true,
+    }));
+    const currentAttempt = attempts.find((attempt) => attempt.is_current === true || attempt.isCurrent === true);
+    res.json({
+      submission: currentAttempt || { ...data, detail_loaded: true },
+      attempts,
+    });
   } catch (error) {
     console.error('Unexpected submission detail failure:', errorClassForLog(error));
     res.status(500).json({ error: 'Could not load this submission right now. Please try again.' });
@@ -6009,17 +6188,17 @@ app.get('/api/admin/teachers', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
+    const readClient = supabase;
     let { data, error } = await readClient
       .from('profiles')
-      .select('id, name, role, created_at, is_test_account')
-      .in('role', ['teacher', 'admin'])
+      .select('id, name, email, role, created_at, is_test_account')
+      .eq('role', 'teacher')
       .order('created_at', { ascending: false });
     if (error && isMissingProfileFlagColumn(error)) {
       const retry = await readClient
         .from('profiles')
-        .select('id, name, role, created_at')
-        .in('role', ['teacher', 'admin'])
+        .select('id, name, email, role, created_at')
+        .eq('role', 'teacher')
         .order('created_at', { ascending: false });
       data = (retry.data || []).map(addDefaultProfileFlags);
       error = retry.error;
@@ -6046,7 +6225,15 @@ app.get('/api/admin/teachers', async (req, res) => {
         assignmentCount: teacherAssignments.length,
         publishedCount: teacherAssignments.filter(a => a.status === 'published').length,
         studentCount: teacherStudents.size,
-        classes: teacherClasses,
+        classes: teacherClasses.map((course) => ({
+          ...course,
+          assignmentCount: (assignments || []).filter((assignment) => assignment.class_id === course.id).length,
+          studentCount: new Set(
+            (members || [])
+              .filter((member) => member.class_id === course.id)
+              .map((member) => member.student_id)
+          ).size,
+        })),
       };
     });
     res.json({ teachers });
@@ -6059,7 +6246,7 @@ app.get('/api/admin/teachers/:teacherId/classes', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
+    const readClient = supabase;
     let { data: classes, error } = await readClient
       .from('classes')
       .select('*, class_members(student_id, profiles(id, name, role, is_test_account))')
@@ -6096,15 +6283,15 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
-    const readClient = getRequestScopedSupabase(req);
+    const readClient = supabase;
     const assignPromise = readClient.from('assignments').select('*').eq('class_id', req.params.classId).order('created_at', { ascending: false });
-    let memberPromise = readClient.from('class_members').select('student_id, profiles(id, name, role, is_test_account)').eq('class_id', req.params.classId);
+    let memberPromise = readClient.from('class_members').select('student_id, profiles(id, name, email, role, is_test_account)').eq('class_id', req.params.classId);
     let [assignData, memberData] = await Promise.all([
       assignPromise,
       memberPromise
     ]);
     if (memberData.error && isMissingProfileFlagColumn(memberData.error)) {
-      memberData = await readClient.from('class_members').select('student_id, profiles(id, name, role)').eq('class_id', req.params.classId);
+      memberData = await readClient.from('class_members').select('student_id, profiles(id, name, email, role)').eq('class_id', req.params.classId);
       memberData.data = (Array.isArray(memberData.data) ? memberData.data : []).map((member) => ({
         ...member,
         profiles: addDefaultProfileFlags(member.profiles),
@@ -6472,6 +6659,10 @@ Important rules:
 - Give suggestions only.
 - The teacher must review and decide.
 - Be fair, concise, and rubric-based.
+- Use the rubric performance bands for normal, scorable work.
+- A criterion score may be any number from 0 up to that criterion's maximum; it is not limited to the listed band point values.
+- Suggest a score below the lowest rubric band only when the response is missing, irrelevant, ungradable, or does not demonstrate even the minimum performance described by that band.
+- When scoring below the lowest band, use bandLabel "Below minimum band" and clearly explain the reason in the criterion comment.
 - Do not accuse the student of cheating.
 - Integrity signals are context only, not automatic grades.
 - Return ONLY valid JSON. No markdown.

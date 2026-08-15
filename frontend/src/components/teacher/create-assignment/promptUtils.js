@@ -111,10 +111,56 @@ function normalizeAssignmentType(value) {
 function normalizeLanguageLevel(value) {
   const clean = getText(value).toUpperCase();
 
-  if (clean.includes("MIXED")) return "Mixed level";
-
   const match = clean.match(/\b(A1|A2|B1|B2|C1|C2)\b/);
   return match?.[1] || "B1";
+}
+
+export function inferYearlessDueDate(value, currentDate = new Date()) {
+  const text = getText(value);
+  if (!text) return "";
+
+  const match = text.match(
+    /(?:^|\D)(\d{1,2})\s*[\/.\-]\s*(\d{1,2})(?!\s*[\/.\-]\s*\d)(?:\s+(?:at\s*)?(\d{1,2})(?::(\d{2}))?)?/i
+  );
+  if (!match) return "";
+
+  const day = Number(match[1]);
+  const month = Number(match[2]);
+  const hour = match[3] === undefined ? 23 : Number(match[3]);
+  const minute = match[4] === undefined ? 59 : Number(match[4]);
+  const now = new Date(currentDate);
+
+  if (
+    Number.isNaN(now.getTime()) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour < 0 ||
+    hour > 23 ||
+    minute < 0 ||
+    minute > 59
+  ) {
+    return "";
+  }
+
+  let year = now.getFullYear();
+  let resolved = new Date(year, month - 1, day, hour, minute, 0, 0);
+
+  if (
+    resolved.getMonth() !== month - 1 ||
+    resolved.getDate() !== day
+  ) {
+    return "";
+  }
+
+  if (resolved.getTime() < now.getTime()) {
+    year += 1;
+    resolved = new Date(year, month - 1, day, hour, minute, 0, 0);
+  }
+
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${resolved.getFullYear()}-${pad(resolved.getMonth() + 1)}-${pad(resolved.getDate())}T${pad(resolved.getHours())}:${pad(resolved.getMinutes())}`;
 }
 
 function normalizeDueDate(value) {
@@ -385,6 +431,7 @@ Important rules:
 - Select only a course from the provided available-course list.
 - If no course is mentioned, select the first available course.
 - If no due date is mentioned, set it seven days after the provided current date at 23:59 local time.
+- Interpret yearless numeric dates as DD/MM. Infer the current year when the date is still upcoming; otherwise use the next year. Example: after July 14, "14/07" means July 14 of the next year.
 - If no assignment type is clear, use "Response".
 - If no level is stated, use "B1".
 - If no grade scale is stated, use 20.
@@ -405,7 +452,7 @@ Return this exact JSON shape:
   "instructions": "student-facing instructions",
   "requirements": ["requirement 1", "requirement 2"],
   "assignmentType": "Response | Definition | Argument | Narrative | Compare and Contrast | Process Paragraph | Reflection | Summary | Analysis | Other",
-  "languageLevel": "A1 | A2 | B1 | B2 | C1 | C2 | Mixed level",
+  "languageLevel": "A1 | A2 | B1 | B2 | C1 | C2",
   "gradeScale": 20,
   "minWords": 250,
   "maxWords": 400,

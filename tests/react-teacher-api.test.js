@@ -55,3 +55,70 @@ test("React autosave payload sends a full event array if existing history was re
   ]);
   assert.equal(payload.writing_events_append, undefined);
 });
+
+test("teacher workspace snapshot preserves course, assignment, and submission identities", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => {
+    assert.equal(path, "/api/teacher/workspace");
+    return new Response(JSON.stringify({
+      classes: [{ id: "class-1", name: "Writing", invite_code: "JOIN123" }],
+      assignments: [{
+        id: "assignment-1",
+        class_id: "class-1",
+        title: "Essay",
+        status: "published",
+        rubric: { criteria: [{ id: "criterion-1" }] },
+      }],
+      submissions: [{
+        id: "submission-1",
+        assignment_id: "assignment-1",
+        student_id: "student-1",
+        status: "submitted",
+        profiles: { name: "Student One", email: "student@aui.ma" },
+        detail_loaded: false,
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  try {
+    const { getTeacherWorkspaceSnapshot } = await loadTeacherApi();
+    const snapshot = await getTeacherWorkspaceSnapshot();
+    assert.equal(snapshot.classes[0].code, "JOIN123");
+    assert.equal(snapshot.assignments[0].classId, "class-1");
+    assert.equal(snapshot.assignments[0].rubric.length, 1);
+    assert.equal(snapshot.submissions[0].assignmentId, "assignment-1");
+    assert.equal(snapshot.submissions[0].studentName, "Student One");
+    assert.equal(snapshot.submissions[0].detailLoaded, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("student workspace snapshot keeps persisted draft content available", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (path) => {
+    assert.equal(path, "/api/student/workspace");
+    return new Response(JSON.stringify({
+      classes: [{ id: "class-1", name: "Writing" }],
+      pendingClasses: [],
+      assignments: [{ id: "assignment-1", class_id: "class-1", status: "published" }],
+      submissions: [{
+        id: "submission-1",
+        assignment_id: "assignment-1",
+        student_id: "student-1",
+        status: "draft",
+        draft_text: "My saved draft",
+        chat_history: [{ role: "student", content: "Idea" }],
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+
+  try {
+    const { getStudentWorkspaceSnapshot } = await loadTeacherApi();
+    const snapshot = await getStudentWorkspaceSnapshot();
+    assert.equal(snapshot.submissions[0].draftText, "My saved draft");
+    assert.equal(snapshot.submissions[0].chatHistory.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

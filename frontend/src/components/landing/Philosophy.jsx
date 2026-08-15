@@ -54,12 +54,12 @@ export default function Philosophy() {
       <div className="relative z-10 max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid lg:grid-cols-[1.15fr_0.85fr] gap-8 lg:gap-12 items-center">
           <div className="space-y-6 text-center lg:text-left">
-            <span className="inline-flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-blue-300 bg-blue-500/10 px-3.5 py-1.5 rounded-full border border-blue-400/20">
+            <span className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-3.5 py-1.5 text-xs font-semibold text-blue-300">
               <ShieldCheck className="w-3.5 h-3.5" />
-              The Praxis Writing Philosophy
+              The Praxis writing philosophy
             </span>
 
-            <blockquote className="font-serif text-3xl sm:text-4xl lg:text-[2.65rem] leading-tight tracking-tight text-white italic">
+            <blockquote className="text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl lg:text-[2.65rem]">
               “A perfect text with no visible process is harder to trust than
               an honest draft that shows thinking, revision, and growth.”
             </blockquote>
@@ -67,7 +67,7 @@ export default function Philosophy() {
             <div className="w-16 h-0.5 bg-blue-400 mx-auto lg:mx-0" />
 
             <div className="space-y-2">
-              <p className="text-base sm:text-lg font-serif font-semibold text-blue-50">
+              <p className="text-base font-semibold text-blue-50 sm:text-lg">
                 Praxis values the writing process, not only the final answer.
               </p>
 

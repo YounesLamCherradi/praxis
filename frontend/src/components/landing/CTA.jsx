@@ -9,8 +9,8 @@ export default function CTA() {
         <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 to-indigo-500/10 mix-blend-overlay" />
         
         <div className="relative z-10 text-center space-y-6 max-w-2xl mx-auto">
-          <h2 className="font-serif text-4xl sm:text-5xl font-semibold leading-tight">
-            Bring Praxis to your AUI Courses today.
+          <h2 className="text-4xl font-bold leading-tight sm:text-5xl">
+            Bring Praxis to your AUI courses today.
           </h2>
           <p className="text-emerald-200/90 text-base sm:text-lg font-sans">
             Start with safe workspaces for FAS, ENG, or MKT assignments. Invite students, upload standard rubrics, and champion original authorship.
@@ -20,7 +20,7 @@ export default function CTA() {
               to="/signup"
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm px-8 py-4 rounded-2xl shadow-lg shadow-emerald-600/20 flex items-center gap-2 transition-all hover:translate-y-[-1px]"
             >
-              Access Portal Instantly <ArrowRight className="w-4 h-4" />
+              Get started <ArrowRight className="w-4 h-4" />
             </Link>
           </div>
         </div>

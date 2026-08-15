@@ -11,7 +11,7 @@ import {
   Shield,
 } from "lucide-react";
 
-const ADMIN_EMAIL = "praxiswrite@aui.ma";
+const ADMIN_EMAIL = "admin@aui.ma";
 
 export default function AdminLogin() {
   const navigate = useNavigate();
@@ -29,12 +29,6 @@ export default function AdminLogin() {
     setError("");
 
     const cleanEmail = String(email || "").trim().toLowerCase();
-
-    if (cleanEmail !== ADMIN_EMAIL) {
-      setError("Only the Praxis admin account can sign in here.");
-      setLoading(false);
-      return;
-    }
 
     if (!password) {
       setError("Enter the admin password.");
@@ -79,8 +73,8 @@ export default function AdminLogin() {
             <span className="text-xs font-bold leading-none text-slate-700 transition-colors group-hover:text-blue-700">
               Back to Home
             </span>
-            <span className="mt-0.5 text-[9px] font-mono uppercase tracking-wider text-slate-500">
-              praxis website
+            <span className="mt-0.5 text-[11px] font-medium text-slate-500">
+              Praxis website
             </span>
           </div>
         </button>
@@ -94,14 +88,10 @@ export default function AdminLogin() {
                 <Shield className="h-7 w-7" />
               </div>
 
-              <h1 className="text-3xl font-serif font-black text-slate-950">Admin Access</h1>
+              <h1 className="text-3xl font-bold text-slate-950">Administrator sign in</h1>
 
               <p className="mt-2 text-sm text-slate-600">
-                Sign in to open the Praxis administrator dashboard.
-              </p>
-
-              <p className="mt-1 text-xs font-mono font-bold uppercase tracking-wider text-blue-700">
-                Secure admin entry
+                Sign in to manage Praxis courses, accounts, and platform settings.
               </p>
             </div>
 
@@ -114,8 +104,8 @@ export default function AdminLogin() {
 
             <form className="space-y-5" onSubmit={handleSubmit}>
               <div>
-                <label className="block text-xs font-mono font-bold uppercase tracking-wide text-slate-600">
-                  Admin Email
+                <label className="block text-sm font-semibold text-slate-700">
+                  Administrator email
                 </label>
 
                 <div className="relative mt-1.5 rounded-xl shadow-sm">
@@ -135,7 +125,7 @@ export default function AdminLogin() {
               </div>
 
               <div>
-                <label className="block text-xs font-mono font-bold uppercase tracking-wide text-slate-600">
+                <label className="block text-sm font-semibold text-slate-700">
                   Password
                 </label>
 
@@ -148,7 +138,7 @@ export default function AdminLogin() {
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter admin password"
+                    placeholder="Enter your password"
                     required
                     className="block w-full rounded-xl border border-slate-300 bg-white py-3 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none"
                   />
@@ -162,7 +152,7 @@ export default function AdminLogin() {
                   onChange={(e) => setStayLoggedIn(e.target.checked)}
                   className="h-4 w-4 rounded border-slate-300 accent-blue-600"
                 />
-                Keep me signed in on this device
+                Keep me signed in
               </label>
 
               <button
@@ -171,7 +161,7 @@ export default function AdminLogin() {
                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:bg-blue-600/60"
               >
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-                Sign in to admin
+                Sign in
               </button>
             </form>
           </div>

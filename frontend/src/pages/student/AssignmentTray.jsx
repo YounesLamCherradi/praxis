@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 import {
   Award,
@@ -113,6 +114,7 @@ export default function AssignmentTray() {
     openStudentAssignment,
     openingAssignmentId,
   } = useStudentWorkspace();
+  const [activeFilter, setActiveFilter] = useState("todo");
 
   function getCourseName(assignment = {}) {
     const matchedCourse = classes.find(
@@ -184,118 +186,246 @@ export default function AssignmentTray() {
 
     if (status === "graded") {
       return {
-        label: "GRADED",
+        label: "Graded",
         icon: Award,
         className: "bg-blue-50 text-blue-700 border border-blue-200",
-        buttonText: "View Grade & Feedback",
+        buttonText: "Review feedback",
       };
     }
 
     if (status === "submitted") {
       return {
-        label: "SUBMITTED",
+        label: "Submitted",
         icon: Send,
         className: "bg-indigo-50 text-indigo-700 border border-indigo-200",
-        buttonText: "View Submission",
+        buttonText: "View submission",
       };
     }
 
     if (status === "reopened") {
       return {
-        label: "REVISION REQUESTED",
+        label: "Revision requested",
         icon: FileEdit,
         className: "bg-sky-50 text-sky-700 border border-sky-200",
-        buttonText: "Revise and Resubmit",
+        buttonText: "Revise and resubmit",
       };
     }
 
     if (status === "late") {
       return {
-        label: "LATE",
+        label: "Submitted late",
         icon: Clock,
         className: "bg-amber-50 text-amber-700 border border-amber-200",
-        buttonText: "View Late Submission",
+        buttonText: "View submission",
       };
     }
 
     if (status === "missing") {
       return {
-        label: "MISSING",
+        label: "Past due",
         icon: FileEdit,
         className: "bg-red-50 text-red-700 border border-red-200",
-        buttonText: "Start Assignment",
+        buttonText: "Start assignment",
       };
     }
 
     if (status === "draft") {
       return {
-        label: "IN DRAFT",
+        label: "Draft",
         icon: FileEdit,
         className: "bg-slate-50 text-slate-600 border border-slate-200",
-        buttonText: "Continue Assignment",
+        buttonText: "Continue assignment",
       };
     }
 
     return {
-      label: "NOT STARTED",
+        label: "Not started",
       icon: BookOpen,
       className: "bg-slate-50 text-slate-600 border border-slate-200",
-      buttonText: "Open Assignment",
+      buttonText: "Open assignment",
     };
   }
 
+  function getAssignmentState(assignment) {
+    const submission = getSubmission(assignment.id);
+    const status = String(submission?.status || "todo").toLowerCase();
+    if (status === "graded") return "graded";
+    if (status === "submitted" || status === "late") return "submitted";
+    return "todo";
+  }
+
+  const filterCounts = useMemo(
+    () =>
+      filteredAssignments.reduce(
+        (counts, assignment) => {
+          const state = getAssignmentState(assignment);
+          counts[state] += 1;
+          counts.all += 1;
+          return counts;
+        },
+        { todo: 0, submitted: 0, graded: 0, all: 0 }
+      ),
+    [filteredAssignments, submissions]
+  );
+
+  const displayedAssignments = useMemo(
+    () =>
+      filteredAssignments
+        .filter(
+          (assignment) =>
+            activeFilter === "all" ||
+            getAssignmentState(assignment) === activeFilter
+        )
+        .sort((a, b) => {
+          const aDue = new Date(a.dueDate || a.deadline || 8640000000000000).getTime();
+          const bDue = new Date(b.dueDate || b.deadline || 8640000000000000).getTime();
+          return aDue - bDue;
+        }),
+    [activeFilter, filteredAssignments, submissions]
+  );
+
+  const filters = [
+    {
+      id: "todo",
+      label: "To do",
+      description: "Continue assignments that still need your attention.",
+    },
+    {
+      id: "submitted",
+      label: "Submitted",
+      description: "Track work waiting for instructor feedback.",
+    },
+    {
+      id: "graded",
+      label: "Graded",
+      description: "Review your grades and instructor feedback.",
+    },
+    {
+      id: "all",
+      label: "All",
+      description: "View every assignment across your courses.",
+    },
+  ];
+
+  const activeFilterDescription =
+    filters.find((filter) => filter.id === activeFilter)?.description ||
+    "Continue unfinished work or review completed assignments.";
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="space-y-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Your assignments
+          </h2>
+          <p
+            className="mt-1 text-xs font-medium text-slate-500"
+            aria-live="polite"
+          >
+            {activeFilterDescription}
+          </p>
+        </div>
+
+        <div
+          className="flex w-fit max-w-full flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
+          aria-label="Filter assignments by status"
+        >
+          {filters.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              onClick={() => setActiveFilter(filter.id)}
+              aria-pressed={activeFilter === filter.id}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                activeFilter === filter.id
+                  ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                  : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+              }`}
+            >
+              {filter.label}
+              <span className={`inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 font-mono text-[9px] ${
+                activeFilter === filter.id
+                  ? "bg-white/20 text-white"
+                  : "bg-slate-100 text-slate-500"
+              }`}>
+                {filterCounts[filter.id]}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
       {filteredAssignments.length === 0 ? (
         <div className="col-span-full border border-dashed border-slate-300 rounded-2xl p-12 text-center text-xs font-mono text-slate-400 uppercase tracking-widest bg-[#F8FAFC]/70">
           No assignments found for this course.
         </div>
+      ) : displayedAssignments.length === 0 ? (
+        <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
+          <p className="text-sm font-semibold text-slate-700">Nothing here right now</p>
+          <p className="mt-1 text-xs text-slate-500">Choose another tab to view your other assignments.</p>
+        </div>
       ) : (
-        filteredAssignments.map((assignment) => {
+        displayedAssignments.map((assignment) => {
           const submission = getSubmission(assignment.id);
           const status = String(submission?.status || "todo").toLowerCase();
           const statusConfig = getStatusConfig(status);
           const StatusIcon = statusConfig.icon;
           const deadline =
             formatAssignmentDeadline(assignment);
+          const gradeMaximum =
+            submission?.rubricTotal ||
+            assignment?.rubricTotal ||
+            assignment?.rubricSchema?.totalPoints ||
+            assignment?.gradeScale ||
+            null;
 
           return (
             <div
               key={assignment.id}
-              className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-col justify-between transition-all hover:shadow-lg hover:shadow-blue-100/60 hover:border-blue-200"
+              className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:border-blue-200 hover:shadow-md hover:shadow-blue-100/50"
             >
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-[10px] font-mono font-bold text-blue-700 uppercase tracking-wider bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md">
+                  <span className="max-w-[48%] truncate rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
                     {getCourseName(assignment)}
                   </span>
 
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${statusConfig.className}`}>
-                    <StatusIcon className="w-3 h-3" />
-                    {statusConfig.label}
-                  </span>
+                  {status === "graded" ? (
+                    <span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                      <Award className="h-3 w-3 shrink-0" />
+                      <span>Graded:</span>
+                      <span className="font-mono font-black">
+                        {submission.score ?? "N/A"}
+                        {gradeMaximum !== null && (
+                          <span className="ml-0.5 text-slate-500">/{gradeMaximum}</span>
+                        )}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className={`inline-flex min-w-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-0.5 text-[10px] font-semibold ${statusConfig.className}`}>
+                      <StatusIcon className="w-3 h-3" />
+                      {statusConfig.label}
+                    </span>
+                  )}
                 </div>
 
                 <div className="space-y-1">
-                  <h3 className="font-serif text-base font-black text-slate-900 line-clamp-1">
+                  <h3 className="line-clamp-1 text-sm font-semibold text-slate-900">
                     {assignment.title}
                   </h3>
-                  <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                  <p className="line-clamp-1 text-xs text-slate-500">
                     {assignment.description || assignment.prompt}
                   </p>
                 </div>
 
-                <div className="pt-2 flex items-end justify-between gap-3 text-[11px] font-medium text-slate-500">
+                <div className="flex items-center justify-between gap-3 text-[11px] font-medium text-slate-500">
                   <span className="inline-flex items-center gap-1.5 font-mono">
                     <FileText className="w-3.5 h-3.5 text-blue-400" />
                     {assignment.wordCountMin || assignment.minWords || 0}+ words
                   </span>
 
                   <div className="min-w-0 text-right">
-                    <span className="mb-1 block text-[8px] font-mono font-bold uppercase tracking-[0.18em] text-slate-400">
-                      Due
-                    </span>
-
                     <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
                       <span className="inline-flex items-center gap-1 whitespace-nowrap">
                         <Calendar className="w-3.5 h-3.5 text-blue-400" />
@@ -321,37 +451,9 @@ export default function AssignmentTray() {
                   </div>
                 </div>
 
-                {status === "graded" && (
-                  <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3">
-                    <p className="text-[11px] font-bold text-blue-700">
-                      Score: {submission.score ?? "N/A"}
-                    </p>
-                    {submission.feedback && (
-                      <p className="text-[11px] text-blue-800 mt-1 line-clamp-2">
-                        {submission.feedback}
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {status === "submitted" && (
-                  <div className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 p-3">
-                    <p className="text-[11px] font-bold text-indigo-700">
-                      Submitted, awaiting instructor review.
-                    </p>
-                  </div>
-                )}
-
-                {status === "reopened" && (
-                  <div className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3">
-                    <p className="text-[11px] font-bold text-sky-700">
-                      Your instructor requested a revision. The restored workflow starts again at brainstorming.
-                    </p>
-                  </div>
-                )}
               </div>
 
-              <div className="pt-5 border-t border-slate-100 mt-4">
+              <div className="mt-3 border-t border-slate-100 pt-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -370,7 +472,7 @@ export default function AssignmentTray() {
                     void import("./ActiveAssignmentWorkflow.jsx");
                   }}
                   disabled={Boolean(openingAssignmentId)}
-                  className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100 rounded-xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all group cursor-pointer"
+                  className="group flex w-full items-center justify-between rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition-all hover:border-blue-600 hover:bg-blue-600 hover:text-white"
                 >
                   <span>
                     {String(openingAssignmentId) === String(assignment.id)
@@ -384,6 +486,7 @@ export default function AssignmentTray() {
           );
         })
       )}
+      </div>
     </div>
   );
 }

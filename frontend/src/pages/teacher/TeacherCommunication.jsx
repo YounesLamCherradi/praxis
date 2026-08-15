@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -89,6 +89,8 @@ const MESSAGE_TEMPLATES = [
   },
 ];
 
+const HISTORY_PAGE_SIZE = 8;
+
 function formatDateTime(value) {
   if (!value) return "Not available";
 
@@ -139,6 +141,8 @@ export default function TeacherCommunication() {
   const [isSending, setIsSending] = useState(false);
   const [editingDraftId, setEditingDraftId] = useState("");
   const [detailMessage, setDetailMessage] = useState(null);
+  const [showSendPreview, setShowSendPreview] = useState(false);
+  const [historyPage, setHistoryPage] = useState(1);
 
   useEffect(() => {
     if (!systemMessage) return undefined;
@@ -282,6 +286,31 @@ export default function TeacherCommunication() {
       return matchesSearch;
     });
   }, [communicationMessages, historySearch]);
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil(filteredHistory.length / HISTORY_PAGE_SIZE)
+  );
+  const visibleHistoryPage = Math.min(historyPage, historyPageCount);
+  const paginatedHistory = filteredHistory.slice(
+    (visibleHistoryPage - 1) * HISTORY_PAGE_SIZE,
+    visibleHistoryPage * HISTORY_PAGE_SIZE
+  );
+  const composerMissingFields = useMemo(() => {
+    const missing = [];
+    if (!selectedCourse) missing.push("course");
+    if (selectedCourse && recipientEmails.length === 0) {
+      missing.push(recipientMode === "individual" ? "student" : "recipients");
+    }
+    if (!subject.trim()) missing.push("subject");
+    if (!messageBody.trim()) missing.push("message");
+    return missing;
+  }, [
+    messageBody,
+    recipientEmails.length,
+    recipientMode,
+    selectedCourse,
+    subject,
+  ]);
 
   function persistCommunicationMessage(message, successText, replaceId = "") {
     setSessionMessages((current) => [
@@ -369,12 +398,19 @@ export default function TeacherCommunication() {
 
     if (!validateComposer() || isSending) return;
 
+    setShowSendPreview(true);
+  }
+
+  async function handleConfirmSend() {
+    if (!validateComposer() || isSending) return;
+
     const isIndividualRecipient = recipientMode === "individual";
     const backendCourseId = selectedCourse.backendId || selectedCourse.id;
     const requestId = globalThis.crypto?.randomUUID?.() ||
       `message_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
     setIsSending(true);
+    setShowSendPreview(false);
 
     try {
       const delivery = await sendCourseMessage(backendCourseId, {
@@ -546,28 +582,25 @@ export default function TeacherCommunication() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in-up">
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase tracking-widest text-blue-700 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded">
+    <div className="space-y-4 animate-fade-in-up">
+      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-[11px] font-semibold text-blue-700">
               <MessageSquare className="w-3 h-3" />
-              Communication
+              Teacher messages
             </div>
 
-            <h2 className="text-2xl font-serif font-black text-slate-950">
-              Messages
-            </h2>
-
-            <p className="text-xs text-slate-500 font-medium max-w-2xl leading-relaxed">
-              Communicate with students and manage course announcements.
+            <h2 className="mt-2 text-xl font-bold text-slate-950">Messages</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Choose who should receive the message, write it, then review before sending.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
             <CommunicationTab
               active={activeView === "compose"}
-              label="Compose"
+              label="Compose email"
               icon={Mail}
               onClick={() => setActiveView("compose")}
             />
@@ -579,22 +612,7 @@ export default function TeacherCommunication() {
               onClick={() => setActiveView("history")}
             />
 
-            
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6">
-          <SummaryBox
-            label="Active Courses"
-            value={activeCourses.length}
-            icon={Users}
-          />
-
-          <SummaryBox
-            label="Message Records"
-            value={communicationMessages.length}
-            icon={Clock}
-          />
         </div>
       </div>
 
@@ -619,23 +637,32 @@ export default function TeacherCommunication() {
       )}
 
       {activeView === "compose" && (
-        <form onSubmit={handlePrepareSend} className="space-y-5">
-          <div className="grid grid-cols-1 xl:grid-cols-[1.6fr_0.9fr] gap-5">
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-5">
-              <div>
-                <h3 className="font-serif text-lg font-bold text-slate-950">
-                  {editingDraftId ? "Edit Draft" : "Compose Email"}
+        <form onSubmit={handlePrepareSend}>
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="space-y-4 p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                <h3 className="text-base font-bold text-slate-950">
+                  {editingDraftId ? "Edit draft" : "Compose email"}
                 </h3>
 
                 <p className="text-xs text-slate-500 mt-1">
-                  Send privately to all enrolled students or choose one
-                  individual student.
+                  Start by selecting a course and the intended recipients.
                 </p>
+                </div>
+                {selectedCourse && (
+                  <div className="inline-flex items-center gap-2 self-start rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
+                    {recipientMode === "individual" ? <UserRound className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+                    {recipientMode === "individual" && selectedStudent
+                      ? selectedStudent.studentName
+                      : `${recipientEmails.length} student${recipientEmails.length === 1 ? "" : "s"} selected`}
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-[minmax(220px,0.75fr)_1fr] gap-4">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                  <label className="block text-xs font-semibold text-slate-600">
                     Course
                   </label>
 
@@ -664,12 +691,13 @@ export default function TeacherCommunication() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                  <label className="block text-xs font-semibold text-slate-600">
                     Recipients
                   </label>
 
                   <select
                     value={recipientMode}
+                    disabled={!selectedCourse}
                     onChange={(e) => {
                       const nextMode = e.target.value;
                       setRecipientMode(nextMode);
@@ -681,7 +709,7 @@ export default function TeacherCommunication() {
                       setSystemError("");
                       setSystemMessage("");
                     }}
-                    className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                    className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <option value="all">All enrolled students</option>
                     <option value="individual">Individual student</option>
@@ -690,7 +718,7 @@ export default function TeacherCommunication() {
 
                 {recipientMode === "individual" && (
                   <div className="space-y-1.5 lg:col-span-2">
-                    <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                    <label className="block text-xs font-semibold text-slate-600">
                       Student
                     </label>
 
@@ -733,144 +761,101 @@ export default function TeacherCommunication() {
                 )}
               </div>
 
+              {selectedCourse && recipientEmails.length > 0 && (
+                <div className="flex flex-col gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs text-slate-600">
+                    <span className="font-bold text-slate-900">
+                      {recipientMode === "individual"
+                        ? selectedStudent?.studentName || "One student"
+                        : `${recipientEmails.length} enrolled student${recipientEmails.length === 1 ? "" : "s"}`}
+                    </span>{" "}
+                    will receive this email privately.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowBccList((current) => !current)}
+                    className="inline-flex shrink-0 items-center gap-1.5 text-xs font-bold text-blue-700 hover:text-blue-900"
+                  >
+                    {showBccList ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showBccList ? "Hide recipients" : "View recipients"}
+                  </button>
+                </div>
+              )}
+
+              {showBccList && recipientEmails.length > 0 && (
+                <div className="max-h-40 space-y-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  {recipientEmails.map((email) => (
+                    <div key={email} className="truncate rounded-lg bg-white px-3 py-2 text-[11px] text-slate-600">
+                      {email}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
-                  Email Subject
+                <label className="block text-xs font-semibold text-slate-600">
+                  Email subject
                 </label>
 
                 <input
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
+                  disabled={!selectedCourse}
                   placeholder="Example: Reminder about Essay 1"
-                  className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 block">
+                <label className="block text-xs font-semibold text-slate-600">
                   Message
                 </label>
 
                 <textarea
-                  rows={10}
+                  rows={7}
                   value={messageBody}
                   onChange={(e) => setMessageBody(e.target.value)}
+                  disabled={!selectedCourse}
                   placeholder="Write the message students will receive..."
-                  className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 resize-none leading-relaxed"
+                  className="min-h-44 w-full resize-y bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 leading-relaxed disabled:cursor-not-allowed disabled:opacity-60"
                 />
               </div>
+            </div>
 
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100">
+              <div className="sticky bottom-0 flex flex-col gap-3 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
                 <button
                   type="button"
                   onClick={handleSaveDraft}
                   className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-[#F8FAFC] transition-all text-xs font-bold"
                 >
                   <Save className="w-4 h-4" />
-                  {editingDraftId ? "Update Draft" : "Save Draft"}
+                  {editingDraftId ? "Update draft" : "Save draft"}
                 </button>
 
-                <button
-                  type="submit"
-                  disabled={isSending}
-                  className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-600/20"
-                >
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  {composerMissingFields.length > 0 && (
+                    <p className="text-[11px] font-medium text-slate-500">
+                      Complete: {composerMissingFields.join(", ")}.
+                    </p>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={isSending || composerMissingFields.length > 0}
+                    className="inline-flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all shadow-sm shadow-blue-600/20 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
+                  >
                   <Send className="w-4 h-4" />
                   {isSending
-                    ? "Sending Email..."
+                    ? "Sending email..."
                     : recipientMode === "individual" && selectedStudent
-                    ? `Send Email to ${
+                    ? `Review and send to ${
                         selectedStudent.studentName || "Student"
                       }`
-                    : `Send Email to ${recipientEmails.length} Student${
+                    : `Review and send to ${recipientEmails.length} student${
                         recipientEmails.length === 1 ? "" : "s"
                       }`}
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  {recipientMode === "individual" ? (
-                    <UserRound className="w-4 h-4 text-blue-600" />
-                  ) : (
-                    <Users className="w-4 h-4 text-blue-600" />
-                  )}
-
-                  <h3 className="font-serif text-sm font-bold text-slate-950">
-                    {recipientMode === "individual"
-                      ? "Selected Student"
-                      : "Course Recipients"}
-                  </h3>
+                  </button>
                 </div>
-
-                {recipientMode === "individual" ? (
-                  <>
-                    <p className="mt-4 truncate font-serif text-xl font-black text-slate-950">
-                      {selectedStudent?.studentName || "No student selected"}
-                    </p>
-
-                    <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
-                      {selectedStudent?.studentEmail ||
-                        "Choose an enrolled student from the form."}
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-3xl font-serif font-black text-slate-950 mt-4">
-                      {recipientEmails.length}
-                    </p>
-
-                    <p className="text-xs text-slate-500 mt-1">
-                      enrolled student
-                      {recipientEmails.length === 1 ? "" : "s"} in{" "}
-                      <span className="font-bold text-slate-800">
-                        {selectedCourse?.code || "No course"}
-                      </span>
-                    </p>
-                  </>
-                )}
-
-                <button
-                  type="button"
-                  disabled={recipientEmails.length === 0}
-                  onClick={() => setShowBccList((prev) => !prev)}
-                  className="mt-4 w-full inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2 text-xs font-bold text-slate-600 hover:bg-white transition-all disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {showBccList ? (
-                    <EyeOff className="w-4 h-4" />
-                  ) : (
-                    <Eye className="w-4 h-4" />
-                  )}
-                  {showBccList
-                    ? "Hide Recipient"
-                    : recipientMode === "individual"
-                    ? "View Recipient"
-                    : "Preview Recipient List"}
-                </button>
               </div>
-
-              {showBccList && (
-                <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm max-h-72 overflow-y-auto space-y-2">
-                  {recipientEmails.length === 0 ? (
-                    <p className="text-xs text-slate-400">
-                      No recipient selected.
-                    </p>
-                  ) : (
-                    recipientEmails.map((email) => (
-                      <div
-                        key={email}
-                        className="rounded-lg bg-[#F8FAFC] border border-slate-100 px-3 py-2 text-[10px] font-mono text-slate-600 truncate"
-                      >
-                        {email}
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-
-            </div>
           </div>
         </form>
       )}
@@ -879,8 +864,8 @@ export default function TeacherCommunication() {
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
           <div className="p-5 border-b border-slate-200 bg-[#F8FAFC] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
-              <h3 className="font-serif text-lg font-bold text-slate-950">
-                Communication History
+              <h3 className="text-base font-bold text-slate-950">
+                Message history
               </h3>
 
               <p className="text-xs text-slate-500 mt-1">
@@ -893,7 +878,10 @@ export default function TeacherCommunication() {
 
               <input
                 value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
+                onChange={(e) => {
+                  setHistorySearch(e.target.value);
+                  setHistoryPage(1);
+                }}
                 placeholder="Search history..."
                 className="w-full bg-white border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
               />
@@ -904,7 +892,7 @@ export default function TeacherCommunication() {
             <div className="p-12 text-center bg-white">
               <MessageSquare className="w-9 h-9 mx-auto text-slate-300 stroke-[1.5] mb-3" />
 
-              <h3 className="font-serif font-bold text-slate-900">
+              <h3 className="font-bold text-slate-900">
                 No communication records yet
               </h3>
 
@@ -914,7 +902,7 @@ export default function TeacherCommunication() {
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {filteredHistory.map((message) => (
+              {paginatedHistory.map((message) => (
                 <div
                   key={message.id}
                   role="button"
@@ -931,7 +919,7 @@ export default function TeacherCommunication() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
-                        className={`text-[9px] font-mono font-bold uppercase tracking-wider border px-2 py-0.5 rounded ${
+                        className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${
                           message.status === "Draft"
                             ? "bg-slate-100 text-slate-500 border-slate-200"
                             : message.status === "Email Could Not Be Sent"
@@ -942,12 +930,12 @@ export default function TeacherCommunication() {
                         {message.status}
                       </span>
 
-                      <span className="text-[9px] font-mono font-bold uppercase tracking-wider border px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border-indigo-100">
+                      <span className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
                         {message.channel}
                       </span>
                     </div>
 
-                    <h4 className="font-serif text-base font-bold text-slate-950 mt-2 truncate">
+                    <h4 className="mt-2 truncate text-base font-bold text-slate-950">
                       {message.subject}
                     </h4>
 
@@ -976,7 +964,7 @@ export default function TeacherCommunication() {
                   </div>
 
                   <div>
-                    <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    <p className="text-[11px] font-semibold text-slate-500">
                       Created
                     </p>
 
@@ -1000,7 +988,110 @@ export default function TeacherCommunication() {
               ))}
             </div>
           )}
+
+          {filteredHistory.length > HISTORY_PAGE_SIZE && (
+            <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs font-medium text-slate-500">
+                Showing {(visibleHistoryPage - 1) * HISTORY_PAGE_SIZE + 1}–
+                {Math.min(visibleHistoryPage * HISTORY_PAGE_SIZE, filteredHistory.length)} of {filteredHistory.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={visibleHistoryPage === 1}
+                  onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                <span className="text-xs font-bold text-slate-600">
+                  Page {visibleHistoryPage} of {historyPageCount}
+                </span>
+                <button
+                  type="button"
+                  disabled={visibleHistoryPage === historyPageCount}
+                  onClick={() => setHistoryPage((page) => Math.min(historyPageCount, page + 1))}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {showSendPreview && createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4">
+          <div aria-hidden="true" className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm" />
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="review-email-title"
+            className="relative z-10 w-full max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 p-5">
+              <div>
+                <p className="text-[10px] font-bold text-blue-600">Ready to send</p>
+                <h3 id="review-email-title" className="mt-1 text-lg font-bold text-slate-950">
+                  Review this email
+                </h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Confirm the recipients and content before sending.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSendPreview(false)}
+                className="rounded-xl border border-slate-200 bg-white p-2 text-slate-500 hover:bg-slate-100"
+                aria-label="Close email review"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="max-h-[65vh] space-y-4 overflow-y-auto p-5">
+              <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                <MessageDetail label="Course" value={selectedCourse ? `${selectedCourse.code || ""} - ${selectedCourse.name}` : ""} />
+                <MessageDetail
+                  label="Recipients"
+                  value={recipientMode === "individual"
+                    ? `${selectedStudent?.studentName || "Student"} (${selectedStudent?.studentEmail || ""})`
+                    : `${recipientEmails.length} enrolled student${recipientEmails.length === 1 ? "" : "s"}`}
+                />
+                <div className="sm:col-span-2">
+                  <MessageDetail label="Subject" value={subject.trim()} />
+                </div>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold text-slate-400">Message</p>
+                <div className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap rounded-2xl border border-slate-200 p-4 text-sm leading-6 text-slate-700">
+                  {messageBody.trim()}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50 p-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setShowSendPreview(false)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-100"
+              >
+                Continue editing
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSend}
+                disabled={isSending}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" />
+                {isSending ? "Sending…" : `Send to ${recipientEmails.length} student${recipientEmails.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body
       )}
 
       {detailMessage && createPortal(
@@ -1016,14 +1107,14 @@ export default function TeacherCommunication() {
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-[#F8FAFC] p-5">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded border border-blue-100 bg-blue-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-blue-700">
+                  <span className="rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
                     {detailMessage.status}
                   </span>
-                  <span className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-indigo-700">
+                  <span className="rounded border border-indigo-100 bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">
                     {detailMessage.channel}
                   </span>
                 </div>
-                <h3 className="mt-3 break-words font-serif text-xl font-bold text-slate-950">
+                <h3 className="mt-3 break-words text-xl font-bold text-slate-950">
                   {detailMessage.subject}
                 </h3>
               </div>
@@ -1067,7 +1158,7 @@ export default function TeacherCommunication() {
               </div>
 
               <div>
-                <p className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                <p className="text-xs font-semibold text-slate-500">
                   Message
                 </p>
                 <div className="mt-2 whitespace-pre-wrap break-words rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-7 text-slate-700">
@@ -1089,7 +1180,7 @@ export default function TeacherCommunication() {
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h3 className="font-serif text-lg font-bold text-slate-950">
+                  <h3 className="text-lg font-bold text-slate-950">
                     {template.title}
                   </h3>
 
@@ -1138,30 +1229,10 @@ function CommunicationTab({ active, icon: Icon, label, onClick }) {
   );
 }
 
-function SummaryBox({ label, value, icon: Icon }) {
-  return (
-    <div className="rounded-xl bg-[#F8FAFC] border border-slate-200 p-4 transition-all duration-300 hover:-translate-y-0.5 shadow-sm flex items-start gap-3">
-      <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 border border-blue-100 flex items-center justify-center shrink-0 mt-0.5">
-        <Icon className="w-4 h-4 stroke-[1.8]" />
-      </div>
-
-      <div className="min-w-0 space-y-0.5">
-        <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 block truncate">
-          {label}
-        </span>
-
-        <p className="font-mono text-sm font-bold text-slate-900 truncate">
-          {value}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function MessageDetail({ label, value }) {
   return (
     <div className="min-w-0">
-      <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
+      <p className="text-[11px] font-semibold text-slate-500">
         {label}
       </p>
       <p className="mt-1 break-words text-xs font-semibold text-slate-700">

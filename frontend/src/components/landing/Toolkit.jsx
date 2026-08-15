@@ -172,12 +172,12 @@ export default function Toolkit() {
 
       <div className="relative max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10">
         <div className="max-w-3xl mx-auto text-center mb-9">
-          <span className="inline-flex items-center gap-2 text-[10px] font-mono font-bold uppercase tracking-widest text-blue-700 bg-white px-3.5 py-1.5 rounded-full border border-blue-100 shadow-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white px-3.5 py-1.5 text-xs font-semibold text-blue-700 shadow-sm">
             <Layers className="w-3.5 h-3.5" />
-            Platform Toolkit
+            Platform toolkit
           </span>
 
-          <h2 className="font-serif text-3xl sm:text-4xl text-slate-950 font-black tracking-tight mt-3">
+          <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
             Responsible AI-supported writing tools.
           </h2>
 

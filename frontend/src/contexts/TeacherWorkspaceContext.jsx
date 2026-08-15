@@ -10,15 +10,12 @@ import {
   savePraxisData,
 } from "../services/praxisMockStore";
 import {
-  getTeacherCourses,
-} from "../services/courseApi";
-import {
   createAssignment as createPersistedAssignment,
   createTeacherRubric,
   getAssignmentsForClass,
   getTeacherRubrics,
+  getTeacherWorkspaceSnapshot,
   getTeacherSubmissions,
-  getTeacherSubmissionsForClass,
   removeAssignment as removePersistedAssignment,
   removeTeacherRubric,
   updateSubmissionAsTeacher,
@@ -41,6 +38,13 @@ function todayDate() {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isExpectedQueryCancellation(error) {
+  return (
+    error?.name === "CancelledError" ||
+    error?.constructor?.name === "CancelledError"
+  );
 }
 
 function roundToHalf(value) {
@@ -1199,63 +1203,47 @@ export function TeacherWorkspaceProvider({ children }) {
 
     async function syncCoursesWithBackend() {
       try {
-        const backendCourses = await queryClient.fetchQuery({
-          queryKey: queryKeys.teacherCourses,
-          queryFn: getTeacherCourses,
+        const snapshot = await queryClient.fetchQuery({
+          queryKey: queryKeys.teacherWorkspace,
+          queryFn: getTeacherWorkspaceSnapshot,
+          staleTime: 2 * 60_000,
         });
-        const displayedCourses = backendCourses;
-
-        const [assignmentGroups, rawSubmissionGroups] = await Promise.all([
-          Promise.all(
-            displayedCourses.map(async (course) => {
-              const backendClassId = course.backendId || course.id;
-              const rows = await queryClient.fetchQuery({
-                queryKey: queryKeys.classAssignments(backendClassId),
-                queryFn: () => getAssignmentsForClass(backendClassId),
-              });
-              return rows.map((assignment) => ({
-                ...assignment,
-                classId: course.id,
-                backendClassId,
-                classCode: course.code || "",
-                className: course.name || "",
-              }));
-            })
-          ),
-          Promise.all(
-            displayedCourses.map(async (course) => {
-              const backendClassId = course.backendId || course.id;
-              const rows = await queryClient.fetchQuery({
-                queryKey: queryKeys.teacherSubmissions(backendClassId),
-                queryFn: () => getTeacherSubmissionsForClass(backendClassId),
-              });
-              return { course, rows };
-            })
-          ),
-        ]);
-        const flattenedAssignments = assignmentGroups.flat();
-        const submissionGroups = rawSubmissionGroups.map(({ course, rows }) =>
-          rows.map((submission) => {
-            const assignment = flattenedAssignments.find(
-              (entry) => String(entry.id) === String(submission.assignmentId)
-            );
-            return {
-              ...submission,
-              assignment,
-              assignmentDetails: assignment,
-              assignmentTitle: assignment?.title || "",
-              classId: course.id,
-              classCode: course.code || "",
-              className: course.name || "",
-              isCurrent: true,
-            };
-          })
+        const displayedCourses = snapshot.classes;
+        const coursesById = new Map(
+          displayedCourses.map((course) => [String(course.backendId || course.id), course])
         );
+        const flattenedAssignments = snapshot.assignments.map((assignment) => {
+          const course = coursesById.get(String(assignment.classId));
+          return {
+            ...assignment,
+            classId: course?.id || assignment.classId,
+            backendClassId: course?.backendId || course?.id || assignment.classId,
+            classCode: course?.code || "",
+            className: course?.name || "",
+          };
+        });
+        const assignmentsById = new Map(
+          flattenedAssignments.map((assignment) => [String(assignment.id), assignment])
+        );
+        const normalizedSubmissions = snapshot.submissions.map((submission) => {
+          const assignment = assignmentsById.get(String(submission.assignmentId));
+          const course = coursesById.get(String(assignment?.backendClassId || assignment?.classId));
+          return {
+            ...submission,
+            assignment,
+            assignmentDetails: assignment,
+            assignmentTitle: assignment?.title || "",
+            classId: course?.id || assignment?.classId || null,
+            classCode: course?.code || assignment?.classCode || "",
+            className: course?.name || assignment?.className || "",
+            isCurrent: true,
+          };
+        });
 
         if (active) {
           setClasses(displayedCourses);
-          setAssignments(assignmentGroups.flat());
-          setSubmissions(submissionGroups.flat());
+          setAssignments(flattenedAssignments);
+          setSubmissions(normalizedSubmissions);
         }
         queryClient.fetchQuery({
           queryKey: queryKeys.teacherRubrics,
@@ -1265,11 +1253,15 @@ export function TeacherWorkspaceProvider({ children }) {
             if (active) setRubrics(rows.map(normalizeRubricSchema));
           })
           .catch((error) => {
-            console.error("Could not synchronize reusable rubrics with Supabase:", error);
+            if (!isExpectedQueryCancellation(error)) {
+              console.error("Could not synchronize reusable rubrics with Supabase:", error);
+            }
           });
       } catch (error) {
         // Keep the local workspace usable when Supabase is temporarily unavailable.
-        console.error("Could not synchronize courses with Supabase:", error);
+        if (!isExpectedQueryCancellation(error)) {
+          console.error("Could not synchronize courses with Supabase:", error);
+        }
       } finally {
         if (active) setIsWorkspaceLoading(false);
       }
@@ -1465,6 +1457,7 @@ export function TeacherWorkspaceProvider({ children }) {
     await queryClient.invalidateQueries({
       queryKey: queryKeys.classAssignments(selectedClass.backendId || selectedClass.id),
     });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherWorkspace });
     newAssignment = {
       ...newAssignment,
       ...persisted,
@@ -1581,6 +1574,7 @@ export function TeacherWorkspaceProvider({ children }) {
     await queryClient.invalidateQueries({
       queryKey: queryKeys.classAssignments(selectedClass.backendId || selectedClass.id),
     });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherWorkspace });
     assignment = {
       ...assignment,
       ...persisted,
@@ -1624,6 +1618,7 @@ export function TeacherWorkspaceProvider({ children }) {
   async function deleteAssignment(id) {
     await removePersistedAssignment(id);
     await queryClient.invalidateQueries({ queryKey: ["classes"] });
+    await queryClient.invalidateQueries({ queryKey: queryKeys.teacherWorkspace });
     const currentData = getPraxisData();
     const archivedAt = nowIso();
 

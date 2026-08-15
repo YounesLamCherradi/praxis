@@ -1,4 +1,4 @@
-function normalizeCourse(row = {}) {
+export function normalizeCourse(row = {}) {
   const members = (Array.isArray(row.class_members) ? row.class_members : [])
     .filter((entry) => entry?.profiles)
     .map((entry) => ({
