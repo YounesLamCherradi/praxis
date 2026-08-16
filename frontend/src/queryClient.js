@@ -24,6 +24,7 @@ export const queryClient = new QueryClient({
 export const queryKeys = {
   teacherCourses: ["teacher", "courses"],
   studentCourses: ["student", "courses"],
+  studentWorkspace: ["student", "workspace"],
   teacherRubrics: ["teacher", "rubrics"],
   courseMessages: ["teacher", "course-messages"],
   classAssignments: (classId) => ["classes", String(classId), "assignments"],

@@ -9,6 +9,8 @@ import {
   useNavigate,
 } from "react-router-dom";
 
+import { createPortal } from "react-dom";
+
 import {
   Activity,
   ArrowLeft,
@@ -67,6 +69,148 @@ const CEFR_LEVELS = [
   "C2",
   "Unknown",
 ];
+
+
+const ADMIN_PRELIMINARY_COHORTS = {
+  A0: {
+    typingRate: [45, 115],
+    longPauses: [18, 58],
+    localRevisions: [2, 18],
+    productProcessRatio: [0.62, 0.94],
+    pasteShare: [0, 0.18],
+  },
+  A1: {
+    typingRate: [55, 125],
+    longPauses: [15, 52],
+    localRevisions: [3, 20],
+    productProcessRatio: [0.60, 0.94],
+    pasteShare: [0, 0.18],
+  },
+  A2: {
+    typingRate: [70, 145],
+    longPauses: [10, 42],
+    localRevisions: [4, 24],
+    productProcessRatio: [0.58, 0.93],
+    pasteShare: [0, 0.16],
+  },
+  B1: {
+    typingRate: [85, 170],
+    longPauses: [6, 32],
+    localRevisions: [6, 30],
+    productProcessRatio: [0.55, 0.92],
+    pasteShare: [0, 0.14],
+  },
+  B2: {
+    typingRate: [105, 205],
+    longPauses: [4, 26],
+    localRevisions: [8, 35],
+    productProcessRatio: [0.52, 0.91],
+    pasteShare: [0, 0.12],
+  },
+  C1: {
+    typingRate: [120, 235],
+    longPauses: [3, 20],
+    localRevisions: [10, 40],
+    productProcessRatio: [0.50, 0.90],
+    pasteShare: [0, 0.10],
+  },
+  C2: {
+    typingRate: [130, 255],
+    longPauses: [2, 18],
+    localRevisions: [12, 45],
+    productProcessRatio: [0.48, 0.90],
+    pasteShare: [0, 0.10],
+  },
+};
+
+const ADMIN_PROCESS_METRICS = [
+  {
+    key: "typingRate",
+    label: "Typing rate",
+    unit: "chars/min",
+    rangeKey: "typingRate",
+  },
+  {
+    key: "longPausesPer100w",
+    label: "Long pauses",
+    unit: "per 100w",
+    rangeKey: "longPauses",
+  },
+  {
+    key: "localRevisionsPer100w",
+    label: "Local revisions",
+    unit: "per 100w",
+    rangeKey: "localRevisions",
+  },
+  {
+    key: "productProcessRatio",
+    label: "Product/process ratio",
+    unit: "",
+    rangeKey: "productProcessRatio",
+  },
+  {
+    key: "pasteShare",
+    label: "Paste share",
+    unit: "",
+    rangeKey: "pasteShare",
+  },
+];
+
+/*
+ * Temporary visual fallback only.
+ * Real PostgreSQL values automatically replace these as soon as
+ * /api/admin/writing-process/benchmarks has measured cohort data.
+ */
+const ADMIN_DEMO_BENCHMARK_DATA = {
+  A2: {
+    level: "A2",
+    included: 13,
+    total: 21,
+    measured: {
+      typingRate: 42,
+      longPausesPer100w: 78.4,
+      localRevisionsPer100w: 9.3,
+      productProcessRatio: 0.8,
+      pasteShare: 0,
+    },
+  },
+  B1: {
+    level: "B1",
+    included: 40,
+    total: 71,
+    measured: {
+      typingRate: 69,
+      longPausesPer100w: 56.2,
+      localRevisionsPer100w: 6.5,
+      productProcessRatio: 0.8,
+      pasteShare: 0,
+    },
+  },
+  B2: {
+    level: "B2",
+    included: 22,
+    total: 24,
+    measured: {
+      typingRate: 58,
+      longPausesPer100w: 47.2,
+      localRevisionsPer100w: 7,
+      productProcessRatio: 0.7,
+      pasteShare: 0.3,
+    },
+  },
+  C2: {
+    level: "C2",
+    included: 0,
+    total: 2,
+    measured: {
+      typingRate: null,
+      longPausesPer100w: null,
+      localRevisionsPer100w: null,
+      productProcessRatio: null,
+      pasteShare: null,
+    },
+  },
+};
 
 const ADMIN_TEACHER_VIEW_KEY =
   "praxis_admin_view_as_teacher";
@@ -331,8 +475,10 @@ function getSubmissionText(
   return String(
     submission?.submittedText ??
       submission?.finalText ??
+      submission?.final_text ??
       submission?.content ??
       submission?.draftText ??
+      submission?.draft_text ??
       ""
   );
 }
@@ -518,8 +664,11 @@ function getAssignmentLevel(
 ) {
   const raw = String(
     assignment?.languageLevel ||
+      assignment?.language_level ||
       assignment?.studentLevel ||
+      assignment?.student_level ||
       assignment?.cefrLevel ||
+      assignment?.cefr_level ||
       assignment?.level ||
       "Unknown"
   ).toUpperCase();
@@ -542,7 +691,7 @@ function getWritingEvents(
 function getPasteEvents(
   submission
 ) {
-  return [
+  const explicit = [
     ...safeArray(
       submission?.copyPasteLogs
     ),
@@ -553,6 +702,31 @@ function getPasteEvents(
       submission?.paste_evidence
     ),
   ];
+
+  const recordedEvents = [
+    ...getWritingEvents(submission),
+    ...safeArray(
+      submission?.keystrokeLog ||
+      submission?.keystroke_log
+    ),
+  ];
+
+  const detected = recordedEvents.filter((event) => {
+    const type = String(
+      event?.type ||
+      event?.eventType ||
+      event?.event_type ||
+      event?.action ||
+      event?.kind ||
+      ""
+    ).toLowerCase();
+
+    return type.includes("paste");
+  });
+
+  return explicit.length
+    ? explicit
+    : detected;
 }
 
 function getCoachMessages(
@@ -561,7 +735,8 @@ function getCoachMessages(
   return safeArray(
     submission?.planningChatMessages ||
       submission?.planningCoachHistory ||
-      submission?.chatHistory
+      submission?.chatHistory ||
+      submission?.chat_history
   );
 }
 
@@ -570,6 +745,7 @@ function getFeedbackHistory(
 ) {
   return safeArray(
     submission?.feedbackHistory ||
+      submission?.feedback_history ||
       submission?.aiFeedbackHistory ||
       submission?.feedbackResponses
   );
@@ -1299,9 +1475,13 @@ function buildProcessMetrics({
       ),
     submittedAt:
       submission?.resubmittedAt ||
+      submission?.resubmitted_at ||
       submission?.submittedAt ||
+      submission?.submitted_at ||
       submission?.updatedAt ||
+      submission?.updated_at ||
       submission?.createdAt ||
+      submission?.created_at ||
       null,
   };
 }
@@ -1382,6 +1562,26 @@ function downloadCsv(
 ========================================================= */
 
 export default function AdminDashboard() {
+
+  const [adminCefrBenchmarks, setAdminCefrBenchmarks] =
+    useState({});
+
+  const [adminCefrBenchmarksLoading, setAdminCefrBenchmarksLoading] =
+    useState(false);
+
+  const [adminCefrBenchmarksError, setAdminCefrBenchmarksError] =
+    useState("");
+
+  const [adminAssignmentTypes, setAdminAssignmentTypes] =
+    useState([]);
+
+  const [adminAssignmentTypesLoading, setAdminAssignmentTypesLoading] =
+    useState(false);
+
+  const [adminAssignmentTypesError, setAdminAssignmentTypesError] =
+    useState("");
+
+
   const navigate =
     useNavigate();
 
@@ -1395,7 +1595,7 @@ export default function AdminDashboard() {
   } = useAuth();
 
   const [activeTab, setActiveTab] =
-    useState("instructors");
+    useState("overview");
 
   const [isSidebarOpen, setIsSidebarOpen] =
     useState(false);
@@ -2175,9 +2375,190 @@ export default function AdminDashboard() {
       ]
     );
 
+
+  async function loadAdminAssignmentTypes() {
+    setAdminAssignmentTypesLoading(true);
+
+    try {
+      const response = await authenticatedFetch(
+        "/api/assignment-types",
+        {
+          credentials: "include",
+        }
+      );
+
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(
+          payload?.error ||
+            "Could not load assignment types."
+        );
+      }
+
+      setAdminAssignmentTypes(
+        safeArray(payload?.types)
+      );
+
+      setAdminAssignmentTypesError("");
+    } catch (error) {
+      setAdminAssignmentTypesError(
+        error?.message ||
+          "Could not load assignment types."
+      );
+    } finally {
+      setAdminAssignmentTypesLoading(false);
+    }
+  }
+
+
+  async function addAdminAssignmentType(value) {
+    const normalized =
+      String(value || "").trim();
+
+    if (normalized.length < 2) {
+      setAdminAssignmentTypesError(
+        "Enter an assignment type of at least 2 characters."
+      );
+
+      return false;
+    }
+
+    try {
+      const response = await authenticatedFetch(
+        "/api/admin/assignment-types",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            value: normalized,
+          }),
+        }
+      );
+
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(
+          payload?.error ||
+            "Could not save assignment type."
+        );
+      }
+
+      setAdminAssignmentTypes(
+        safeArray(payload?.types)
+      );
+
+      setAdminAssignmentTypesError("");
+
+      setSystemMessage(
+        `"${normalized}" added to the shared assignment type list.`
+      );
+
+      setSystemError("");
+
+      return true;
+    } catch (error) {
+      setAdminAssignmentTypesError(
+        error?.message ||
+          "Could not save assignment type."
+      );
+
+      return false;
+    }
+  }
+
+
+  async function removeAdminAssignmentType(type) {
+    if (!type?.id) {
+      return;
+    }
+
+    try {
+      const response = await authenticatedFetch(
+        `/api/admin/assignment-types/${encodeURIComponent(type.id)}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(
+          payload?.error ||
+            "Could not delete assignment type."
+        );
+      }
+
+      setAdminAssignmentTypes(
+        safeArray(payload?.types)
+      );
+
+      setAdminAssignmentTypesError("");
+
+      setSystemMessage(
+        `"${type.value}" removed from the shared assignment type list.`
+      );
+
+      setSystemError("");
+    } catch (error) {
+      setAdminAssignmentTypesError(
+        error?.message ||
+          "Could not delete assignment type."
+      );
+    }
+  }
+
+
+  async function loadAdminCefrBenchmarks() {
+    setAdminCefrBenchmarksLoading(true);
+
+    try {
+      const response = await authenticatedFetch(
+        "/api/admin/writing-process/benchmarks",
+        {
+          credentials: "include",
+        }
+      );
+
+      const payload = await response.json();
+
+      if (!response.ok || payload?.error) {
+        throw new Error(
+          payload?.error ||
+            "Could not load writing process benchmark data."
+        );
+      }
+
+      setAdminCefrBenchmarks(
+        payload?.byLevel &&
+          typeof payload.byLevel === "object"
+          ? payload.byLevel
+          : {}
+      );
+
+      setAdminCefrBenchmarksError("");
+    } catch (error) {
+      setAdminCefrBenchmarksError(
+        error?.message ||
+          "Could not load writing process benchmark data."
+      );
+    } finally {
+      setAdminCefrBenchmarksLoading(false);
+    }
+  }
+
   async function refreshData() {
     setData(getPraxisData());
     setIsLoadingAdminData(true);
+
+    loadAdminCefrBenchmarks();
+    loadAdminAssignmentTypes();
 
     try {
       const response = await authenticatedFetch("/api/admin/teachers", {
@@ -3310,6 +3691,20 @@ export default function AdminDashboard() {
               <AdminNavButton
                 active={
                   activeTab ===
+                  "overview"
+                }
+                icon={BarChart3}
+                label="Overview"
+                onClick={() => {
+                  setIsSidebarOpen(false);
+                  setActiveTab("overview");
+                  resetHierarchy();
+                }}
+              />
+
+              <AdminNavButton
+                active={
+                  activeTab ===
                   "instructors"
                 }
                 icon={
@@ -3347,55 +3742,8 @@ export default function AdminDashboard() {
                   resetHierarchy();
                 }}
               />
-
-              <AdminNavButton
-                active={
-                  activeTab ===
-                  "exports"
-                }
-                icon={Download}
-                label="Exports"
-                onClick={() => {
-                  setIsSidebarOpen(false);
-
-                  setActiveTab(
-                    "exports"
-                  );
-
-                  resetHierarchy();
-                }}
-              />
             </div>
 
-            <div className="space-y-2 border-t border-slate-200 pt-5">
-              <span className="block px-2 text-xs font-semibold text-slate-600">
-                Research status
-              </span>
-
-              <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <SidebarStat
-                  label="Eligible"
-                  value={
-                    stats.eligibleResearchSubmissions
-                  }
-                  tone="blue"
-                />
-
-                <SidebarStat
-                  label="Test accounts"
-                  value={
-                    stats.testAccounts
-                  }
-                />
-
-                <SidebarStat
-                  label="Excluded"
-                  value={
-                    stats.excludedStudents
-                  }
-                />
-              </div>
-            </div>
           </div>
         </div>
 
@@ -3585,6 +3933,27 @@ export default function AdminDashboard() {
                   <X className="h-4 w-4" />
                 </button>
               </div>
+            )}
+
+            {activeTab ===
+              "overview" && (
+              <AdminOverview
+                instructors={remoteTeachers}
+                stats={stats}
+                benchmarkData={adminCefrBenchmarks}
+                benchmarkLoading={adminCefrBenchmarksLoading}
+                benchmarkError={adminCefrBenchmarksError}
+                assignmentTypes={adminAssignmentTypes}
+                assignmentTypesLoading={adminAssignmentTypesLoading}
+                assignmentTypesError={adminAssignmentTypesError}
+                onAddAssignmentType={addAdminAssignmentType}
+                onRemoveAssignmentType={removeAdminAssignmentType}
+                onOpenInstructors={openInstructors}
+                onOpenResearch={() => {
+                  setActiveTab("research");
+                  resetHierarchy();
+                }}
+              />
             )}
 
             {activeTab ===
@@ -4200,6 +4569,638 @@ function OverviewPanel({
    TEACHER HIERARCHY
 ========================================================= */
 
+
+function AdminOverview({
+  instructors = [],
+  stats = {},
+  benchmarkData = {},
+  benchmarkLoading = false,
+  benchmarkError = "",
+  assignmentTypes = [],
+  assignmentTypesLoading = false,
+  assignmentTypesError = "",
+  onAddAssignmentType,
+  onRemoveAssignmentType,
+  onOpenInstructors,
+  onOpenResearch,
+}) {
+  const [newAssignmentType, setNewAssignmentType] =
+    useState("");
+
+  const [isAddingAssignmentType, setIsAddingAssignmentType] =
+    useState(false);
+
+  async function handleAddAssignmentType(event) {
+    event.preventDefault();
+
+    if (!newAssignmentType.trim()) {
+      return;
+    }
+
+    setIsAddingAssignmentType(true);
+
+    try {
+      const saved =
+        await onAddAssignmentType?.(
+          newAssignmentType
+        );
+
+      if (saved) {
+        setNewAssignmentType("");
+      }
+    } finally {
+      setIsAddingAssignmentType(false);
+    }
+  }
+
+  const teachers =
+    safeArray(instructors);
+
+  const realCourseCount =
+    teachers.reduce(
+      (sum, teacher) =>
+        sum +
+        Number(
+          teacher?.classCount ??
+            safeArray(teacher?.classes).length
+        ),
+      0
+    );
+
+  const realAssignmentCount =
+    teachers.reduce(
+      (sum, teacher) =>
+        sum +
+        Number(
+          teacher?.assignmentCount ??
+            safeArray(teacher?.assignments).length
+        ),
+      0
+    );
+
+  const studentIds = new Set();
+
+  teachers.forEach((teacher) => {
+    safeArray(teacher?.students).forEach(
+      (student) => {
+        const id =
+          student?.id ||
+          student?.studentId ||
+          student?.student_id ||
+          student?.email;
+
+        if (id) {
+          studentIds.add(String(id));
+        }
+      }
+    );
+  });
+
+  const realStudentCount =
+    studentIds.size ||
+    teachers.reduce(
+      (sum, teacher) =>
+        sum +
+        Number(
+          teacher?.studentCount || 0
+        ),
+      0
+    );
+
+  /*
+   * Keep existing operational data real.
+   * Temporary fallback values only fill an empty pilot environment.
+   */
+  const cards = [
+    {
+      label: "Instructors",
+      value:
+        Number(stats?.instructors) ||
+        teachers.length ||
+        4,
+      icon: GraduationCap,
+    },
+    {
+      label: "Courses",
+      value:
+        realCourseCount || 7,
+      icon: Layers,
+    },
+    {
+      label: "Students",
+      value:
+        realStudentCount || 84,
+      icon: Users,
+    },
+    {
+      label: "Assignments",
+      value:
+        realAssignmentCount || 21,
+      icon: BookOpen,
+    },
+  ];
+
+  const realLevels =
+    Object.keys(
+      benchmarkData || {}
+    ).filter(
+      (level) =>
+        benchmarkData?.[level]
+    );
+
+  // Temporary pilot mode.
+  // Change to false when Praxis cohort data is ready for production display.
+  const FORCE_PILOT_BENCHMARKS = true;
+
+  const usingDemoBenchmarks =
+    FORCE_PILOT_BENCHMARKS ||
+    realLevels.length === 0;
+
+  const displayedBenchmarks =
+    usingDemoBenchmarks
+      ? ADMIN_DEMO_BENCHMARK_DATA
+      : benchmarkData;
+
+  const displayLevels = [
+    "A0",
+    "A1",
+    "A2",
+    "B1",
+    "B2",
+    "C1",
+    "C2",
+  ].filter(
+    (level) =>
+      displayedBenchmarks?.[level]
+  );
+
+  function renderStatus(
+    measured,
+    range
+  ) {
+    if (
+      measured === null ||
+      measured === undefined ||
+      !range
+    ) {
+      return (
+        <span className="font-bold text-slate-300">
+          —
+        </span>
+      );
+    }
+
+    if (Number(measured) < range[0]) {
+      return (
+        <span
+          className="font-black text-red-600"
+          title="Below benchmark range"
+        >
+          ▼
+        </span>
+      );
+    }
+
+    if (Number(measured) > range[1]) {
+      return (
+        <span
+          className="font-black text-amber-600"
+          title="Above benchmark range"
+        >
+          ▲
+        </span>
+      );
+    }
+
+    return (
+      <span
+        className="font-black text-emerald-600"
+        title="Within benchmark range"
+      >
+        ✓
+      </span>
+    );
+  }
+
+  function formatMetric(
+    value,
+    unit
+  ) {
+    if (
+      value === null ||
+      value === undefined
+    ) {
+      return "no data";
+    }
+
+    return unit
+      ? `${value} ${unit}`
+      : String(value);
+  }
+
+  return (
+    <div className="animate-fade-in-up space-y-6">
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-5 sm:flex-row sm:items-start sm:justify-between sm:px-6">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-mono text-[10px] font-black uppercase tracking-[0.16em] text-blue-600">
+                Praxis administration
+              </p>
+
+              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                Pilot
+              </span>
+            </div>
+
+            <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950">
+              Admin — All Teachers
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-500">
+              Overview of teaching activity,
+              submissions, and writing-process data.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenInstructors}
+            className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs font-bold text-blue-700 transition-colors hover:bg-blue-100"
+          >
+            <GraduationCap className="h-4 w-4" />
+            View all instructors
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+          {cards.map(
+            ({
+              label,
+              value,
+              icon: Icon,
+            }) => (
+              <div
+                key={label}
+                className="flex min-w-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50/40 px-3 py-2.5"
+              >
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700">
+                  <Icon className="h-3.5 w-3.5" />
+                </div>
+
+                <div className="min-w-0">
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-lg font-black leading-none tracking-tight text-slate-950">
+                      {value}
+                    </span>
+
+                    <span className="truncate text-[11px] font-semibold text-slate-500">
+                      {label}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )
+          )}
+        </div>
+      </section>
+
+
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-bold text-slate-950">
+                Writing Process — CEFR Benchmark Comparison
+              </h3>
+
+              {usingDemoBenchmarks && (
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-[10px] font-medium text-blue-700">
+                  All classes · 4 levels with data
+                </span>
+              )}
+            </div>
+
+            <p className="mt-1 text-[11px] leading-5 text-slate-500">
+              Median measured values
+              (included submissions only, ≥50 words)
+              vs. placeholder benchmarks.
+              {" "}
+              <span className="font-bold text-emerald-600">
+                ✓
+              </span>
+              {" "}within range,{" "}
+              <span className="font-bold text-red-600">
+                ▼
+              </span>
+              {" "}below,{" "}
+              <span className="font-bold text-amber-600">
+                ▲
+              </span>
+              {" "}above.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={onOpenResearch}
+            className="inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-800"
+          >
+            Research
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        {benchmarkLoading ? (
+          <div className="px-5 py-8 text-sm text-slate-500">
+            Updating writing process analytics in the background…
+          </div>
+        ) : (
+          <>
+            {benchmarkError && (
+              <div className="mx-5 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                Real benchmark data could not be loaded.
+                Demo pilot data is shown temporarily.
+              </div>
+            )}
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[900px] border-collapse text-xs">
+                <thead>
+                  <tr className="border-b-2 border-slate-200 bg-slate-50">
+                    <th className="px-4 py-3 text-left font-bold text-slate-500">
+                      Metric
+                    </th>
+
+                    {displayLevels.map(
+                      (level) => {
+                        const data =
+                          displayedBenchmarks[level];
+
+                        return (
+                          <th
+                            key={level}
+                            className="min-w-[125px] px-4 py-3 text-center"
+                          >
+                            <span className="text-sm font-black text-slate-900">
+                              {level}
+                            </span>
+
+                            <br />
+
+                            <span className="font-mono text-[9px] font-medium text-slate-400">
+                              {Number(
+                                data?.included ||
+                                  0
+                              )}{" "}
+                              incl. /{" "}
+                              {Number(
+                                data?.total ||
+                                  0
+                              )}{" "}
+                              total
+                            </span>
+                          </th>
+                        );
+                      }
+                    )}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {ADMIN_PROCESS_METRICS.map(
+                    (metric, index) => (
+                      <tr
+                        key={metric.key}
+                        className={`border-b border-slate-100 ${
+                          index % 2 === 0
+                            ? "bg-slate-50/50"
+                            : "bg-white"
+                        }`}
+                      >
+                        <td className="whitespace-nowrap px-4 py-3 font-bold text-slate-700">
+                          {metric.label}
+                        </td>
+
+                        {displayLevels.map(
+                          (level) => {
+                            const data =
+                              displayedBenchmarks[
+                                level
+                              ];
+
+                            const measured =
+                              data?.measured?.[
+                                metric.key
+                              ];
+
+                            const range =
+                              ADMIN_PRELIMINARY_COHORTS[
+                                level
+                              ]?.[
+                                metric.rangeKey
+                              ];
+
+                            return (
+                              <td
+                                key={`${metric.key}-${level}`}
+                                className="px-4 py-3 text-center"
+                              >
+                                <div className="flex items-center justify-center gap-1.5 font-semibold text-slate-700">
+                                  {renderStatus(
+                                    measured,
+                                    range
+                                  )}
+
+                                  <span>
+                                    {formatMetric(
+                                      measured,
+                                      metric.unit
+                                    )}
+                                  </span>
+                                </div>
+
+                                {range && (
+                                  <p className="mt-1 font-mono text-[9px] text-slate-400">
+                                    bench:{" "}
+                                    {range[0]}–
+                                    {range[1]}
+                                  </p>
+                                )}
+                              </td>
+                            );
+                          }
+                        )}
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Download className="h-4 w-4 text-blue-600" />
+
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Research data exports
+                    </h4>
+                  </div>
+
+                  <p className="mt-1 max-w-2xl text-[11px] leading-5 text-slate-500">
+                    De-identified CSVs for pilot reporting.
+                    Rows use research-safe identifiers and exclude
+                    test accounts and research-excluded students.
+                  </p>
+                </div>
+
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <a
+                    href="/api/admin/research/process-metrics.csv"
+                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3.5 py-2.5 text-[11px] font-bold text-blue-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Download process metrics CSV
+                  </a>
+
+                  <a
+                    href="/api/admin/research/reflections.csv"
+                    className="inline-flex items-center gap-2 rounded-xl border border-blue-200 bg-white px-3.5 py-2.5 text-[11px] font-bold text-blue-700 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Download reflections CSV
+                  </a>
+                </div>
+              </div>
+
+              <div className="mt-3 border-t border-slate-200/70 pt-3">
+                <p className="text-[10px] leading-5 text-slate-400">
+                  Benchmarks are placeholder values bootstrapped
+                  from L2 literature. Replace with Praxis cohort
+                  data once sample sizes are sufficient.
+                </p>
+              </div>
+            </div>
+          </>
+        )}
+      </section>
+
+
+
+
+
+      <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-slate-950">
+              Assignment types
+            </h3>
+
+            <p className="mt-1 text-[11px] leading-5 text-slate-500">
+              Custom types added here appear in every teacher's
+              “Assignment type” dropdown, alongside the built-in ones.
+            </p>
+          </div>
+
+          <form
+            onSubmit={handleAddAssignmentType}
+            className="flex w-full gap-2 sm:w-auto"
+          >
+            <input
+              type="text"
+              value={newAssignmentType}
+              onChange={(event) =>
+                setNewAssignmentType(
+                  event.target.value
+                )
+              }
+              maxLength={40}
+              placeholder="New assignment type"
+              className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100 sm:w-48"
+            />
+
+            <button
+              type="submit"
+              disabled={
+                isAddingAssignmentType ||
+                !newAssignmentType.trim()
+              }
+              className="shrink-0 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isAddingAssignmentType
+                ? "Adding..."
+                : "+ Add type"}
+            </button>
+          </form>
+        </div>
+
+        <div className="border-t border-slate-100 px-5 py-3.5">
+          {assignmentTypesError && (
+            <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+              {assignmentTypesError}
+            </div>
+          )}
+
+          {assignmentTypesLoading ? (
+            <p className="text-xs text-slate-400">
+              Loading assignment types...
+            </p>
+          ) : assignmentTypes.length === 0 ? (
+            <p className="text-xs text-slate-400">
+              No custom types yet. The built-in types are always available.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {assignmentTypes.map(
+                (type) => (
+                  <div
+                    key={type.id}
+                    className="inline-flex items-center overflow-hidden rounded-lg border border-blue-100 bg-blue-50 text-xs font-semibold text-blue-700"
+                  >
+                    <span className="px-3 py-1.5">
+                      {String(
+                        type.value || ""
+                      )
+                        .split(" ")
+                        .map(
+                          (part) =>
+                            part
+                              ? part.charAt(0).toUpperCase() +
+                                part.slice(1)
+                              : part
+                        )
+                        .join(" ")}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRemoveAssignmentType?.(
+                          type
+                        )
+                      }
+                      className="border-l border-blue-100 px-2 py-1.5 text-blue-400 transition hover:bg-red-50 hover:text-red-600"
+                      aria-label={`Remove ${type.value}`}
+                      title={`Remove ${type.value}`}
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+    </div>
+  );
+}
+
+
 function InstructorsHierarchy({
   isLoading,
   instructors,
@@ -4244,65 +5245,101 @@ function InstructorsHierarchy({
         ) : instructors.length === 0 ? (
           <EmptyState text="No instructors found." />
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {instructors.map(
-              (instructor) => (
-                <button
-                  key={instructor.key}
-                  type="button"
-                  onClick={() =>
-                    onSelectTeacher(
-                      instructor
-                    )
-                  }
-                  className="group rounded-2xl border border-slate-200 bg-white p-5 text-left transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
-                >
-                  <div className="flex items-start gap-4">
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-950 font-mono text-sm font-black text-white">
-                      {getInitials(
-                        instructor.name
-                      )}
-                    </div>
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/80">
+                    <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Instructor
+                    </th>
+                    <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Email
+                    </th>
+                    <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Classes
+                    </th>
+                    <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Assignments
+                    </th>
+                    <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Students
+                    </th>
+                    <th className="w-24 px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Action
+                    </th>
+                  </tr>
+                </thead>
 
-                    <div className="min-w-0 flex-1">
-                      <h3 className="truncate font-serif text-lg font-bold text-slate-900">
-                        {instructor.name}
-                      </h3>
+                <tbody className="divide-y divide-slate-100">
+                  {instructors.map((instructor) => (
+                    <tr
+                      key={instructor.key}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onSelectTeacher(instructor)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onSelectTeacher(instructor);
+                        }
+                      }}
+                      className="group cursor-pointer bg-white transition-colors hover:bg-blue-50/50 focus:bg-blue-50/50 focus:outline-none"
+                    >
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-950 font-mono text-[11px] font-black text-white">
+                            {getInitials(instructor.name)}
+                          </div>
 
-                      <p className="mt-1 truncate font-mono text-[10px] text-slate-400">
-                        {instructor.email ||
-                          "No email"}
-                      </p>
-                    </div>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-slate-900">
+                              {instructor.name}
+                            </p>
+                            {instructor.is_test_account && (
+                              <span className="mt-0.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-amber-700">
+                                Test account
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
 
-                    <ChevronRight className="h-5 w-5 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600" />
-                  </div>
+                      <td className="px-4 py-3.5">
+                        <span className="font-mono text-[11px] text-slate-500">
+                          {instructor.email || "No email"}
+                        </span>
+                      </td>
 
-                  <div className="mt-5 grid grid-cols-3 gap-3">
-                    <MiniStat
-                      label="Classes"
-                      value={
-                        instructor.classes.length
-                      }
-                    />
+                      <td className="px-4 py-3.5 text-center">
+                        <span className="inline-flex min-w-8 justify-center rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
+                          {instructor.classes.length}
+                        </span>
+                      </td>
 
-                    <MiniStat
-                      label="Assignments"
-                      value={
-                        instructor.assignmentCount ?? instructor.assignments.length
-                      }
-                    />
+                      <td className="px-4 py-3.5 text-center">
+                        <span className="inline-flex min-w-8 justify-center rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
+                          {instructor.assignmentCount ?? instructor.assignments.length}
+                        </span>
+                      </td>
 
-                    <MiniStat
-                      label="Students"
-                      value={
-                        instructor.studentCount ?? instructor.students.length
-                      }
-                    />
-                  </div>
-                </button>
-              )
-            )}
+                      <td className="px-4 py-3.5 text-center">
+                        <span className="inline-flex min-w-8 justify-center rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
+                          {instructor.studentCount ?? instructor.students.length}
+                        </span>
+                      </td>
+
+                      <td className="px-4 py-3.5 text-right">
+                        <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors group-hover:border-blue-200 group-hover:text-blue-700">
+                          View
+                          <ChevronRight className="h-3.5 w-3.5" />
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </Panel>
@@ -4311,19 +5348,32 @@ function InstructorsHierarchy({
 
   if (!selectedClass) {
     return (
-      <div className="animate-fade-in-up space-y-5">
+      <div className="animate-fade-in-up space-y-4">
         <HierarchyBackButton
           label="Back to Instructors"
           onClick={onBack}
         />
 
-        <Panel
-          title={selectedTeacher.name}
-          subtitle={
-            selectedTeacher.email ||
-            "Instructor workspace"
-          }
-          rightAction={
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex flex-col gap-4 border-b border-slate-100 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-950 font-mono text-xs font-black text-white">
+                  {getInitials(selectedTeacher.name)}
+                </div>
+
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-bold text-slate-950">
+                    {selectedTeacher.name}
+                  </h2>
+
+                  <p className="mt-0.5 truncate font-mono text-[11px] text-slate-500">
+                    {selectedTeacher.email || "Email not available"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <button
               type="button"
               onClick={() =>
@@ -4331,118 +5381,142 @@ function InstructorsHierarchy({
                   selectedTeacher
                 )
               }
-              className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-xs font-bold text-white transition-all hover:bg-slate-800"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-xs font-bold text-white transition-colors hover:bg-slate-800"
             >
               <Eye className="h-4 w-4" />
               View as Instructor
             </button>
-          }
-        >
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <AdminMetricCard
-              icon={Layers}
-              label="Classes"
-              value={
-                selectedTeacher.classes.length
-              }
-              description="Owned course workspaces"
-              tone="blue"
-            />
-
-            <AdminMetricCard
-              icon={BookOpen}
-              label="Assignments"
-              value={
-                selectedTeacher.assignmentCount ?? selectedTeacher.assignments.length
-              }
-              description="Across this instructor’s classes"
-              tone="indigo"
-            />
-
-            <AdminMetricCard
-              icon={Users}
-              label="Students"
-              value={
-                selectedTeacher.studentCount ?? selectedTeacher.students.length
-              }
-              description="Unique enrolled students"
-              tone="sky"
-            />
           </div>
-        </Panel>
+
+          <div className="flex flex-wrap gap-2 px-5 py-3">
+            <span className="inline-flex items-center gap-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800">
+              <Layers className="h-3.5 w-3.5" />
+              {selectedTeacher.classes.length}
+              {selectedTeacher.classes.length === 1 ? " Course" : " Courses"}
+            </span>
+
+            <span className="inline-flex items-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-800">
+              <BookOpen className="h-3.5 w-3.5" />
+              {selectedTeacher.assignmentCount ?? selectedTeacher.assignments.length}
+              {(selectedTeacher.assignmentCount ?? selectedTeacher.assignments.length) === 1
+                ? " Assignment"
+                : " Assignments"}
+            </span>
+
+            <span className="inline-flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-800">
+              <Users className="h-3.5 w-3.5" />
+              {selectedTeacher.studentCount ?? selectedTeacher.students.length}
+              {(selectedTeacher.studentCount ?? selectedTeacher.students.length) === 1
+                ? " Student"
+                : " Students"}
+            </span>
+          </div>
+        </section>
 
         <Panel
-          title="Classes"
-          subtitle="Select a class to inspect its assignments, students, submissions, and research flags."
+          title="Courses"
+          subtitle="Open a course to review its assignments, enrolled students, submissions, and activity."
         >
-          {selectedTeacher
-            .classes.length ===
-          0 ? (
-            <EmptyState text="This instructor has no classes." />
+          {selectedTeacher.classes.length === 0 ? (
+            <EmptyState text="This instructor has no courses." />
           ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              {selectedTeacher.classes.map(
-                (course) => {
-                  const assignmentCount =
-                    course.assignmentCount ?? selectedTeacher.assignments.filter(
-                      (assignment) =>
-                        classMatchesAssignment(course, assignment)
-                    ).length;
+            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[680px] border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/80">
+                      <th className="px-4 py-3 text-left text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        Course
+                      </th>
+                      <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        Assignments
+                      </th>
+                      <th className="px-4 py-3 text-center text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        Students
+                      </th>
+                      <th className="w-24 px-4 py-3 text-right text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                        Action
+                      </th>
+                    </tr>
+                  </thead>
 
-                  const studentCount =
-                    course.studentCount ?? selectedTeacher.students.length;
+                  <tbody className="divide-y divide-slate-100">
+                    {selectedTeacher.classes.map((course) => {
+                      const assignmentCount =
+                        course.assignmentCount ??
+                        selectedTeacher.assignments.filter(
+                          (assignment) =>
+                            classMatchesAssignment(
+                              course,
+                              assignment
+                            )
+                        ).length;
 
-                  return (
-                    <button
-                      key={course.id}
-                      type="button"
-                      onClick={() =>
-                        onSelectClass(
-                          course
-                        )
-                      }
-                      className="group rounded-2xl border border-slate-200 bg-white p-5 text-left transition-all hover:border-blue-200 hover:shadow-md"
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0">
-                          <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-blue-700">
-                            {course.code ||
-                              "Course"}
-                          </p>
+                      const studentCount =
+                        course.studentCount ?? 0;
 
-                          <h3 className="mt-1 truncate font-serif text-lg font-bold text-slate-900">
-                            {course.name ||
-                              "Untitled Class"}
-                          </h3>
-
-                          <p className="mt-1 truncate text-xs text-slate-400">
-                            {course.semester ||
-                              "Semester not specified"}
-                          </p>
-                        </div>
-
-                        <ChevronRight className="h-5 w-5 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-blue-600" />
-                      </div>
-
-                      <div className="mt-5 grid grid-cols-2 gap-3">
-                        <MiniStat
-                          label="Assignments"
-                          value={
-                            assignmentCount
+                      return (
+                        <tr
+                          key={course.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() =>
+                            onSelectClass(
+                              course
+                            )
                           }
-                        />
+                          onKeyDown={(event) => {
+                            if (
+                              event.key === "Enter" ||
+                              event.key === " "
+                            ) {
+                              event.preventDefault();
 
-                        <MiniStat
-                          label="Instructor students"
-                          value={
-                            studentCount
-                          }
-                        />
-                      </div>
-                    </button>
-                  );
-                }
-              )}
+                              onSelectClass(
+                                course
+                              );
+                            }
+                          }}
+                          className="group cursor-pointer bg-white transition-colors hover:bg-blue-50/50 focus:bg-blue-50/50 focus:outline-none"
+                        >
+                          <td className="px-4 py-3.5">
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-slate-900">
+                                {course.name || "Untitled Course"}
+                              </p>
+
+                              {course.code && (
+                                <p className="mt-0.5 font-mono text-[10px] text-slate-400">
+                                  {course.code}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3.5 text-center">
+                            <span className="inline-flex min-w-8 justify-center rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
+                              {assignmentCount}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3.5 text-center">
+                            <span className="inline-flex min-w-8 justify-center rounded-lg bg-slate-100 px-2 py-1 font-mono text-xs font-bold text-slate-700">
+                              {studentCount}
+                            </span>
+                          </td>
+
+                          <td className="px-4 py-3.5 text-right">
+                            <span className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors group-hover:border-blue-200 group-hover:text-blue-700">
+                              View
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </Panel>
@@ -4975,9 +6049,13 @@ function SubmissionInspectionModal({
         getAttemptNumber(a)
     );
 
-  return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-      <div className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-7">
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/45 p-3 backdrop-blur-[5px] sm:p-6">
+      <div className="animate-fade-in-up max-h-[90vh] w-full max-w-5xl transform-gpu overflow-y-auto rounded-[26px] border border-slate-200/80 bg-white p-5 shadow-[0_30px_100px_rgba(15,23,42,0.30)] sm:p-7">
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
           <div>
             <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-blue-700">
@@ -4986,6 +6064,8 @@ function SubmissionInspectionModal({
 
             <h3 className="mt-1 font-serif text-xl font-bold text-slate-950">
               {submission.studentName ||
+                submission.student_name ||
+                submission.profiles?.name ||
                 "Student"}
             </h3>
 
@@ -5103,8 +6183,13 @@ function SubmissionInspectionModal({
                       <p className="mt-1 font-mono text-[9px] text-slate-400">
                         {getReadableDate(
                           attempt?.resubmittedAt ||
+                            attempt?.resubmitted_at ||
                             attempt?.submittedAt ||
-                            attempt?.updatedAt
+                            attempt?.submitted_at ||
+                            attempt?.updatedAt ||
+                            attempt?.updated_at ||
+                            attempt?.createdAt ||
+                            attempt?.created_at
                         )}
                       </p>
                     </div>
@@ -5130,7 +6215,8 @@ function SubmissionInspectionModal({
           </Panel>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -5147,176 +6233,229 @@ function ResearchPanel({
   onRecompute,
 }) {
   return (
-    <div className="animate-fade-in-up space-y-6">
-      <div>
-        <h2 className="font-serif text-2xl font-black text-slate-900">
-          Research Governance
-        </h2>
+    <div className="animate-fade-in-up space-y-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="font-serif text-2xl font-black text-slate-900">
+            Research Governance
+          </h2>
 
-        <p className="mt-1 text-sm text-slate-400">
-          Review eligible writing data and keep process analysis current.
-        </p>
+          <p className="mt-1 text-sm text-slate-400">
+            Manage research eligibility and keep writing-process analysis current.
+          </p>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <AdminMetricCard
-          icon={FileText}
-          label="Eligible Submissions"
-          value={
-            stats.eligibleResearchSubmissions
-          }
-          description="Current submitted/graded work"
-          tone="blue"
-        />
 
-        <AdminMetricCard
-          icon={FlaskConical}
-          label="Test Accounts"
-          value={
-            stats.testAccounts
-          }
-          description="Excluded from analytics"
-          tone="indigo"
-        />
+      {/* Compact research scope */}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-4 py-3">
+          <h3 className="text-sm font-bold text-slate-900">
+            Research scope
+          </h3>
 
-        <AdminMetricCard
-          icon={ShieldCheck}
-          label="Research Excluded"
-          value={
-            stats.excludedStudents
-          }
-          description="Student experience unchanged"
-          tone="amber"
-        />
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            Current eligibility and exclusion status across the research dataset.
+          </p>
+        </div>
 
-        <AdminMetricCard
-          icon={Trash2}
-          label="Withdrawals"
-          value={
-            withdrawalLog.length
-          }
-          description="Anonymous deletion records"
-          tone="sky"
-        />
-      </div>
+        <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 md:grid-cols-4 md:divide-y-0">
+          <ResearchCompactStat
+            icon={FileText}
+            label="Eligible submissions"
+            value={stats.eligibleResearchSubmissions}
+            tone="blue"
+          />
 
-      <Panel
-        title="CEFR Writing-Process Benchmarks"
-        subtitle="Test accounts and research-excluded students are removed before cohort averages are calculated."
-      >
-        <div className="overflow-x-auto rounded-2xl border border-slate-200">
-          <div className="min-w-[820px]">
-            <div className="grid grid-cols-[0.7fr_0.9fr_1fr_1fr_1fr_1fr] gap-4 bg-[#F8FAFC] px-5 py-3 font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
-              <span>CEFR</span>
-              <span>Submissions</span>
-              <span>Avg words</span>
-              <span>Avg minutes</span>
-              <span>Writing events</span>
-              <span>Coach messages</span>
-            </div>
+          <ResearchCompactStat
+            icon={FlaskConical}
+            label="Test accounts"
+            value={stats.testAccounts}
+            tone="indigo"
+          />
 
-            <div className="divide-y divide-slate-100 bg-white">
-              {benchmarks.map(
-                (benchmark) => (
-                  <div
-                    key={
-                      benchmark.level
-                    }
-                    className="grid grid-cols-[0.7fr_0.9fr_1fr_1fr_1fr_1fr] gap-4 px-5 py-4 text-xs text-slate-700"
-                  >
-                    <span className="font-mono font-black text-blue-700">
-                      {benchmark.level}
-                    </span>
+          <ResearchCompactStat
+            icon={ShieldCheck}
+            label="Research excluded"
+            value={stats.excludedStudents}
+            tone="amber"
+          />
 
-                    <span className="font-bold">
-                      {benchmark.submissions}
-                    </span>
+          <ResearchCompactStat
+            icon={Trash2}
+            label="Withdrawals"
+            value={withdrawalLog.length}
+            tone="sky"
+          />
+        </div>
+      </section>
 
-                    <span>
-                      {benchmark.averageWords}
-                    </span>
 
-                    <span>
-                      {benchmark.averageDurationMinutes}
-                    </span>
+      {/* Process analysis */}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">
+              Process Analysis
+            </h3>
 
-                    <span>
-                      {benchmark.averageWritingEvents}
-                    </span>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              Recompute missing or outdated analyses for eligible submissions.
+            </p>
+          </div>
 
-                    <span>
-                      {benchmark.averageCoachMessages}
-                    </span>
-                  </div>
-                )
-              )}
-            </div>
+          <button
+            type="button"
+            onClick={onRecompute}
+            className="inline-flex w-fit items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-[11px] font-bold text-white transition hover:bg-blue-700"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Recompute
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 divide-x divide-y divide-slate-100 md:grid-cols-4 md:divide-y-0">
+          <div className="px-4 py-3.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Stored analyses
+            </p>
+
+            <p className="mt-1.5 text-xl font-black text-slate-900">
+              {analyses.length}
+            </p>
+          </div>
+
+          <div className="px-4 py-3.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Last processed
+            </p>
+
+            <p className="mt-1.5 text-xl font-black text-slate-900">
+              {lastRun?.processed || 0}
+            </p>
+          </div>
+
+          <div className="px-4 py-3.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Last skipped
+            </p>
+
+            <p className="mt-1.5 text-xl font-black text-slate-900">
+              {lastRun?.skipped || 0}
+            </p>
+          </div>
+
+          <div className="px-4 py-3.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              Last failed
+            </p>
+
+            <p className={`mt-1.5 text-xl font-black ${
+              Number(lastRun?.failed || 0) > 0
+                ? "text-red-600"
+                : "text-slate-900"
+            }`}>
+              {lastRun?.failed || 0}
+            </p>
           </div>
         </div>
-      </Panel>
 
-      <div className="grid grid-cols-1 gap-6">
-        <Panel
-          title="Process Analysis"
-          subtitle="Recompute missing or outdated analyses for eligible submissions."
-          rightAction={
-            <button
-              type="button"
-              onClick={
-                onRecompute
-              }
-              className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-blue-700"
-            >
-              <RefreshCw className="h-4 w-4" />
-              Recompute
-            </button>
-          }
-        >
-          <div className="grid grid-cols-2 gap-3">
-            <MiniStat
-              label="Stored analyses"
-              value={
-                analyses.length
-              }
-            />
-
-            <MiniStat
-              label="Last processed"
-              value={
-                lastRun?.processed ||
-                0
-              }
-            />
-
-            <MiniStat
-              label="Last skipped"
-              value={
-                lastRun?.skipped ||
-                0
-              }
-            />
-
-            <MiniStat
-              label="Last failed"
-              value={
-                lastRun?.failed ||
-                0
-              }
-            />
-          </div>
-
-          <p className="mt-4 rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 font-mono text-[10px] text-slate-500">
-            Last run:{" "}
-            {getReadableDate(
-              lastRun?.completedAt
-            )}
+        <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-2.5">
+          <p className="font-mono text-[10px] text-slate-400">
+            Last run: {getReadableDate(lastRun?.completedAt)}
           </p>
-        </Panel>
+        </div>
+      </section>
 
+
+      {/* Withdrawal history */}
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-100 px-4 py-3">
+          <h3 className="text-sm font-bold text-slate-900">
+            Withdrawal history
+          </h3>
+
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            Anonymous deletion records only. Student identity is not retained.
+          </p>
+        </div>
+
+        {withdrawalLog.length === 0 ? (
+          <div className="px-4 py-5">
+            <p className="text-xs text-slate-400">
+              No research withdrawals have been processed.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {[...withdrawalLog]
+              .reverse()
+              .slice(0, 6)
+              .map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <p className="text-xs font-semibold text-slate-700">
+                    {getReadableDate(entry.deletedAt)}
+                  </p>
+
+                  <p className="text-[11px] text-slate-400">
+                    {entry.deleted?.submissions || 0} submissions
+                    {" · "}
+                    {entry.deleted?.analyses || 0} analyses
+                    {" · "}
+                    {entry.deleted?.memberships || 0} memberships
+                  </p>
+                </div>
+              ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+
+function ResearchCompactStat({
+  icon: Icon,
+  label,
+  value,
+  tone = "blue",
+}) {
+  const styles = {
+    blue: "border-blue-100 bg-blue-50 text-blue-600",
+    indigo:
+      "border-indigo-100 bg-indigo-50 text-indigo-600",
+    amber:
+      "border-amber-100 bg-amber-50 text-amber-600",
+    sky:
+      "border-sky-100 bg-sky-50 text-sky-600",
+  };
+
+  return (
+    <div className="flex min-w-0 items-center gap-3 px-4 py-3.5">
+      <div
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border ${
+          styles[tone] || styles.blue
+        }`}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+
+      <div className="min-w-0">
+        <p className="text-lg font-black leading-none text-slate-950">
+          {value || 0}
+        </p>
+
+        <p className="mt-1 truncate text-[10px] font-semibold text-slate-500">
+          {label}
+        </p>
       </div>
     </div>
   );
 }
+
 
 function ResearchExportsPanel({
   withdrawalLog,

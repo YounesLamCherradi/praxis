@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  FileText,
 } from "lucide-react";
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
@@ -19,6 +20,7 @@ import {
 import {
   ASSIGNMENT_TYPES,
   DEFAULT_AI_SUPPORT_SETTINGS,
+  STUDENT_LEVELS,
 } from "./create-assignment/constants";
 
 import {
@@ -36,6 +38,7 @@ import { buildAuthHeaders } from "./create-assignment/authUtils";
 import {
   buildAssignmentGenerationSystemPrompt,
   buildAssignmentGenerationUserPrompt,
+  inferYearlessDueDate,
   normalizeGeneratedAssignment,
 } from "./create-assignment/promptUtils";
 
@@ -56,6 +59,11 @@ function waitForRubricPoll() {
   return new Promise((resolve) => {
     globalThis.setTimeout(resolve, RUBRIC_PARSE_POLL_INTERVAL_MS);
   });
+}
+
+function normalizeStudentLevelOption(value) {
+  const level = String(value || "").trim();
+  return STUDENT_LEVELS.includes(level) ? level : "B1";
 }
 
 async function readRubricResponse(response) {
@@ -240,6 +248,10 @@ export default function CreateAssignmentModal({
 
   const [creationMode, setCreationMode] = useState("ai");
   const [draftAssignmentId, setDraftAssignmentId] = useState("");
+  const [pendingDraft, setPendingDraft] = useState(null);
+  const [draftRestored, setDraftRestored] = useState(false);
+  const [draftConfirmation, setDraftConfirmation] = useState(null);
+  const [isClosingDraft, setIsClosingDraft] = useState(false);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -274,6 +286,7 @@ export default function CreateAssignmentModal({
   const [aiBrief, setAiBrief] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSavingAssignment, setIsSavingAssignment] = useState(false);
+  const [assignmentSaveError, setAssignmentSaveError] = useState("");
   const [generationError, setGenerationError] = useState("");
   const [generationSuccess, setGenerationSuccess] = useState("");
   const [generatedDraft, setGeneratedDraft] = useState(null);
@@ -426,10 +439,8 @@ export default function CreateAssignmentModal({
     () =>
       Boolean(
         Number(step || 1) > 1 ||
-          creationMode ||
-        String(title || "").trim() ||
+          String(title || "").trim() ||
           String(description || "").trim() ||
-          String(course || "").trim() ||
           String(dueDate || "").trim() ||
           String(aiBrief || "").trim() ||
           String(rubricTitle || "").trim() ||
@@ -447,10 +458,8 @@ export default function CreateAssignmentModal({
       ),
     [
       step,
-      creationMode,
       title,
       description,
-      course,
       dueDate,
       aiBrief,
       rubricTitle,
@@ -490,6 +499,64 @@ export default function CreateAssignmentModal({
   const canContinueMode =
     creationMode === "ai" || creationMode === "manual";
 
+  function applySavedDraft(parsed) {
+    if (!parsed || typeof parsed !== "object") return;
+    setStep(1);
+    const restoredDraftId = String(parsed.draftAssignmentId || "");
+    const isCurrentTeacherDraft =
+      isUuid(restoredDraftId) &&
+      assignments.some(
+        (assignment) => String(assignment?.id) === restoredDraftId
+      );
+    setDraftAssignmentId(isCurrentTeacherDraft ? restoredDraftId : "");
+    setCreationMode(parsed.creationMode === "manual" ? "manual" : "ai");
+    setTitle(String(parsed.title || ""));
+    setDescription(String(parsed.description || ""));
+    setCourse(String(parsed.course || ""));
+    setDueDate(String(parsed.dueDate || ""));
+    const parsedType = String(parsed.assignmentType || "").trim();
+    if (ASSIGNMENT_TYPES.includes(parsedType) && parsedType !== "Other") {
+      setAssignmentType(parsedType);
+      setAssignmentTypeCustom(String(parsed.assignmentTypeCustom || ""));
+    } else if (parsedType) {
+      setAssignmentType("Other");
+      setAssignmentTypeCustom(parsedType);
+    } else {
+      setAssignmentType("Response");
+      setAssignmentTypeCustom(String(parsed.assignmentTypeCustom || ""));
+    }
+    setStudentLevel(normalizeStudentLevelOption(parsed.studentLevel));
+    setGradeScale(clampInteger(parsed.gradeScale ?? 20, 1, 500));
+    setFeedbackChecks(clampInteger(parsed.feedbackChecks ?? 2, 0, 20));
+    setIdeaRequestLimit(clampInteger(parsed.ideaRequestLimit ?? 0, 0, 20));
+    setAiTopic(String(parsed.aiTopic || ""));
+    setAiBrief(String(parsed.aiBrief || ""));
+    setGeneratedDraft(parsed.generatedDraft || null);
+    setIncludeRubricInPrompt(parsed.includeRubricInPrompt !== false);
+    setIncludeStudentAiSupportInPrompt(parsed.includeStudentAiSupportInPrompt !== false);
+    setMinWords(Math.max(1, Number(parsed.minWords || 250)));
+    setMaxWords(Math.max(1, Number(parsed.maxWords || 400)));
+    setAllowAI(Boolean(parsed.allowAI));
+    setCoachTimeLimitMinutes(Math.max(0, Number(parsed.coachTimeLimitMinutes || 0)));
+    setAutoBuildOutlineFromCoach(Boolean(parsed.autoBuildOutlineFromCoach));
+    setRubricMode(String(parsed.rubricMode || ""));
+    setSelectedRubricId(String(parsed.selectedRubricId || ""));
+    setRubricTitle(String(parsed.rubricTitle || ""));
+    setUploadedRubricName(String(parsed.uploadedRubricName || ""));
+    setUploadedRubricText(String(parsed.uploadedRubricText || ""));
+    setCriteria(
+      safeArray(parsed.criteria).length
+        ? safeArray(parsed.criteria).map(normalizeCriterion)
+        : []
+    );
+    setParsedRubricSchema(parsed.parsedRubricSchema || null);
+    setParsedRubricMatrix(parsed.parsedRubricMatrix || null);
+    setRubricView(parsed.rubricView === "edit" ? "edit" : "preview");
+    setExpandedCriterionId(String(parsed.expandedCriterionId || ""));
+    setPendingDraft(null);
+    setDraftRestored(true);
+  }
+
   useEffect(() => {
     if (editingAssignment) return;
 
@@ -497,65 +564,28 @@ export default function CreateAssignmentModal({
     getAssignmentBuilderDraft().then((parsed) => {
       if (!active || !parsed || typeof parsed !== "object") return;
 
-      // Recover unfinished form data, but always reopen a new-assignment flow
-      // at Creation mode. Restoring the previous wizard position made the
-      // modal appear to skip Step 1 without the teacher choosing anything in
-      // the current session.
-      setStep(1);
-      // Legacy frontend-only drafts used timestamps as assignment IDs.
-      // Supabase assignments use UUIDs, so retain the recovered form fields
-      // but create a fresh backend row instead of PATCHing a numeric ID.
-      setDraftAssignmentId(
-        isUuid(parsed.draftAssignmentId) ? String(parsed.draftAssignmentId) : ""
+      const hasRecoveredWork = Boolean(
+        Number(parsed.step || 1) > 1 ||
+          String(parsed.title || "").trim() ||
+          String(parsed.description || "").trim() ||
+          String(parsed.dueDate || "").trim() ||
+          String(parsed.aiBrief || "").trim() ||
+          String(parsed.rubricTitle || "").trim() ||
+          String(parsed.rubricMode || "").trim() ||
+          String(parsed.selectedRubricId || "").trim() ||
+          String(parsed.uploadedRubricText || "").trim() ||
+          safeArray(parsed.criteria).length > 0 ||
+          parsed.generatedDraft
       );
-      setCreationMode(parsed.creationMode === "manual" ? "manual" : "ai");
-      setTitle(String(parsed.title || ""));
-      setDescription(String(parsed.description || ""));
-      setCourse(String(parsed.course || ""));
-      setDueDate(String(parsed.dueDate || ""));
-      {
-        const parsedType = String(parsed.assignmentType || "").trim();
-        if (ASSIGNMENT_TYPES.includes(parsedType) && parsedType !== "Other") {
-          setAssignmentType(parsedType);
-          setAssignmentTypeCustom(String(parsed.assignmentTypeCustom || ""));
-        } else if (parsedType) {
-          setAssignmentType("Other");
-          setAssignmentTypeCustom(parsedType);
-        } else {
-          setAssignmentType("Response");
-          setAssignmentTypeCustom(String(parsed.assignmentTypeCustom || ""));
-        }
+
+      if (!hasRecoveredWork) {
+        clearAssignmentBuilderDraft().catch(() => {});
+        return;
       }
-      setStudentLevel(String(parsed.studentLevel || "B1"));
-      setGradeScale(clampInteger(parsed.gradeScale ?? 20, 1, 500));
-      setFeedbackChecks(clampInteger(parsed.feedbackChecks ?? 2, 0, 20));
-      setIdeaRequestLimit(clampInteger(parsed.ideaRequestLimit ?? 0, 0, 20));
-      setAiTopic(String(parsed.aiTopic || ""));
-      setAiBrief(String(parsed.aiBrief || ""));
-      setGeneratedDraft(parsed.generatedDraft || null);
-      setIncludeRubricInPrompt(parsed.includeRubricInPrompt !== false);
-      setIncludeStudentAiSupportInPrompt(parsed.includeStudentAiSupportInPrompt !== false);
-      setMinWords(Math.max(1, Number(parsed.minWords || 250)));
-      setMaxWords(Math.max(1, Number(parsed.maxWords || 400)));
-      setAllowAI(Boolean(parsed.allowAI));
-      setCoachTimeLimitMinutes(Math.max(0, Number(parsed.coachTimeLimitMinutes || 0)));
-      setAutoBuildOutlineFromCoach(Boolean(parsed.autoBuildOutlineFromCoach));
-      setRubricMode(String(parsed.rubricMode || ""));
-      setSelectedRubricId(String(parsed.selectedRubricId || ""));
-      setRubricTitle(String(parsed.rubricTitle || ""));
-      setUploadedRubricName(String(parsed.uploadedRubricName || ""));
-      setUploadedRubricText(String(parsed.uploadedRubricText || ""));
-      setCriteria(
-        safeArray(parsed.criteria).length
-          ? safeArray(parsed.criteria).map(normalizeCriterion)
-          : []
-      );
-      setParsedRubricSchema(parsed.parsedRubricSchema || null);
-      setParsedRubricMatrix(parsed.parsedRubricMatrix || null);
-      setRubricView(parsed.rubricView === "edit" ? "edit" : "preview");
-      setExpandedCriterionId(String(parsed.expandedCriterionId || ""));
+
+      setPendingDraft(parsed);
     }).catch((error) => {
-      console.error("Could not restore the Supabase assignment draft:", error);
+      console.error("Could not restore the assignment draft from the database:", error);
     });
     return () => {
       active = false;
@@ -576,7 +606,7 @@ export default function CreateAssignmentModal({
 
   function clearLocalDraft() {
     clearAssignmentBuilderDraft().catch((error) => {
-      console.error("Could not clear the Supabase assignment draft:", error);
+      console.error("Could not clear the assignment draft from the database:", error);
     });
     setDraftAssignmentId("");
   }
@@ -695,21 +725,60 @@ export default function CreateAssignmentModal({
   }
 
   async function closeModalAndKeepDraft() {
-    let persistedDraftId = "";
-
-    if (!editingAssignment && hasDraftProgress) {
-      try {
-        persistedDraftId = await persistDraftAssignmentRecord();
-      } catch (error) {
-        console.error("Could not save assignment draft to Supabase:", error);
-      }
-
-      await saveAssignmentBuilderDraft({
-        ...draftSnapshot,
-        draftAssignmentId: persistedDraftId || draftAssignmentId || "",
-      });
+    if (hasDraftProgress) {
+      setDraftConfirmation("close");
+      return;
     }
     onClose();
+  }
+
+  function continueSavedDraft() {
+    applySavedDraft(pendingDraft);
+  }
+
+  function startFreshAssignment() {
+    setDraftConfirmation("fresh");
+  }
+
+  function discardDraftAndContinue() {
+    if (!editingAssignment || draftConfirmation === "fresh") {
+      clearLocalDraft();
+    }
+    setDraftConfirmation(null);
+
+    if (draftConfirmation === "fresh") {
+      setPendingDraft(null);
+      setDraftRestored(false);
+      return;
+    }
+
+    onClose();
+  }
+
+  async function saveDraftAndClose() {
+    if (editingAssignment) {
+      setDraftConfirmation(null);
+      onClose();
+      return;
+    }
+
+    setIsClosingDraft(true);
+    try {
+      await saveAssignmentBuilderDraft({
+        ...draftSnapshot,
+        draftAssignmentId: draftAssignmentId || "",
+      });
+      setDraftConfirmation(null);
+      onClose();
+    } catch (error) {
+      console.error("Could not save the assignment draft before closing:", error);
+      setGenerationError(
+        "The draft could not be saved. Keep editing and try again."
+      );
+      setDraftConfirmation(null);
+    } finally {
+      setIsClosingDraft(false);
+    }
   }
 
   const hasValidWordRange =
@@ -781,7 +850,7 @@ export default function CreateAssignmentModal({
         setAssignmentTypeCustom("");
       }
     }
-    setStudentLevel(editingAssignment.studentLevel || "B1");
+    setStudentLevel(normalizeStudentLevelOption(editingAssignment.studentLevel));
     setGradeScale(
       clampInteger(
         editingAssignment.gradeScale ??
@@ -1471,6 +1540,7 @@ export default function CreateAssignmentModal({
     setGeneratedDraft(null);
 
     try {
+      const generationStartedAt = new Date();
       const data = await runAiJob("generate", {
           system: buildAssignmentGenerationSystemPrompt(),
           messages: [
@@ -1479,7 +1549,7 @@ export default function CreateAssignmentModal({
               content: buildAssignmentGenerationUserPrompt({
                 teacherRequest,
                 availableCourses: selectableClasses,
-                currentDate: new Date().toISOString(),
+                currentDate: generationStartedAt.toISOString(),
                 gradeScale,
                 rubricTitle,
                 criteria,
@@ -1527,7 +1597,7 @@ export default function CreateAssignmentModal({
       }
 
       setStudentLevel(
-        generated.languageLevel || "B1"
+        normalizeStudentLevelOption(generated.languageLevel)
       );
       setGradeScale(clampInteger(generated.gradeScale ?? 20, 1, 500));
 
@@ -1553,7 +1623,9 @@ export default function CreateAssignmentModal({
       setIdeaRequestLimit(0);
 
       setDueDate(
-        generated.dueDate || getDefaultDueDateValue(7)
+        inferYearlessDueDate(teacherRequest, generationStartedAt) ||
+          generated.dueDate ||
+          getDefaultDueDateValue(7)
       );
 
       const requestedCourseKey = normalizeCourseKey(
@@ -1695,14 +1767,21 @@ export default function CreateAssignmentModal({
     if (isSavingAssignment) return;
     /*
       HARD GUARD:
-      Only the explicit action button rendered on Step 4 may create
-      or update an assignment. Steps 1–3 have no form submission path.
+      Only the explicit action button rendered on the final review step may
+      create or update an assignment. Earlier steps have no submission path.
     */
     if (step !== 5) {
       return;
     }
 
-    if (!canContinueDetails) return;
+    setAssignmentSaveError("");
+
+    if (!canContinueDetails) {
+      setAssignmentSaveError(
+        "Some required assignment details are missing. Go back to Assignment details, complete the highlighted fields, then try again."
+      );
+      return;
+    }
 
     const rubricSchema = buildRubricPayload();
 
@@ -1805,22 +1884,31 @@ export default function CreateAssignmentModal({
 
     setIsSavingAssignment(true);
     try {
+      let savedAssignment = null;
       if (editingAssignment) {
-        await onUpdate({
+        savedAssignment = await onUpdate({
           ...editingAssignment,
           ...assignment,
         });
       } else if (isUuid(draftAssignmentId)) {
-        await onUpdate({
+        savedAssignment = await onUpdate({
           id: draftAssignmentId,
           ...assignment,
         });
       } else {
-        await onCreate(assignment);
+        savedAssignment = await onCreate(assignment);
+      }
+
+      if (!savedAssignment?.id) {
+        throw new Error(
+          editingAssignment
+            ? "The assignment was not updated. Please try again."
+            : "The assignment was not created. Please try again."
+        );
       }
     } catch (error) {
       console.error("Assignment save failed:", error);
-      setGenerationError(
+      setAssignmentSaveError(
         error?.conflict
           ? "This assignment changed elsewhere. Close and reopen it before saving."
           : error?.message || "The assignment could not be saved. Your local draft is still available."
@@ -1838,21 +1926,28 @@ export default function CreateAssignmentModal({
     <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-2 overflow-y-auto">
       <div
         className="absolute inset-0 z-0 bg-slate-950/55 backdrop-blur-md"
-        onClick={closeModalAndKeepDraft}
       />
 
       <div
         ref={modalScrollRef}
-        className="assignment-builder-readable relative z-10 bg-white border border-slate-200 rounded-3xl shadow-2xl w-[calc(100vw-2rem)] max-w-[1500px] p-5 sm:p-6 my-6 max-h-[92vh] overflow-y-auto animate-fade-in-up"
+        className={`assignment-builder-readable relative z-10 my-6 max-h-[92vh] w-[calc(100vw-2rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl animate-fade-in-up sm:p-6 ${
+          pendingDraft && !editingAssignment ? "max-w-[760px]" : "max-w-[1500px]"
+        }`}
       >
         <div className="flex items-start justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
           <div className="space-y-1">
             <h2 className="text-2xl font-serif font-black text-slate-950">
-              {editingAssignment ? "Edit Assignment" : "Create Assignment"}
+              {editingAssignment
+                ? "Edit Assignment"
+                : pendingDraft
+                ? "Continue assignment draft"
+                : "Create Assignment"}
             </h2>
 
             <p className="text-base text-slate-600 font-medium leading-relaxed lg:whitespace-nowrap">
-              Choose the creation mode first, then configure rubric, details, student support, and review the assignment before saving.
+              {pendingDraft && !editingAssignment
+                ? "Review the recovered draft before deciding how to continue."
+                : "Choose the creation mode first, then configure rubric, details, student support, and review the assignment before saving."}
             </p>
           </div>
 
@@ -1865,8 +1960,82 @@ export default function CreateAssignmentModal({
           </button>
         </div>
 
+        {!editingAssignment && pendingDraft && (
+          <div className="rounded-2xl border border-blue-200 bg-blue-50/70 p-5 sm:p-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-white text-blue-700 shadow-sm">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-slate-950">
+                  Welcome back — continue your draft?
+                </h3>
+                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                  We recovered this private assignment draft from your previous session.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="truncate text-base font-semibold text-slate-950">
+                {String(pendingDraft.title || "Untitled assignment")}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-medium text-slate-600">
+                {pendingDraft.course && (
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                    {pendingDraft.course}
+                  </span>
+                )}
+                <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                  Step {Math.max(1, Number(pendingDraft.step || 1))} of 5
+                </span>
+                {pendingDraft.rubricTitle && (
+                  <span className="max-w-full truncate rounded-full bg-blue-50 px-2.5 py-1 text-blue-700">
+                    Rubric: {pendingDraft.rubricTitle}
+                  </span>
+                )}
+                {(pendingDraft.savedAt || pendingDraft.updatedAt) && (
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1">
+                    Saved {new Date(pendingDraft.savedAt || pendingDraft.updatedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={startFreshAssignment}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Discard and start fresh
+              </button>
+              <button
+                type="button"
+                onClick={continueSavedDraft}
+                className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700"
+              >
+                Continue draft
+              </button>
+            </div>
+            <p className="mt-3 text-right text-[11px] text-slate-500">
+              Discarding removes this recovered builder draft.
+            </p>
+          </div>
+        )}
+
+        {!editingAssignment && draftRestored && !pendingDraft && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs text-blue-800">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-semibold">Draft restored</p>
+              <p className="mt-0.5">Your previous assignment details and rubric have been recovered.</p>
+            </div>
+          </div>
+        )}
+
         <div
-          className="space-y-6"
+          className={pendingDraft && !editingAssignment ? "hidden" : "space-y-6"}
           data-assignment-builder-step={step}
         >
           {step === 1 && (
@@ -2017,6 +2186,19 @@ export default function CreateAssignmentModal({
             </div>
           )}
 
+          {step === 5 && assignmentSaveError && (
+            <div
+              role="alert"
+              className="flex items-start gap-2.5 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-xs font-medium text-rose-800"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600" />
+              <div>
+                <p className="font-bold">Assignment not saved</p>
+                <p className="mt-0.5 leading-relaxed">{assignmentSaveError}</p>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100">
             <button
               type="button"
@@ -2080,6 +2262,76 @@ export default function CreateAssignmentModal({
           </div>
         </div>
       </div>
+
+      {draftConfirmation && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="assignment-draft-confirmation-title"
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600">
+                <X className="h-4 w-4" />
+              </div>
+              <div>
+                <h3
+                  id="assignment-draft-confirmation-title"
+                  className="text-base font-semibold text-slate-950"
+                >
+                  {draftConfirmation === "fresh"
+                    ? "Discard this recovered draft?"
+                    : editingAssignment
+                    ? "Discard unsaved changes?"
+                    : "What would you like to do with this draft?"}
+                </h3>
+                <p className="mt-1 text-sm leading-relaxed text-slate-600">
+                  {draftConfirmation === "fresh"
+                    ? "The recovered assignment details and rubric will be removed, and you will start with a clean assignment."
+                    : editingAssignment
+                    ? "Your changes to this assignment have not been saved."
+                    : "Save it to continue later, keep working, or permanently discard the unfinished assignment."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setDraftConfirmation(null)}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                {draftConfirmation === "fresh" ? "Keep recovered draft" : "Keep editing"}
+              </button>
+
+              {draftConfirmation === "close" && !editingAssignment && (
+                <button
+                  type="button"
+                  onClick={saveDraftAndClose}
+                  disabled={isClosingDraft}
+                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {isClosingDraft ? "Saving..." : "Save and close"}
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={discardDraftAndContinue}
+                disabled={isClosingDraft}
+                className="rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-xs font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
+              >
+                {draftConfirmation === "fresh"
+                  ? "Discard and start fresh"
+                  : editingAssignment
+                  ? "Discard changes"
+                  : "Discard draft"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 

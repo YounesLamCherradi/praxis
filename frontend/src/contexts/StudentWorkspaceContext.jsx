@@ -1934,7 +1934,7 @@ export function StudentWorkspaceProvider({
           });
         }
       } catch (error) {
-        console.error("Could not load enrolled courses from Supabase:", error);
+        console.error("Could not load enrolled courses from the database:", error);
         if (active) {
           setWorkspaceSyncState((current) => ({
             ...current,
@@ -2282,7 +2282,7 @@ export function StudentWorkspaceProvider({
         return confirmed;
       })
       .catch((error) => {
-        console.error("Supabase draft autosave failed; local recovery copy retained:", error);
+        console.error("Database draft autosave failed; local recovery copy retained:", error);
         throw error;
       });
     persistentSaveQueues.current.set(key, next);

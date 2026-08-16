@@ -2958,7 +2958,7 @@ if (action === "admin-select-assignment") {
   });
 } catch (error) {
   ui.notice = error.needsMigration
-    ? "Test account labels need one Supabase migration before they can save. Apply the PR 165 profile admin flags migration, then try again."
+    ? "Test account labels require the latest database schema migration before they can save. Apply the profile admin flags migration, then try again."
     : `Could not update student flags: ${error.message}`;
   ui.adminStudentFlagSavingId = null;
   render();

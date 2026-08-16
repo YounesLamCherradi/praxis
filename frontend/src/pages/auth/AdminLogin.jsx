@@ -11,7 +11,7 @@ import {
   Shield,
 } from "lucide-react";
 
-const ADMIN_EMAIL = "praxiswrite@aui.ma";
+const ADMIN_EMAIL = "admin@aui.ma";
 
 export default function AdminLogin() {
   const navigate = useNavigate();

@@ -1,12 +1,12 @@
 const Sentry = require('./instrument');
 require('dotenv').config();
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const express = require('express');
 const db = require('./db');
 const compression = require('compression');
 const crypto = require('node:crypto');
 const nodemailer = require('nodemailer');
-const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
 const { parseRubricBuffer, parseRubricText } = require('./rubricParser');
 const { analyzeSubmission } = require('./public/writing-process/analyze');
@@ -35,19 +35,90 @@ const {
   getSafeRedirectPath,
 } = require('./canonical-url-utils');
 const {
-  BUG_REPORT_BUCKET,
   decodeBugReportAttachment,
 } = require('./bug-report-attachment');
 const {
   buildNotificationFailurePatch,
 } = require('./notification-outbox-utils');
-const {
-  getAuthenticatedUser,
-} = require('./auth-user-retry');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-const APP_DB_BACKEND = String(process.env.APP_DB_BACKEND || 'supabase').trim().toLowerCase();
-const USE_POSTGRES_APP_DB = APP_DB_BACKEND === 'postgres';
+const BUG_REPORT_LOCAL_ROOT = path.resolve(
+  process.env.BUG_REPORT_UPLOAD_DIR ||
+    path.join(
+      process.env.HOME || __dirname,
+      'praxis_uploads',
+      'bug-reports'
+    )
+);
+
+function resolveBugReportAttachmentPath(relativePath) {
+  const candidate = String(relativePath || '').trim();
+
+  if (
+    !candidate ||
+    path.isAbsolute(candidate) ||
+    candidate.includes('\\0')
+  ) {
+    throw new Error('Invalid bug report attachment path.');
+  }
+
+  const fullPath = path.resolve(
+    BUG_REPORT_LOCAL_ROOT,
+    candidate
+  );
+
+  const requiredPrefix =
+    `${BUG_REPORT_LOCAL_ROOT}${path.sep}`;
+
+  if (!fullPath.startsWith(requiredPrefix)) {
+    throw new Error('Invalid bug report attachment path.');
+  }
+
+  return fullPath;
+}
+
+async function saveBugReportAttachment(
+  relativePath,
+  buffer
+) {
+  const fullPath =
+    resolveBugReportAttachmentPath(relativePath);
+
+  await fs.mkdir(
+    path.dirname(fullPath),
+    {
+      recursive: true,
+      mode: 0o700,
+    }
+  );
+
+  await fs.writeFile(
+    fullPath,
+    buffer,
+    {
+      flag: 'wx',
+      mode: 0o600,
+    }
+  );
+
+  return relativePath;
+}
+
+async function deleteBugReportAttachment(relativePath) {
+  if (!relativePath) return;
+
+  const fullPath =
+    resolveBugReportAttachmentPath(relativePath);
+
+  try {
+    await fs.unlink(fullPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
 
 const app = express();
 app.disable("x-powered-by");
@@ -154,8 +225,8 @@ app.get('/api/setup/status', async (req, res) => {
       ok: status.missing.length === 0,
       status,
       nextStep: status.missing.length === 0
-        ? 'Supabase core tables are available.'
-        : 'Run migrations/bootstrap-auth-schema.sql in the Supabase SQL editor for a fresh project.',
+        ? 'PostgreSQL core tables are available.'
+        : 'One or more required PostgreSQL tables are missing.',
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -193,7 +264,7 @@ app.use((req, res, next) => {
 app.get('/', (req, res, next) => {
   // Serve the app (not the marketing landing page) for flows the SPA must
   // handle on load: class invites (?join) and the password-reset callback
-  // (?reset), whose recovery token Supabase appends to this URL as a hash.
+  // (?reset), which the SPA handles as the password-reset callback.
   if (req.query.join || req.query.reset) {
     req.url = '/index.html';
   }
@@ -220,68 +291,6 @@ app.use((req, res, next) => {
   setLastActivityCookie(req, res);
   return next();
 });
-
-const SUPABASE_SERVER_KEY =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY;
-const SUPABASE_BROWSER_KEY =
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_PUBLISHABLE_KEY ||
-  process.env.SUPABASE_PUBLIC_KEY;
-
-const SERVER_CLIENT_AUTH_OPTIONS = {
-  auth: {
-    persistSession: false,
-    autoRefreshToken: false,
-    detectSessionInUrl: false,
-  },
-  global: {
-    fetch: fetchWithSupabaseTimeout,
-  },
-};
-
-const SUPABASE_REQUEST_TIMEOUT_MS = Math.max(
-  3_000,
-  Number(process.env.SUPABASE_REQUEST_TIMEOUT_MS || 12_000)
-);
-
-async function fetchWithSupabaseTimeout(url, options = {}) {
-  if (options.signal) return fetch(url, options);
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort(),
-    SUPABASE_REQUEST_TIMEOUT_MS
-  );
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-// Supabase admin client (secret/service role — server only).
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  SUPABASE_SERVER_KEY,
-  SERVER_CLIENT_AUTH_OPTIONS
-);
-
-// User-auth client for user session operations. Keep this separate so sign-in
-// and refresh calls cannot pollute the admin client's Authorization context.
-const supabaseUserAuth = createClient(
-  process.env.SUPABASE_URL,
-  SUPABASE_BROWSER_KEY,
-  SERVER_CLIENT_AUTH_OPTIONS
-);
-
-if (!SUPABASE_SERVER_KEY) {
-  console.error(
-    '[STARTUP ERROR] SUPABASE_SERVICE_ROLE_KEY is not set. ' +
-    'The server will use anonymous Supabase access, which is blocked by RLS for write operations. ' +
-    'Set SUPABASE_SERVICE_ROLE_KEY in your environment variables (.env or hosting platform).'
-  );
-}
 
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
@@ -322,9 +331,13 @@ const NON_REMEMBER_INACTIVITY_MS = Math.max(5 * 60 * 1000, Number(process.env.NO
 const OTP_SECRET =
   process.env.OTP_SECRET ||
   process.env.AUTH_OTP_SECRET ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.SUPABASE_SERVICE_KEY ||
   '';
+
+if (!OTP_SECRET) {
+  console.error(
+    '[STARTUP ERROR] OTP_SECRET is not configured.'
+  );
+}
 let deadlineReminderJob = null;
 let notificationOutboxJob = null;
 let deadlineReminderInFlight = false;
@@ -341,14 +354,6 @@ const ACCOUNT_SETUP_INCOMPLETE_MESSAGE = "Your login worked, but your account se
 const SIGNUP_PROFILE_ERROR_MESSAGE = "We couldn't finish setting up your account. Please try creating your account again. If this keeps happening, ask your teacher (if you're a student) or contact support.";
 
 let smtpTransport = null;
-
-if (!process.env.SUPABASE_URL || !SUPABASE_SERVER_KEY) {
-  console.warn('Supabase server client is missing SUPABASE_URL or a service-role key.');
-}
-
-if (!process.env.SUPABASE_URL || !SUPABASE_BROWSER_KEY) {
-  console.warn('Supabase user-auth client is missing SUPABASE_URL or a publishable/anon key.');
-}
 
 function getBearerToken(req) {
   if (req.sessionInactive === true) return null;
@@ -519,26 +524,276 @@ function setLastActivityCookie(req, res) {
   }));
 }
 
-function getRequestScopedSupabase(req) {
-  const token = getBearerToken(req);
-  if (!process.env.SUPABASE_URL || !SUPABASE_BROWSER_KEY || !token) {
-    return supabase;
-  }
-  return createClient(process.env.SUPABASE_URL, SUPABASE_BROWSER_KEY, {
-    ...SERVER_CLIENT_AUTH_OPTIONS,
-    global: {
-      fetch: fetchWithSupabaseTimeout,
-      headers: {
-        Authorization: `Bearer ${token}`,
+const POSTGRES_AUTH_ACCESS_TTL_SECONDS = 60 * 60;
+const POSTGRES_AUTH_REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const POSTGRES_AUTH_SESSION_REFRESH_TTL_SECONDS = 24 * 60 * 60;
+
+function hashAuthToken(token) {
+  return crypto
+    .createHash('sha256')
+    .update(String(token || ''))
+    .digest('hex');
+}
+
+function deriveScrypt(password, saltHex, N = 16384, r = 8, p = 1) {
+  return new Promise((resolve, reject) => {
+    crypto.scrypt(
+      String(password || ''),
+      Buffer.from(saltHex, 'hex'),
+      64,
+      {
+        N,
+        r,
+        p,
+        maxmem: 64 * 1024 * 1024,
       },
-    },
+      (error, derivedKey) => {
+        if (error) return reject(error);
+        resolve(derivedKey);
+      }
+    );
   });
 }
 
-// Helper to get authenticated user from request
+async function hashPostgresPassword(password) {
+  const salt = crypto.randomBytes(16);
+
+  const N = 16384;
+  const r = 8;
+  const p = 1;
+
+  const derivedKey = await deriveScrypt(
+    password,
+    salt.toString('hex'),
+    N,
+    r,
+    p
+  );
+
+  return [
+    'scrypt',
+    String(N),
+    String(r),
+    String(p),
+    salt.toString('hex'),
+    derivedKey.toString('hex'),
+  ].join('$');
+}
+
+async function verifyPostgresPassword(password, encodedHash) {
+  try {
+    const parts = String(encodedHash || '').split('$');
+
+    if (parts.length !== 6 || parts[0] !== 'scrypt') {
+      return false;
+    }
+
+    const N = Number(parts[1]);
+    const r = Number(parts[2]);
+    const p = Number(parts[3]);
+    const saltHex = parts[4];
+    const expectedHex = parts[5];
+
+    if (
+      !Number.isInteger(N) ||
+      !Number.isInteger(r) ||
+      !Number.isInteger(p) ||
+      !saltHex ||
+      !expectedHex
+    ) {
+      return false;
+    }
+
+    const actual = await deriveScrypt(
+      password,
+      saltHex,
+      N,
+      r,
+      p
+    );
+
+    const expected = Buffer.from(expectedHex, 'hex');
+
+    if (actual.length !== expected.length) {
+      return false;
+    }
+
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+async function createPostgresAuthSession(userId, stayLoggedIn = true) {
+  const accessToken =
+    crypto.randomBytes(32).toString('base64url');
+
+  const refreshToken =
+    crypto.randomBytes(48).toString('base64url');
+
+  const accessSeconds =
+    POSTGRES_AUTH_ACCESS_TTL_SECONDS;
+
+  const refreshSeconds = stayLoggedIn
+    ? POSTGRES_AUTH_REFRESH_TTL_SECONDS
+    : POSTGRES_AUTH_SESSION_REFRESH_TTL_SECONDS;
+
+  const now = Date.now();
+
+  await db.query(
+    `INSERT INTO public.auth_sessions
+      (
+        id,
+        user_id,
+        access_token_hash,
+        refresh_token_hash,
+        remember_me,
+        access_expires_at,
+        refresh_expires_at
+      )
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      crypto.randomUUID(),
+      userId,
+      hashAuthToken(accessToken),
+      hashAuthToken(refreshToken),
+      Boolean(stayLoggedIn),
+      new Date(now + accessSeconds * 1000).toISOString(),
+      new Date(now + refreshSeconds * 1000).toISOString(),
+    ]
+  );
+
+  return {
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: accessSeconds,
+    remember_me: Boolean(stayLoggedIn),
+  };
+}
+
+async function rotatePostgresAuthSession(refreshToken) {
+  const refreshHash = hashAuthToken(refreshToken);
+
+  const { rows } = await db.query(
+    `SELECT
+       s.id,
+       s.user_id,
+       s.remember_me
+     FROM public.auth_sessions s
+     JOIN public.profiles p
+       ON p.id = s.user_id
+     WHERE s.refresh_token_hash = $1
+       AND s.revoked_at IS NULL
+       AND s.refresh_expires_at > NOW()
+       AND p.auth_disabled = false
+     LIMIT 1`,
+    [refreshHash]
+  );
+
+  const existing = rows[0];
+
+  if (!existing) return null;
+
+  const accessToken =
+    crypto.randomBytes(32).toString('base64url');
+
+  const newRefreshToken =
+    crypto.randomBytes(48).toString('base64url');
+
+  const accessSeconds =
+    POSTGRES_AUTH_ACCESS_TTL_SECONDS;
+
+  const refreshSeconds = existing.remember_me
+    ? POSTGRES_AUTH_REFRESH_TTL_SECONDS
+    : POSTGRES_AUTH_SESSION_REFRESH_TTL_SECONDS;
+
+  const now = Date.now();
+
+  const { rowCount } = await db.query(
+    `UPDATE public.auth_sessions
+        SET access_token_hash = $2,
+            refresh_token_hash = $3,
+            access_expires_at = $4,
+            refresh_expires_at = $5,
+            last_used_at = NOW()
+      WHERE id = $1
+        AND refresh_token_hash = $6
+        AND revoked_at IS NULL`,
+    [
+      existing.id,
+      hashAuthToken(accessToken),
+      hashAuthToken(newRefreshToken),
+      new Date(now + accessSeconds * 1000).toISOString(),
+      new Date(now + refreshSeconds * 1000).toISOString(),
+      refreshHash,
+    ]
+  );
+
+  if (rowCount !== 1) return null;
+
+  return {
+    access_token: accessToken,
+    refresh_token: newRefreshToken,
+    expires_in: accessSeconds,
+    remember_me: Boolean(existing.remember_me),
+  };
+}
+
+async function revokePostgresAuthSession(req) {
+  const accessToken = getBearerToken(req);
+  const refreshToken = getCookieValue(req, 'praxis_rt');
+
+  const accessHash = accessToken
+    ? hashAuthToken(accessToken)
+    : '';
+
+  const refreshHash = refreshToken
+    ? hashAuthToken(refreshToken)
+    : '';
+
+  if (!accessHash && !refreshHash) return;
+
+  await db.query(
+    `UPDATE public.auth_sessions
+        SET revoked_at = COALESCE(revoked_at, NOW())
+      WHERE revoked_at IS NULL
+        AND (
+          ($1 <> '' AND access_token_hash = $1)
+          OR
+          ($2 <> '' AND refresh_token_hash = $2)
+        )`,
+    [accessHash, refreshHash]
+  );
+}
+
+// Helper to get authenticated user from PostgreSQL
 async function getUser(req) {
+  if (req.sessionInactive === true) {
+    return null;
+  }
+
   const token = getBearerToken(req);
-  return getAuthenticatedUser(supabaseUserAuth, token);
+
+  if (!token) return null;
+
+  const { rows } = await db.query(
+    `SELECT
+       p.id,
+       p.email,
+       p.name,
+       p.role
+     FROM public.auth_sessions s
+     JOIN public.profiles p
+       ON p.id = s.user_id
+     WHERE s.access_token_hash = $1
+       AND s.revoked_at IS NULL
+       AND s.access_expires_at > NOW()
+       AND p.auth_disabled = false
+     LIMIT 1`,
+    [hashAuthToken(token)]
+  );
+
+  return rows[0] || null;
 }
 
 function isRlsDenial(error) {
@@ -558,11 +813,11 @@ function isMissingRelation(error) {
     (message.includes('table') && message.includes('schema cache'));
 }
 
+
 async function getBackendSetupStatus() {
   const status = {
-    supabaseUrlConfigured: Boolean(process.env.SUPABASE_URL),
-    serviceRoleConfigured: Boolean(SUPABASE_SERVER_KEY),
-    anonKeyConfigured: Boolean(SUPABASE_BROWSER_KEY),
+    backend: 'postgres',
+    postgresConnected: false,
     profilesTableReady: false,
     classesTableReady: false,
     assignmentsTableReady: false,
@@ -573,36 +828,52 @@ async function getBackendSetupStatus() {
     missing: [],
   };
 
-  if (!process.env.SUPABASE_URL || !SUPABASE_SERVER_KEY) {
-    if (!process.env.SUPABASE_URL) status.missing.push('SUPABASE_URL');
-    if (!SUPABASE_SERVER_KEY) status.missing.push('SUPABASE_SERVICE_ROLE_KEY');
+  try {
+    await db.query('SELECT 1');
+    status.postgresConnected = true;
+  } catch (error) {
+    status.missing.push(
+      `postgres: ${error.message}`
+    );
     return status;
   }
 
   const checks = [
-    ['profilesTableReady', 'profiles', 'id'],
-    ['classesTableReady', 'classes', 'id'],
-    ['assignmentsTableReady', 'assignments', 'id'],
-    ['submissionsTableReady', 'submissions', 'id'],
-    ['notificationOutboxTableReady', 'notification_outbox', 'id'],
-    ['notificationDeliveriesTableReady', 'notification_deliveries', 'idempotency_key'],
-    ['courseMessagesTableReady', 'course_messages', 'id'],
+    ['profilesTableReady', 'profiles'],
+    ['classesTableReady', 'classes'],
+    ['assignmentsTableReady', 'assignments'],
+    ['submissionsTableReady', 'submissions'],
+    [
+      'notificationOutboxTableReady',
+      'notification_outbox',
+    ],
+    [
+      'notificationDeliveriesTableReady',
+      'notification_deliveries',
+    ],
+    [
+      'courseMessagesTableReady',
+      'course_messages',
+    ],
   ];
 
-  for (const [field, table, keyColumn] of checks) {
-    const { error } = await supabase
-      .from(table)
-      .select(keyColumn, { count: 'exact', head: true });
-    if (!error) {
-      status[field] = true;
-      continue;
+  for (const [field, table] of checks) {
+    try {
+      const { rows } = await db.query(
+        `SELECT to_regclass($1) IS NOT NULL AS ready`,
+        [`public.${table}`]
+      );
+
+      if (rows[0]?.ready === true) {
+        status[field] = true;
+      } else {
+        status.missing.push(table);
+      }
+    } catch (error) {
+      status.missing.push(
+        `${table}: ${error.message}`
+      );
     }
-    if (isMissingRelation(error)) {
-      status.missing.push(table);
-      continue;
-    }
-    status.missing.push(`${table}: ${error.message}`);
-    return status;
   }
 
   return status;
@@ -614,38 +885,41 @@ async function getBackendSetupStatus() {
 // endpoint instead.
 function sanitizeProfileForClient(profile) {
   if (!profile || typeof profile !== 'object') return profile;
+
   const sanitized = { ...profile };
+
   delete sanitized.exclude_from_writing_behavior;
+
+  // Never expose authentication internals.
+  delete sanitized.password_hash;
+  delete sanitized.password_updated_at;
+  delete sanitized.auth_disabled;
+  delete sanitized.last_login_at;
+
   return sanitized;
 }
 
 // Helper to get user profile including role
+
 async function getProfile(userId) {
-  if (USE_POSTGRES_APP_DB) {
-    try {
-      const { rows } = await db.query(
-        `SELECT *
-           FROM public.profiles
-          WHERE id = $1
-          LIMIT 1`,
-        [userId]
-      );
+  try {
+    const { rows } = await db.query(
+      `SELECT *
+         FROM public.profiles
+        WHERE id = $1
+        LIMIT 1`,
+      [userId]
+    );
 
-      return rows[0] || null;
-    } catch (error) {
-      console.error('[POSTGRES PROFILE]', safeLogError(error));
-      return null;
-    }
+    return rows[0] || null;
+  } catch (error) {
+    console.error(
+      '[POSTGRES PROFILE]',
+      safeLogError(error)
+    );
+
+    return null;
   }
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single();
-
-  if (error) return null;
-  return data;
 }
 
 function getRequestBaseUrl(req) {
@@ -728,7 +1002,7 @@ function getPasswordResetBaseUrl(req, requestedRedirect) {
     !isLocalhostUrl(redirectFromClient);
 
   // When a trusted public base is configured (PUBLIC_APP_URL etc.), never emit an
-  // off-domain reset link (defense-in-depth on top of Supabase's allow-list). A
+  // off-domain reset link as an additional defense-in-depth measure. A
   // same-origin `…/?reset=1` is returned verbatim, so the normal flow is unchanged.
   // When no trusted base is configured the previous behavior is preserved so the
   // origin is never mis-resolved from proxy headers.
@@ -993,229 +1267,236 @@ function clearSigninFailures(req, email) {
   clearRateBucketEntry(signinRateLimiter, `${getClientIp(req)}:${normalizeEmail(email)}`);
 }
 
+
 async function maybeCleanupOtpRecords() {
   const now = Date.now();
-  if (now - otpCleanupLastRanAt < OTP_CLEANUP_INTERVAL_MS) return;
-  otpCleanupLastRanAt = now;
 
-  const cutoffIso = new Date(
-    now - OTP_RETENTION_HOURS * 60 * 60 * 1000
-  ).toISOString();
-
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `DELETE FROM public.auth_email_otps
-        WHERE created_at < $1`,
-      [cutoffIso]
-    );
+  if (
+    now - otpCleanupLastRanAt <
+    OTP_CLEANUP_INTERVAL_MS
+  ) {
     return;
   }
 
-  const { error } = await supabase
-    .from('auth_email_otps')
-    .delete()
-    .lt('created_at', cutoffIso);
+  otpCleanupLastRanAt = now;
 
-  if (error && !isMissingRelation(error)) {
-    console.warn('OTP cleanup failed:', safeLogError(error));
-  }
+  const cutoffIso = new Date(
+    now -
+      OTP_RETENTION_HOURS *
+        60 *
+        60 *
+        1000
+  ).toISOString();
+
+  await db.query(
+    `DELETE FROM public.auth_email_otps
+      WHERE created_at < $1`,
+    [cutoffIso]
+  );
 }
+
 
 function otpHash(email, purpose, code) {
   return crypto
     .createHmac('sha256', OTP_SECRET)
-    .update(`${purpose}:${normalizeEmail(email)}:${String(code || '').trim()}`)
+    .update(
+      `${purpose}:${normalizeEmail(email)}:${String(
+        code || ''
+      ).trim()}`
+    )
     .digest('hex');
 }
 
+
 function generateOtpCode() {
-  return String(crypto.randomInt(0, 1000000)).padStart(
+  return String(
+    crypto.randomInt(0, 1000000)
+  ).padStart(
     OTP_CODE_LENGTH,
     '0'
   );
 }
 
-async function getLatestOtp(email, purpose) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT *
-         FROM public.auth_email_otps
-        WHERE email = $1
-          AND purpose = $2
-          AND consumed_at IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1`,
-      [normalizeEmail(email), purpose]
-    );
 
-    return rows[0] || null;
-  }
+async function getLatestOtp(
+  email,
+  purpose
+) {
+  const { rows } = await db.query(
+    `SELECT *
+       FROM public.auth_email_otps
+      WHERE email = $1
+        AND purpose = $2
+        AND consumed_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [
+      normalizeEmail(email),
+      purpose,
+    ]
+  );
 
-  const { data, error } = await supabase
-    .from('auth_email_otps')
-    .select('*')
-    .eq('email', normalizeEmail(email))
-    .eq('purpose', purpose)
-    .is('consumed_at', null)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data || null;
+  return rows[0] || null;
 }
 
-async function createOtp(email, purpose) {
+
+async function createOtp(
+  email,
+  purpose
+) {
   const code = generateOtpCode();
   const now = new Date();
 
   const expiresAt = new Date(
-    now.getTime() + OTP_TTL_MINUTES * 60 * 1000
+    now.getTime() +
+      OTP_TTL_MINUTES *
+        60 *
+        1000
   ).toISOString();
 
   const resendAvailableAt = new Date(
-    now.getTime() + OTP_RESEND_SECONDS * 1000
+    now.getTime() +
+      OTP_RESEND_SECONDS *
+        1000
   ).toISOString();
 
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `INSERT INTO public.auth_email_otps
-        (
-          email,
-          purpose,
-          code_hash,
-          attempts,
-          max_attempts,
-          expires_at,
-          resend_available_at
-        )
-       VALUES ($1, $2, $3, 0, $4, $5, $6)
-       RETURNING id, resend_available_at, expires_at`,
-      [
-        normalizeEmail(email),
+  const { rows } = await db.query(
+    `INSERT INTO public.auth_email_otps
+      (
+        email,
         purpose,
-        otpHash(email, purpose, code),
-        OTP_MAX_ATTEMPTS,
-        expiresAt,
-        resendAvailableAt,
-      ]
-    );
-
-    return {
-      code,
-      otpId: rows[0].id,
+        code_hash,
+        attempts,
+        max_attempts,
+        expires_at,
+        resend_available_at
+      )
+     VALUES ($1, $2, $3, 0, $4, $5, $6)
+     RETURNING
+       id,
+       resend_available_at,
+       expires_at`,
+    [
+      normalizeEmail(email),
+      purpose,
+      otpHash(
+        email,
+        purpose,
+        code
+      ),
+      OTP_MAX_ATTEMPTS,
       expiresAt,
       resendAvailableAt,
-    };
-  }
-
-  const { data, error } = await supabase
-    .from('auth_email_otps')
-    .insert({
-      email: normalizeEmail(email),
-      purpose,
-      code_hash: otpHash(email, purpose, code),
-      attempts: 0,
-      max_attempts: OTP_MAX_ATTEMPTS,
-      expires_at: expiresAt,
-      resend_available_at: resendAvailableAt,
-    })
-    .select('id, resend_available_at, expires_at')
-    .single();
-
-  if (error) throw error;
+    ]
+  );
 
   return {
     code,
-    otpId: data.id,
+    otpId: rows[0].id,
     expiresAt,
     resendAvailableAt,
   };
 }
 
-async function consumeOtpRecord(id) {
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `UPDATE public.auth_email_otps
-          SET consumed_at = NOW()
-        WHERE id = $1
-          AND consumed_at IS NULL`,
-      [id]
-    );
-    return;
-  }
 
-  await supabase
-    .from('auth_email_otps')
-    .update({ consumed_at: new Date().toISOString() })
-    .eq('id', id)
-    .is('consumed_at', null);
+async function consumeOtpRecord(id) {
+  await db.query(
+    `UPDATE public.auth_email_otps
+        SET consumed_at = NOW()
+      WHERE id = $1
+        AND consumed_at IS NULL`,
+    [id]
+  );
 }
 
-async function verifyOtpCode(email, purpose, code) {
-  const latestOtp = await getLatestOtp(email, purpose);
+
+async function verifyOtpCode(
+  email,
+  purpose,
+  code
+) {
+  const latestOtp =
+    await getLatestOtp(
+      email,
+      purpose
+    );
 
   if (!latestOtp) {
     return {
       ok: false,
-      error: 'Invalid or expired verification code.',
+      error:
+        'Invalid or expired verification code.',
     };
   }
 
   const now = new Date();
-  const expiresAt = new Date(latestOtp.expires_at);
+
+  const expiresAt =
+    new Date(latestOtp.expires_at);
 
   if (
-    Number.isNaN(expiresAt.getTime()) ||
-    expiresAt.getTime() < now.getTime()
+    Number.isNaN(
+      expiresAt.getTime()
+    ) ||
+    expiresAt.getTime() <
+      now.getTime()
   ) {
-    await consumeOtpRecord(latestOtp.id);
+    await consumeOtpRecord(
+      latestOtp.id
+    );
 
     return {
       ok: false,
-      error: 'Invalid or expired verification code.',
+      error:
+        'Invalid or expired verification code.',
     };
   }
 
-  const incomingHash = otpHash(email, purpose, code);
-
-  if (incomingHash !== latestOtp.code_hash) {
-    const nextAttempts = Number(latestOtp.attempts || 0) + 1;
-    const maxAttempts = Number(
-      latestOtp.max_attempts || OTP_MAX_ATTEMPTS
+  const incomingHash =
+    otpHash(
+      email,
+      purpose,
+      code
     );
 
-    if (USE_POSTGRES_APP_DB) {
-      await db.query(
-        `UPDATE public.auth_email_otps
-            SET attempts = $2,
-                consumed_at = CASE
-                  WHEN $3 THEN NOW()
+  if (
+    incomingHash !==
+    latestOtp.code_hash
+  ) {
+    const nextAttempts =
+      Number(
+        latestOtp.attempts || 0
+      ) + 1;
+
+    const maxAttempts =
+      Number(
+        latestOtp.max_attempts ||
+          OTP_MAX_ATTEMPTS
+      );
+
+    await db.query(
+      `UPDATE public.auth_email_otps
+          SET attempts = $2,
+              consumed_at =
+                CASE
+                  WHEN $3
+                    THEN NOW()
                   ELSE consumed_at
                 END
-          WHERE id = $1
-            AND consumed_at IS NULL`,
-        [
-          latestOtp.id,
-          nextAttempts,
-          nextAttempts >= maxAttempts,
-        ]
-      );
-    } else {
-      const payload = { attempts: nextAttempts };
+        WHERE id = $1
+          AND consumed_at IS NULL`,
+      [
+        latestOtp.id,
+        nextAttempts,
+        nextAttempts >=
+          maxAttempts,
+      ]
+    );
 
-      if (nextAttempts >= maxAttempts) {
-        payload.consumed_at = new Date().toISOString();
-      }
-
-      await supabase
-        .from('auth_email_otps')
-        .update(payload)
-        .eq('id', latestOtp.id)
-        .is('consumed_at', null);
-    }
-
-    if (nextAttempts >= maxAttempts) {
+    if (
+      nextAttempts >=
+      maxAttempts
+    ) {
       return {
         ok: false,
         error:
@@ -1225,38 +1506,41 @@ async function verifyOtpCode(email, purpose, code) {
 
     return {
       ok: false,
-      error: `Invalid verification code. ${Math.max(
-        0,
-        maxAttempts - nextAttempts
-      )} attempts remaining.`,
+      error:
+        `Invalid verification code. ${Math.max(
+          0,
+          maxAttempts -
+            nextAttempts
+        )} attempts remaining.`,
     };
   }
 
-  await consumeOtpRecord(latestOtp.id);
+  await consumeOtpRecord(
+    latestOtp.id
+  );
+
   return { ok: true };
 }
 
 async function getAuthUserByEmail(email) {
   const targetEmail = normalizeEmail(email);
-  let page = 1;
-  const perPage = 200;
 
-  while (page <= 10) {
-    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage });
-    if (error) throw error;
-    const users = data?.users || [];
-    const match = users.find((user) => normalizeEmail(user.email) === targetEmail);
-    if (match) return match;
-    if (users.length < perPage) break;
-    page += 1;
-  }
+  if (!targetEmail) return null;
 
-  return null;
+  const { rows } = await db.query(
+    `SELECT *
+       FROM public.profiles
+      WHERE LOWER(email) = LOWER($1)
+      LIMIT 1`,
+    [targetEmail]
+  );
+
+  return rows[0] || null;
 }
 
 async function requestEmailOtp({ email, purpose, subject, introLine, safetyLine = '', recipientName = '' }) {
-  // Retention cleanup is maintenance and must not add a Supabase round trip to
-  // the user-facing "Get code" request. The guarded task logs its own failure.
+  // Retention cleanup is maintenance and must not delay the
+  // user-facing "Get code" request. The guarded task logs its own failure.
   void maybeCleanupOtpRecords().catch((error) => {
     console.warn('OTP cleanup failed:', safeLogError(error));
   });
@@ -1445,16 +1729,24 @@ async function sendEmail({
   };
 }
 
+
 async function sendDurableEmail(email) {
-  const idempotencyKey = String(email?.idempotencyKey || '').trim();
+  const idempotencyKey =
+    String(
+      email?.idempotencyKey || ''
+    ).trim();
+
   if (!idempotencyKey) {
-    throw new Error('Durable email delivery requires an idempotency key.');
+    throw new Error(
+      'Durable email delivery requires an idempotency key.'
+    );
   }
 
-  const now = new Date().toISOString();
+  const now =
+    new Date().toISOString();
 
-  if (USE_POSTGRES_APP_DB) {
-    const insertResult = await db.query(
+  const insertResult =
+    await db.query(
       `INSERT INTO public.notification_deliveries
         (
           idempotency_key,
@@ -1462,40 +1754,54 @@ async function sendDurableEmail(email) {
           started_at,
           updated_at
         )
-       VALUES ($1, 'processing', $2, $2)
-       ON CONFLICT (idempotency_key) DO NOTHING
+       VALUES (
+         $1,
+         'processing',
+         $2,
+         $2
+       )
+       ON CONFLICT (idempotency_key)
+       DO NOTHING
        RETURNING idempotency_key`,
-      [idempotencyKey, now]
+      [
+        idempotencyKey,
+        now,
+      ]
     );
 
-    if (!insertResult.rows[0]) {
-      const existingResult = await db.query(
-        `SELECT status, attempt_count
-           FROM public.notification_deliveries
-          WHERE idempotency_key = $1
-          LIMIT 1`,
+  if (!insertResult.rows[0]) {
+    const existingResult =
+      await db.query(
+        `SELECT
+           status,
+           attempt_count
+         FROM public.notification_deliveries
+         WHERE idempotency_key = $1
+         LIMIT 1`,
         [idempotencyKey]
       );
 
-      const existing = existingResult.rows[0];
+    const existing =
+      existingResult.rows[0];
 
-      if (!existing) {
-        throw new Error(
-          'Could not load durable email delivery state.'
-        );
-      }
+    if (!existing) {
+      throw new Error(
+        'Could not load durable email delivery state.'
+      );
+    }
 
-      if (
-        existing.status === 'delivered' ||
-        existing.status === 'processing'
-      ) {
-        return {
-          deduplicated: true,
-          status: existing.status,
-        };
-      }
+    if (
+      existing.status === 'delivered' ||
+      existing.status === 'processing'
+    ) {
+      return {
+        deduplicated: true,
+        status: existing.status,
+      };
+    }
 
-      const retryResult = await db.query(
+    const retryResult =
+      await db.query(
         `UPDATE public.notification_deliveries
             SET status = 'processing',
                 attempt_count = $2,
@@ -1507,13 +1813,16 @@ async function sendDurableEmail(email) {
         RETURNING idempotency_key`,
         [
           idempotencyKey,
-          Number(existing.attempt_count || 1) + 1,
+          Number(
+            existing.attempt_count || 1
+          ) + 1,
           now,
         ]
       );
 
-      if (!retryResult.rows[0]) {
-        const raceResult = await db.query(
+    if (!retryResult.rows[0]) {
+      const raceResult =
+        await db.query(
           `SELECT status
              FROM public.notification_deliveries
             WHERE idempotency_key = $1
@@ -1521,135 +1830,65 @@ async function sendDurableEmail(email) {
           [idempotencyKey]
         );
 
-        const raceStatus = raceResult.rows[0]?.status;
-
-        if (
-          raceStatus === 'processing' ||
-          raceStatus === 'delivered'
-        ) {
-          return {
-            deduplicated: true,
-            status: raceStatus,
-          };
-        }
-
-        throw new Error(
-          'Could not claim durable email delivery retry.'
-        );
-      }
-    }
-  } else {
-    const { error: insertError } = await supabase
-      .from('notification_deliveries')
-      .insert({
-        idempotency_key: idempotencyKey,
-        status: 'processing',
-        started_at: now,
-        updated_at: now,
-      });
-
-    if (insertError && insertError.code !== '23505') {
-      throw insertError;
-    }
-
-    if (insertError?.code === '23505') {
-      const { data: existing, error: readError } =
-        await supabase
-          .from('notification_deliveries')
-          .select('status, attempt_count')
-          .eq('idempotency_key', idempotencyKey)
-          .single();
-
-      if (readError) throw readError;
+      const raceStatus =
+        raceResult.rows[0]?.status;
 
       if (
-        existing.status === 'delivered' ||
-        existing.status === 'processing'
+        raceStatus === 'processing' ||
+        raceStatus === 'delivered'
       ) {
         return {
           deduplicated: true,
-          status: existing.status,
+          status: raceStatus,
         };
       }
 
-      const { error: retryClaimError } = await supabase
-        .from('notification_deliveries')
-        .update({
-          status: 'processing',
-          attempt_count:
-            Number(existing.attempt_count || 1) + 1,
-          started_at: now,
-          updated_at: now,
-          last_error: null,
-        })
-        .eq('idempotency_key', idempotencyKey)
-        .eq('status', 'failed');
-
-      if (retryClaimError) throw retryClaimError;
+      throw new Error(
+        'Could not claim durable email delivery retry.'
+      );
     }
   }
 
   let result;
 
   try {
-    result = await sendEmail(email);
+    result =
+      await sendEmail(email);
+
   } catch (error) {
-    if (USE_POSTGRES_APP_DB) {
-      await db.query(
-        `UPDATE public.notification_deliveries
-            SET status = 'failed',
-                last_error = $2,
-                updated_at = NOW()
-          WHERE idempotency_key = $1`,
-        [
-          idempotencyKey,
-          safeLogError(error).slice(0, 2000),
-        ]
-      );
-    } else {
-      await supabase
-        .from('notification_deliveries')
-        .update({
-          status: 'failed',
-          last_error:
-            safeLogError(error).slice(0, 2000),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('idempotency_key', idempotencyKey);
-    }
+    await db.query(
+      `UPDATE public.notification_deliveries
+          SET status = 'failed',
+              last_error = $2,
+              updated_at = NOW()
+        WHERE idempotency_key = $1`,
+      [
+        idempotencyKey,
+        safeLogError(error)
+          .slice(0, 2000),
+      ]
+    );
 
     throw error;
   }
 
   const providerMessageId =
-    result?.messageId || result?.id || null;
+    result?.messageId ||
+    result?.id ||
+    null;
 
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `UPDATE public.notification_deliveries
-          SET status = 'delivered',
-              provider_message_id = $2,
-              delivered_at = NOW(),
-              updated_at = NOW()
-        WHERE idempotency_key = $1`,
-      [
-        idempotencyKey,
-        providerMessageId,
-      ]
-    );
-  } else {
-    const { error: deliveredError } = await supabase
-      .from('notification_deliveries')
-      .update({
-        status: 'delivered',
-        provider_message_id: providerMessageId,
-        delivered_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq('idempotency_key', idempotencyKey);
-
-    if (deliveredError) throw deliveredError;
-  }
+  await db.query(
+    `UPDATE public.notification_deliveries
+        SET status = 'delivered',
+            provider_message_id = $2,
+            delivered_at = NOW(),
+            updated_at = NOW()
+      WHERE idempotency_key = $1`,
+    [
+      idempotencyKey,
+      providerMessageId,
+    ]
+  );
 
   return result;
 }
@@ -1702,22 +1941,37 @@ async function settleWithConcurrency(items, worker, concurrency = 10) {
   return results;
 }
 
-async function getAuthUserEmailMap(userIds = []) {
-  const wantedIds = Array.from(new Set(userIds.filter(Boolean)));
-  const emailMap = new Map();
-  if (!wantedIds.length) return emailMap;
 
-  await settleWithConcurrency(wantedIds, async (userId) => {
-    try {
-      const { data, error } = await supabase.auth.admin.getUserById(userId);
-      if (error) throw error;
-      if (data?.user?.email) {
-        emailMap.set(userId, data.user.email);
-      }
-    } catch (error) {
-      console.error('Could not load auth email for user %s:', userId, error.message || error);
+async function getAuthUserEmailMap(userIds = []) {
+  const uuidPattern =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  const wantedIds = Array.from(
+    new Set(
+      (userIds || [])
+        .map((value) => String(value || '').trim())
+        .filter((value) => uuidPattern.test(value))
+    )
+  );
+
+  const emailMap = new Map();
+
+  if (!wantedIds.length) {
+    return emailMap;
+  }
+
+  const { rows } = await db.query(
+    `SELECT id, email
+       FROM public.profiles
+      WHERE id = ANY($1::uuid[])`,
+    [wantedIds]
+  );
+
+  for (const row of rows) {
+    if (row.id && row.email) {
+      emailMap.set(row.id, row.email);
     }
-  }, 10);
+  }
 
   return emailMap;
 }
@@ -1737,62 +1991,68 @@ function buildEmailConfigDiagnostic() {
 }
 
 async function getClassStudentRecipients(classId) {
-  let studentRows = [];
+  const { rows } = await db.query(
+    `SELECT
+       cm.student_id,
+       CASE
+         WHEN p.id IS NULL THEN NULL
+         ELSE jsonb_build_object(
+           'name', p.name,
+           'email', p.email
+         )
+       END AS profiles
+     FROM public.class_members cm
+     LEFT JOIN public.profiles p
+       ON p.id = cm.student_id
+     WHERE cm.class_id = $1`,
+    [classId]
+  );
 
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT
-         cm.student_id,
-         CASE
-           WHEN p.id IS NULL THEN NULL
-           ELSE jsonb_build_object(
-             'name', p.name,
-             'email', p.email
-           )
-         END AS profiles
-       FROM public.class_members cm
-       LEFT JOIN public.profiles p
-         ON p.id = cm.student_id
-       WHERE cm.class_id = $1`,
-      [classId]
-    );
-
-    studentRows = rows.filter(
-      (entry) => entry.student_id
-    );
-  } else {
-    const { data, error } = await supabase
-      .from('class_members')
-      .select('student_id, profiles(name, email)')
-      .eq('class_id', classId);
-
-    if (error) throw error;
-
-    studentRows = (data || []).filter(
-      (entry) => entry.student_id
-    );
-  }
-
-  const missingEmailIds = studentRows
-    .filter(
+  const studentRows =
+    rows.filter(
       (entry) =>
-        !normalizeEmail(entry.profiles?.email)
-    )
-    .map((entry) => entry.student_id);
+        entry.student_id
+    );
+
+  const missingEmailIds =
+    studentRows
+      .filter(
+        (entry) =>
+          !normalizeEmail(
+            entry.profiles?.email
+          )
+      )
+      .map(
+        (entry) =>
+          entry.student_id
+      );
 
   const emailMap =
-    await getAuthUserEmailMap(missingEmailIds);
+    await getAuthUserEmailMap(
+      missingEmailIds
+    );
 
   return studentRows
-    .map((entry) => ({
-      id: entry.student_id,
-      name: entry.profiles?.name || 'Student',
-      email: normalizeEmail(
-        entry.profiles?.email ||
-        emailMap.get(entry.student_id)
-      ),
-    }))
-    .filter((entry) => entry.email);
+    .map(
+      (entry) => ({
+        id:
+          entry.student_id,
+        name:
+          entry.profiles?.name ||
+          'Student',
+        email:
+          normalizeEmail(
+            entry.profiles?.email ||
+            emailMap.get(
+              entry.student_id
+            )
+          ),
+      })
+    )
+    .filter(
+      (entry) =>
+        entry.email
+    );
 }
 
 async function notifyStudentsAboutAssignment({
@@ -1998,70 +2258,120 @@ async function notifyTeacherAboutStudentSubmission({
   submission,
   baseUrl,
 }) {
-  if (!canSendNotificationEmails() || !assignment?.class_id || !submission?.student_id) {
-    console.info('[EMAIL DIAG] Teacher submission notification skipped', {
-      emailEnabled: canSendNotificationEmails(),
-      assignmentId: assignment?.id || null,
-      classId: assignment?.class_id || null,
-      studentId: submission?.student_id || null,
-    });
+  if (
+    !canSendNotificationEmails() ||
+    !assignment?.class_id ||
+    !submission?.student_id
+  ) {
+    console.info(
+      '[EMAIL DIAG] Teacher submission notification skipped',
+      {
+        emailEnabled:
+          canSendNotificationEmails(),
+        assignmentId:
+          assignment?.id || null,
+        classId:
+          assignment?.class_id || null,
+        studentId:
+          submission?.student_id || null,
+      }
+    );
+
     return;
   }
 
-  let classRow;
-  let classError = null;
+  const { rows } = await db.query(
+    `SELECT
+       id,
+       name,
+       teacher_id
+     FROM public.classes
+     WHERE id = $1
+     LIMIT 1`,
+    [assignment.class_id]
+  );
 
-  if (USE_POSTGRES_APP_DB) {
-    try {
-      const { rows } = await db.query(
-        `SELECT id, name, teacher_id
-           FROM public.classes
-          WHERE id = $1
-          LIMIT 1`,
-        [assignment.class_id]
-      );
+  const classRow =
+    rows[0] || null;
 
-      classRow = rows[0] || null;
-    } catch (error) {
-      classError = error;
-    }
-  } else {
-    const result = await supabase
-      .from('classes')
-      .select('id, name, teacher_id')
-      .eq('id', assignment.class_id)
-      .maybeSingle();
-
-    classRow = result.data;
-    classError = result.error;
+  if (!classRow?.teacher_id) {
+    return;
   }
 
-  if (classError) throw classError;
-  if (!classRow?.teacher_id) return;
+  const emailMap =
+    await getAuthUserEmailMap([
+      classRow.teacher_id,
+    ]);
 
-  const emailMap = await getAuthUserEmailMap([classRow.teacher_id]);
-  const teacherEmail = emailMap.get(classRow.teacher_id);
+  const teacherEmail =
+    emailMap.get(
+      classRow.teacher_id
+    );
+
   if (!teacherEmail) {
-    console.error(`Submission notification skipped: no auth email found for teacher ${classRow.teacher_id}`);
+    console.error(
+      `Submission notification skipped: no auth email found for teacher ${classRow.teacher_id}`
+    );
+
     return;
   }
 
-  const studentName = submission.profiles?.name || 'A student';
-  const safeStudentName = escapeHtmlEmail(studentName);
-  const safeTitle = escapeHtmlEmail(assignment.title || 'Assignment');
-  const subjectTitle = String(assignment.title || 'Assignment')
-    .replace(/[\r\n]+/g, ' ')
-    .trim();
-  const safeClassName = escapeHtmlEmail(classRow.name || 'your class');
-  const submittedAt = formatDeadline(submission.submitted_at || submission.submittedAt || new Date().toISOString());
-  const submittedLine = submittedAt
-    ? `<p><strong>Submitted:</strong> ${escapeHtmlEmail(submittedAt)}</p>`
-    : '';
-  const textSubmittedLine = submittedAt ? `Submitted: ${submittedAt}\n` : '';
+  const studentName =
+    submission.profiles?.name ||
+    'A student';
+
+  const safeStudentName =
+    escapeHtmlEmail(
+      studentName
+    );
+
+  const safeTitle =
+    escapeHtmlEmail(
+      assignment.title ||
+      'Assignment'
+    );
+
+  const subjectTitle =
+    String(
+      assignment.title ||
+      'Assignment'
+    )
+      .replace(
+        /[\r\n]+/g,
+        ' '
+      )
+      .trim();
+
+  const safeClassName =
+    escapeHtmlEmail(
+      classRow.name ||
+      'your class'
+    );
+
+  const submittedAt =
+    formatDeadline(
+      submission.submitted_at ||
+      submission.submittedAt ||
+      new Date().toISOString()
+    );
+
+  const submittedLine =
+    submittedAt
+      ? `<p><strong>Submitted:</strong> ${escapeHtmlEmail(submittedAt)}</p>`
+      : '';
+
+  const textSubmittedLine =
+    submittedAt
+      ? `Submitted: ${submittedAt}\n`
+      : '';
 
   await sendDurableEmail({
-    to: teacherEmail,
-    subject: `DO NOT REPLY — New submission received: ${subjectTitle}`,
+    to:
+      teacherEmail,
+
+    subject:
+      `DO NOT REPLY — New submission received: ${subjectTitle}`,
+
     html: `
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.6;color:#1d2a44;">
         <p>A student has submitted work for review.</p>
@@ -2071,30 +2381,45 @@ async function notifyTeacherAboutStudentSubmission({
         ${submittedLine}
       </div>
     `,
-    text: `A student has submitted work for review.\nStudent: ${studentName}\nClass: ${classRow.name || 'your class'}\nAssignment: ${assignment.title || 'Assignment'}\n${textSubmittedLine}`,
-    idempotencyKey: makeIdempotencyKey([
-      'student-submitted',
-      assignment.id,
-      submission.student_id,
-      submission.submitted_at || submission.submittedAt || submission.updated_at || submission.updatedAt || new Date().toISOString(),
-    ]),
+
+    text:
+      `A student has submitted work for review.\n` +
+      `Student: ${studentName}\n` +
+      `Class: ${classRow.name || 'your class'}\n` +
+      `Assignment: ${assignment.title || 'Assignment'}\n` +
+      textSubmittedLine,
+
+    idempotencyKey:
+      makeIdempotencyKey([
+        'student-submitted',
+        assignment.id,
+        submission.student_id,
+        submission.submitted_at ||
+          submission.submittedAt ||
+          submission.updated_at ||
+          submission.updatedAt ||
+          new Date().toISOString(),
+      ]),
   });
 }
 
 let notificationOutboxInFlight = false;
 
 async function deliverNotificationOutboxEvent(event) {
-  const payload = event.payload || {};
-  const baseUrl = getConfiguredPublicBaseUrl();
+  const payload =
+    event.payload || {};
+
+  const baseUrl =
+    getConfiguredPublicBaseUrl();
 
   if (
-    event.event_type === 'assignment_published' ||
-    event.event_type === 'assignment_deadline_reminder'
+    event.event_type ===
+      'assignment_published' ||
+    event.event_type ===
+      'assignment_deadline_reminder'
   ) {
-    let assignment;
-
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT
            a.*,
            CASE
@@ -2111,29 +2436,24 @@ async function deliverNotificationOutboxEvent(event) {
         [event.aggregate_id]
       );
 
-      assignment = rows[0];
+    const assignment =
+      rows[0] || null;
 
-      if (!assignment) {
-        throw new Error(
-          'Notification assignment not found.'
-        );
-      }
-    } else {
-      const { data, error } = await supabase
-        .from('assignments')
-        .select('*, classes(name)')
-        .eq('id', event.aggregate_id)
-        .single();
-
-      if (error) throw error;
-      assignment = data;
+    if (!assignment) {
+      throw new Error(
+        'Notification assignment not found.'
+      );
     }
 
     await notifyStudentsAboutAssignment({
       assignment,
+
       className:
-        assignment.classes?.name || 'your class',
+        assignment.classes?.name ||
+        'your class',
+
       baseUrl,
+
       mode:
         event.event_type ===
         'assignment_deadline_reminder'
@@ -2144,23 +2464,24 @@ async function deliverNotificationOutboxEvent(event) {
     return;
   }
 
-  if (event.event_type === 'submission_received') {
-    let submission;
-    let assignment;
 
-    if (USE_POSTGRES_APP_DB) {
-      submission =
-        await getPostgresSubmissionWithProfile(
-          event.aggregate_id
-        );
+  if (
+    event.event_type ===
+    'submission_received'
+  ) {
+    const submission =
+      await getPostgresSubmissionWithProfile(
+        event.aggregate_id
+      );
 
-      if (!submission) {
-        throw new Error(
-          'Notification submission not found.'
-        );
-      }
+    if (!submission) {
+      throw new Error(
+        'Notification submission not found.'
+      );
+    }
 
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT *
            FROM public.assignments
           WHERE id = $1
@@ -2168,43 +2489,13 @@ async function deliverNotificationOutboxEvent(event) {
         [submission.assignment_id]
       );
 
-      assignment = rows[0];
+    const assignment =
+      rows[0] || null;
 
-      if (!assignment) {
-        throw new Error(
-          'Notification assignment not found.'
-        );
-      }
-    } else {
-      const {
-        data: submissionData,
-        error: submissionError,
-      } = await supabase
-        .from('submissions')
-        .select('*, profiles(id, name)')
-        .eq('id', event.aggregate_id)
-        .single();
-
-      if (submissionError) {
-        throw submissionError;
-      }
-
-      submission = submissionData;
-
-      const {
-        data: assignmentData,
-        error: assignmentError,
-      } = await supabase
-        .from('assignments')
-        .select('*')
-        .eq('id', submission.assignment_id)
-        .single();
-
-      if (assignmentError) {
-        throw assignmentError;
-      }
-
-      assignment = assignmentData;
+    if (!assignment) {
+      throw new Error(
+        'Notification assignment not found.'
+      );
     }
 
     await notifyTeacherAboutStudentSubmission({
@@ -2216,26 +2507,26 @@ async function deliverNotificationOutboxEvent(event) {
     return;
   }
 
+
   if (
-    event.event_type === 'submission_reviewed' ||
-    event.event_type === 'submission_reopened'
+    event.event_type ===
+      'submission_reviewed' ||
+    event.event_type ===
+      'submission_reopened'
   ) {
-    let submission;
-    let assignment;
+    const submission =
+      await getPostgresSubmissionWithProfile(
+        event.aggregate_id
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      submission =
-        await getPostgresSubmissionWithProfile(
-          event.aggregate_id
-        );
+    if (!submission) {
+      throw new Error(
+        'Notification submission not found.'
+      );
+    }
 
-      if (!submission) {
-        throw new Error(
-          'Notification submission not found.'
-        );
-      }
-
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT
            a.*,
            CASE
@@ -2252,43 +2543,13 @@ async function deliverNotificationOutboxEvent(event) {
         [submission.assignment_id]
       );
 
-      assignment = rows[0];
+    const assignment =
+      rows[0] || null;
 
-      if (!assignment) {
-        throw new Error(
-          'Notification assignment not found.'
-        );
-      }
-    } else {
-      const {
-        data: submissionData,
-        error: submissionError,
-      } = await supabase
-        .from('submissions')
-        .select('*, profiles(id, name)')
-        .eq('id', event.aggregate_id)
-        .single();
-
-      if (submissionError) {
-        throw submissionError;
-      }
-
-      submission = submissionData;
-
-      const {
-        data: assignmentData,
-        error: assignmentError,
-      } = await supabase
-        .from('assignments')
-        .select('*, classes(name)')
-        .eq('id', submission.assignment_id)
-        .single();
-
-      if (assignmentError) {
-        throw assignmentError;
-      }
-
-      assignment = assignmentData;
+    if (!assignment) {
+      throw new Error(
+        'Notification assignment not found.'
+      );
     }
 
     if (
@@ -2298,15 +2559,22 @@ async function deliverNotificationOutboxEvent(event) {
       await notifyStudentAboutGradedSubmission({
         assignment,
         submission,
+
         previousTeacherReview:
-          payload.previousTeacherReview || {},
+          payload.previousTeacherReview ||
+          {},
+
         baseUrl,
       });
+
     } else {
       await notifyStudentAboutReopenedSubmission({
         assignment,
+
         previousSubmission:
-          payload.previousSubmission || {},
+          payload.previousSubmission ||
+          {},
+
         submission,
         baseUrl,
       });
@@ -2315,11 +2583,13 @@ async function deliverNotificationOutboxEvent(event) {
     return;
   }
 
-  if (event.event_type === 'course_message') {
-    let message;
 
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+  if (
+    event.event_type ===
+    'course_message'
+  ) {
+    const { rows } =
+      await db.query(
         `SELECT
            m.*,
            CASE
@@ -2336,36 +2606,29 @@ async function deliverNotificationOutboxEvent(event) {
         [event.aggregate_id]
       );
 
-      message = rows[0];
+    const message =
+      rows[0] || null;
 
-      if (!message) {
-        throw new Error(
-          'Notification course message not found.'
-        );
-      }
-    } else {
-      const {
-        data,
-        error: messageError,
-      } = await supabase
-        .from('course_messages')
-        .select('*, classes(name)')
-        .eq('id', event.aggregate_id)
-        .single();
-
-      if (messageError) throw messageError;
-
-      message = data;
+    if (!message) {
+      throw new Error(
+        'Notification course message not found.'
+      );
     }
 
     const recipients =
-      Array.isArray(payload.recipients)
+      Array.isArray(
+        payload.recipients
+      )
         ? payload.recipients
         : [];
 
-    const safeBody = escapeHtmlEmail(
-      message.body
-    ).replace(/\r?\n/g, '<br>');
+    const safeBody =
+      escapeHtmlEmail(
+        message.body
+      ).replace(
+        /\r?\n/g,
+        '<br>'
+      );
 
     const safeTeacherName =
       escapeHtmlEmail(
@@ -2380,63 +2643,62 @@ async function deliverNotificationOutboxEvent(event) {
         'your course'
       );
 
-    if (USE_POSTGRES_APP_DB) {
-      await db.query(
-        `UPDATE public.course_messages
-            SET status = 'sending',
-                updated_at = NOW()
-          WHERE id = $1`,
-        [message.id]
-      );
-    } else {
-      const { error: sendingError } =
-        await supabase
-          .from('course_messages')
-          .update({
-            status: 'sending',
-            updated_at:
-              new Date().toISOString(),
-          })
-          .eq('id', message.id);
-
-      if (sendingError) throw sendingError;
-    }
-
-    const results = await settleWithConcurrency(
-      recipients,
-      (recipient) =>
-        sendDurableEmail({
-          to: recipient.email,
-          subject: message.subject,
-          html:
-            `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;">` +
-            `<p>Hi ${escapeHtmlEmail(recipient.name || 'Student')},</p>` +
-            `<div>${safeBody}</div>` +
-            `<p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p>` +
-            `</div>`,
-          text:
-            `Hi ${recipient.name || 'Student'},\n\n` +
-            `${message.body}\n\n` +
-            `Sent by ${payload.teacherName || 'Your instructor'} · ` +
-            `${message.classes?.name || payload.courseName || 'your course'}`,
-          idempotencyKey: makeIdempotencyKey([
-            'teacher-course-message',
-            message.teacher_id,
-            message.provider_request_id,
-            recipient.id || recipient.email,
-          ]),
-        }),
-      10
+    await db.query(
+      `UPDATE public.course_messages
+          SET status = 'sending',
+              updated_at = NOW()
+        WHERE id = $1`,
+      [message.id]
     );
+
+    const results =
+      await settleWithConcurrency(
+        recipients,
+
+        (recipient) =>
+          sendDurableEmail({
+            to:
+              recipient.email,
+
+            subject:
+              message.subject,
+
+            html:
+              `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;line-height:1.65;color:#1d2a44;">` +
+              `<p>Hi ${escapeHtmlEmail(recipient.name || 'Student')},</p>` +
+              `<div>${safeBody}</div>` +
+              `<p style="margin-top:24px;color:#60708f;">Sent by ${safeTeacherName} · ${safeCourseName}</p>` +
+              `</div>`,
+
+            text:
+              `Hi ${recipient.name || 'Student'},\n\n` +
+              `${message.body}\n\n` +
+              `Sent by ${payload.teacherName || 'Your instructor'} · ` +
+              `${message.classes?.name || payload.courseName || 'your course'}`,
+
+            idempotencyKey:
+              makeIdempotencyKey([
+                'teacher-course-message',
+                message.teacher_id,
+                message.provider_request_id,
+                recipient.id ||
+                  recipient.email,
+              ]),
+          }),
+
+        10
+      );
 
     const deliveredCount =
       results.filter(
         (result) =>
-          result.status === 'fulfilled'
+          result.status ===
+          'fulfilled'
       ).length;
 
     const failedCount =
-      recipients.length - deliveredCount;
+      recipients.length -
+      deliveredCount;
 
     const nextStatus =
       failedCount === 0
@@ -2450,51 +2712,36 @@ async function deliverNotificationOutboxEvent(event) {
         ? new Date().toISOString()
         : null;
 
-    if (USE_POSTGRES_APP_DB) {
-      await db.query(
-        `UPDATE public.course_messages
-            SET status = $2,
-                delivered_count = $3,
-                failed_count = $4,
-                sent_at = $5,
-                updated_at = NOW()
-          WHERE id = $1`,
-        [
-          message.id,
-          nextStatus,
-          deliveredCount,
-          failedCount,
-          sentAt,
-        ]
-      );
-    } else {
-      const {
-        error: updateError,
-      } = await supabase
-        .from('course_messages')
-        .update({
-          status: nextStatus,
-          delivered_count: deliveredCount,
-          failed_count: failedCount,
-          sent_at: sentAt,
-          updated_at:
-            new Date().toISOString(),
-        })
-        .eq('id', message.id);
-
-      if (updateError) throw updateError;
-    }
+    await db.query(
+      `UPDATE public.course_messages
+          SET status = $2,
+              delivered_count = $3,
+              failed_count = $4,
+              sent_at = $5,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [
+        message.id,
+        nextStatus,
+        deliveredCount,
+        failedCount,
+        sentAt,
+      ]
+    );
 
     if (failedCount > 0) {
       throw new AggregateError(
         results
           .filter(
             (result) =>
-              result.status === 'rejected'
+              result.status ===
+              'rejected'
           )
           .map(
-            (result) => result.reason
+            (result) =>
+              result.reason
           ),
+
         `${failedCount} of ${recipients.length} course message emails failed.`
       );
     }
@@ -2502,10 +2749,12 @@ async function deliverNotificationOutboxEvent(event) {
     return;
   }
 
+
   throw new Error(
     `Unsupported notification outbox event: ${event.event_type}`
   );
 }
+
 
 async function processNotificationOutbox() {
   if (
@@ -2518,24 +2767,23 @@ async function processNotificationOutbox() {
   notificationOutboxInFlight = true;
 
   try {
-    let events = [];
+    await db.query(
+      `UPDATE public.notification_outbox
+          SET status = 'failed',
+              available_at = NOW(),
+              last_error =
+                'Recovered after an interrupted notification worker.',
+              claimed_at = NULL
+        WHERE status = 'processing'
+          AND (
+            claimed_at IS NULL
+            OR claimed_at <
+              NOW() - INTERVAL '5 minutes'
+          )`
+    );
 
-    if (USE_POSTGRES_APP_DB) {
+    const eventResult =
       await db.query(
-        `UPDATE public.notification_outbox
-            SET status = 'failed',
-                available_at = NOW(),
-                last_error =
-                  'Recovered after an interrupted notification worker.',
-                claimed_at = NULL
-          WHERE status = 'processing'
-            AND (
-              claimed_at IS NULL
-              OR claimed_at < NOW() - INTERVAL '5 minutes'
-            )`
-      );
-
-      const eventResult = await db.query(
         `SELECT *
            FROM public.notification_outbox
           WHERE status = ANY($1::text[])
@@ -2545,56 +2793,15 @@ async function processNotificationOutbox() {
         [['pending', 'failed']]
       );
 
-      events = eventResult.rows;
-    } else {
-      const staleClaimCutoff =
-        new Date(Date.now() - 5 * 60 * 1000).toISOString();
-
-      const { error: recoveryError } = await supabase
-        .from('notification_outbox')
-        .update({
-          status: 'failed',
-          available_at: new Date().toISOString(),
-          last_error:
-            'Recovered after an interrupted notification worker.',
-          claimed_at: null,
-        })
-        .eq('status', 'processing')
-        .or(
-          `claimed_at.is.null,claimed_at.lt.${staleClaimCutoff}`
-        );
-
-      if (recoveryError) throw recoveryError;
-
-      const {
-        data,
-        error,
-      } = await supabase
-        .from('notification_outbox')
-        .select('*')
-        .in('status', ['pending', 'failed'])
-        .lte(
-          'available_at',
-          new Date().toISOString()
-        )
-        .order('created_at', {
-          ascending: true,
-        })
-        .limit(25);
-
-      if (error) throw error;
-
-      events = data || [];
-    }
+    const events =
+      eventResult.rows;
 
     for (const event of events) {
       const attemptCount =
         Number(event.attempt_count || 0) + 1;
 
-      let claimed = null;
-
-      if (USE_POSTGRES_APP_DB) {
-        const claimResult = await db.query(
+      const claimResult =
+        await db.query(
           `UPDATE public.notification_outbox
               SET status = 'processing',
                   attempt_count = $2,
@@ -2609,61 +2816,28 @@ async function processNotificationOutbox() {
           ]
         );
 
-        claimed = claimResult.rows[0] || null;
-      } else {
-        const {
-          data,
-          error: claimError,
-        } = await supabase
-          .from('notification_outbox')
-          .update({
-            status: 'processing',
-            attempt_count: attemptCount,
-            claimed_at: new Date().toISOString(),
-          })
-          .eq('id', event.id)
-          .in('status', ['pending', 'failed'])
-          .select('id')
-          .maybeSingle();
+      const claimed =
+        claimResult.rows[0] || null;
 
-        if (claimError) throw claimError;
-
-        claimed = data;
+      if (!claimed) {
+        continue;
       }
 
-      if (!claimed) continue;
-
       try {
-        await deliverNotificationOutboxEvent(event);
+        await deliverNotificationOutboxEvent(
+          event
+        );
 
-        if (USE_POSTGRES_APP_DB) {
-          await db.query(
-            `UPDATE public.notification_outbox
-                SET status = 'delivered',
-                    processed_at = NOW(),
-                    last_error = NULL,
-                    claimed_at = NULL
-              WHERE id = $1`,
-            [event.id]
-          );
-        } else {
-          const {
-            error: deliveredError,
-          } = await supabase
-            .from('notification_outbox')
-            .update({
-              status: 'delivered',
-              processed_at:
-                new Date().toISOString(),
-              last_error: null,
-              claimed_at: null,
-            })
-            .eq('id', event.id);
+        await db.query(
+          `UPDATE public.notification_outbox
+              SET status = 'delivered',
+                  processed_at = NOW(),
+                  last_error = NULL,
+                  claimed_at = NULL
+            WHERE id = $1`,
+          [event.id]
+        );
 
-          if (deliveredError) {
-            throw deliveredError;
-          }
-        }
       } catch (deliveryError) {
         const failurePatch = {
           ...buildNotificationFailurePatch(
@@ -2673,51 +2847,46 @@ async function processNotificationOutbox() {
           claimed_at: null,
         };
 
-        if (USE_POSTGRES_APP_DB) {
-          if (
-            failurePatch.status ===
-            'dead_letter'
-          ) {
-            await db.query(
-              `UPDATE public.notification_outbox
-                  SET status = 'dead_letter',
-                      last_error = $2,
-                      processed_at = $3,
-                      claimed_at = NULL
-                WHERE id = $1`,
-              [
-                event.id,
-                failurePatch.last_error,
-                failurePatch.processed_at,
-              ]
-            );
-          } else {
-            await db.query(
-              `UPDATE public.notification_outbox
-                  SET status = 'failed',
-                      last_error = $2,
-                      available_at = $3,
-                      claimed_at = NULL
-                WHERE id = $1`,
-              [
-                event.id,
-                failurePatch.last_error,
-                failurePatch.available_at,
-              ]
-            );
-          }
+        if (
+          failurePatch.status ===
+          'dead_letter'
+        ) {
+          await db.query(
+            `UPDATE public.notification_outbox
+                SET status = 'dead_letter',
+                    last_error = $2,
+                    processed_at = $3,
+                    claimed_at = NULL
+              WHERE id = $1`,
+            [
+              event.id,
+              failurePatch.last_error,
+              failurePatch.processed_at,
+            ]
+          );
         } else {
-          await supabase
-            .from('notification_outbox')
-            .update(failurePatch)
-            .eq('id', event.id);
+          await db.query(
+            `UPDATE public.notification_outbox
+                SET status = 'failed',
+                    last_error = $2,
+                    available_at = $3,
+                    claimed_at = NULL
+              WHERE id = $1`,
+            [
+              event.id,
+              failurePatch.last_error,
+              failurePatch.available_at,
+            ]
+          );
         }
       }
     }
+
   } finally {
     notificationOutboxInFlight = false;
   }
 }
+
 
 async function processUpcomingDeadlineReminders() {
   if (
@@ -2734,18 +2903,17 @@ async function processUpcomingDeadlineReminders() {
 
     const lowerBound = new Date(
       now +
-      (24 * 60 * 60 * 1000) -
-      DEADLINE_REMINDER_WINDOW_MS
+        (24 * 60 * 60 * 1000) -
+        DEADLINE_REMINDER_WINDOW_MS
     ).toISOString();
 
     const upperBound = new Date(
-      now + (24 * 60 * 60 * 1000)
+      now +
+        (24 * 60 * 60 * 1000)
     ).toISOString();
 
-    let assignments = [];
-
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+    const { rows: assignments } =
+      await db.query(
         `SELECT
            a.id,
            a.class_id,
@@ -2765,69 +2933,6 @@ async function processUpcomingDeadlineReminders() {
         ]
       );
 
-      assignments = rows;
-    } else {
-      const {
-        data,
-        error,
-      } = await supabase
-        .from('assignments')
-        .select(
-          'id, class_id, title, deadline, status'
-        )
-        .eq('status', 'published')
-        .gte('deadline', lowerBound)
-        .lte('deadline', upperBound);
-
-      if (error) throw error;
-
-      assignments = data || [];
-
-      if (assignments.length) {
-        const classIds = Array.from(
-          new Set(
-            assignments
-              .map(
-                (assignment) =>
-                  assignment.class_id
-              )
-              .filter(Boolean)
-          )
-        );
-
-        const {
-          data: classRows,
-          error: classError,
-        } = await supabase
-          .from('classes')
-          .select('id, name')
-          .in('id', classIds);
-
-        if (classError) {
-          throw classError;
-        }
-
-        const classNameMap = new Map(
-          (classRows || []).map(
-            (row) => [
-              row.id,
-              row.name,
-            ]
-          )
-        );
-
-        assignments = assignments.map(
-          (assignment) => ({
-            ...assignment,
-            class_name:
-              classNameMap.get(
-                assignment.class_id
-              ) || null,
-          })
-        );
-      }
-    }
-
     if (!assignments.length) {
       return;
     }
@@ -2836,16 +2941,28 @@ async function processUpcomingDeadlineReminders() {
       await enqueueDomainEvent({
         eventType:
           'assignment_deadline_reminder',
-        aggregateType: 'assignment',
-        aggregateId: assignment.id,
+
+        aggregateType:
+          'assignment',
+
+        aggregateId:
+          assignment.id,
+
         idempotencyKey:
           `assignment-deadline-reminder:` +
           `${assignment.id}:` +
           `${assignment.deadline}`,
+
         payload: {
-          assignmentId: assignment.id,
-          classId: assignment.class_id,
-          deadline: assignment.deadline,
+          assignmentId:
+            assignment.id,
+
+          classId:
+            assignment.class_id,
+
+          deadline:
+            assignment.deadline,
+
           className:
             assignment.class_name ||
             'your class',
@@ -2861,14 +2978,53 @@ async function processUpcomingDeadlineReminders() {
         );
       }
     );
+
   } catch (error) {
     console.error(
       'Deadline reminder processing failed:',
       error
     );
+
   } finally {
     deadlineReminderInFlight = false;
   }
+}
+
+function isStudentProfile(profile) {
+  return Boolean(
+    profile &&
+    typeof profile === 'object' &&
+    String(profile.role || '').toLowerCase() === 'student'
+  );
+}
+
+async function requireAdmin(req, res) {
+  const user = await getUser(req);
+
+  if (!user) {
+    res.status(401).json({
+      error: 'Not authenticated',
+    });
+    return null;
+  }
+
+  const profile = await getProfile(user.id);
+
+  if (!profile) {
+    res.status(409).json({
+      error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE,
+    });
+    return null;
+  }
+
+  if (profile.role !== 'admin') {
+    res.status(403).json({
+      error: 'Admin access required',
+    });
+    return null;
+  }
+
+  return user;
 }
 
 async function requireTeacherProfile(req) {
@@ -2981,89 +3137,64 @@ async function requireRubricTeacherProfile(req) {
   return requireTeacherProfile(req);
 }
 
-async function ensureTeacherOwnsClass(classId, teacherId, client = supabase) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT id, teacher_id, name
-         FROM public.classes
-        WHERE id = $1
-          AND teacher_id = $2
-        LIMIT 1`,
-      [classId, teacherId]
-    );
 
-    return rows[0] || null;
-  }
+async function ensureTeacherOwnsClass(
+  classId,
+  teacherId,
+  _client = null
+) {
+  const { rows } = await db.query(
+    `SELECT
+       id,
+       teacher_id,
+       name
+     FROM public.classes
+     WHERE id = $1
+       AND teacher_id = $2
+     LIMIT 1`,
+    [classId, teacherId]
+  );
 
-  const { data, error } = await client
-    .from('classes')
-    .select('id, teacher_id, name')
-    .eq('id', classId)
-    .eq('teacher_id', teacherId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data || null;
+  return rows[0] || null;
 }
+
 
 async function ensureTeacherOwnsAssignment(
   assignmentId,
   teacherId,
-  client = supabase
+  _client = null
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT
-         a.id,
-         a.class_id,
-         a.title,
-         a.status,
-         a.version,
-         a.updated_at,
-         c.name AS class_name
-       FROM public.assignments a
-       INNER JOIN public.classes c
-         ON c.id = a.class_id
-       WHERE a.id = $1
-         AND a.deleted_at IS NULL
-         AND c.teacher_id = $2
-       LIMIT 1`,
-      [assignmentId, teacherId]
-    );
-
-    const row = rows[0];
-    if (!row) return null;
-
-    const { class_name: className, ...assignment } = row;
-
-    return {
-      ...assignment,
-      className: className || '',
-    };
-  }
-
-  const { data, error } = await client
-    .from('assignments')
-    .select('id, class_id, title, status, version, updated_at')
-    .eq('id', assignmentId)
-    .is('deleted_at', null)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) return null;
-
-  const ownedClass = await ensureTeacherOwnsClass(
-    data.class_id,
-    teacherId,
-    client
+  const { rows } = await db.query(
+    `SELECT
+       a.id,
+       a.class_id,
+       a.title,
+       a.status,
+       a.version,
+       a.updated_at,
+       c.name AS class_name
+     FROM public.assignments a
+     INNER JOIN public.classes c
+       ON c.id = a.class_id
+     WHERE a.id = $1
+       AND a.deleted_at IS NULL
+       AND c.teacher_id = $2
+     LIMIT 1`,
+    [assignmentId, teacherId]
   );
 
-  return ownedClass
-    ? {
-        ...data,
-        className: ownedClass.name || '',
-      }
-    : null;
+  const row = rows[0];
+  if (!row) return null;
+
+  const {
+    class_name: className,
+    ...assignment
+  } = row;
+
+  return {
+    ...assignment,
+    className: className || '',
+  };
 }
 
 // Snapshot the de-identified writing-process data of submissions into
@@ -3077,191 +3208,349 @@ async function ensureTeacherOwnsAssignment(
 // so it cannot be linked back; one token per student per batch keeps grouping).
 // Throws if the archive write fails so callers abort the delete rather than
 // silently lose data.
-async function archiveSubmissionsForDeletion(submissions, { reason, classId = null }) {
-  const rows = (submissions || []).filter(Boolean);
-  if (!rows.length) return;
-  const submissionIds = rows.map((submission) => submission.id);
-  const { data: analyses, error: analysisError } = await supabase
-    .from('submission_process_analyses')
-    .select('submission_id, analysis_version, metrics')
-    .in('submission_id', submissionIds);
-  if (analysisError) throw analysisError;
-  const analysisBySubmissionId = new Map((analyses || []).map((analysis) => [analysis.submission_id, analysis]));
-  const tokenByStudentId = new Map();
-  const archiveRows = rows.map((submission) => {
-    const studentKey = submission.student_id || submission.id;
-    if (!tokenByStudentId.has(studentKey)) tokenByStudentId.set(studentKey, crypto.randomUUID());
-    return buildDeidentifiedArchiveRow(submission, {
-      reason,
-      classId,
-      studentToken: tokenByStudentId.get(studentKey),
-      analysis: analysisBySubmissionId.get(submission.id),
-    });
-  });
-  const { error } = await supabase.from('submission_archive').insert(archiveRows);
-  if (error) throw error;
+
+async function archiveSubmissionsForDeletion(
+  submissions,
+  {
+    reason,
+    classId = null,
+  }
+) {
+  const rows =
+    (submissions || []).filter(Boolean);
+
+  if (!rows.length) {
+    return;
+  }
+
+  const submissionIds =
+    rows.map(
+      (submission) => submission.id
+    );
+
+  const client =
+    await db.pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const analysisResult =
+      await client.query(
+        `SELECT
+           submission_id,
+           analysis_version,
+           metrics
+         FROM public.submission_process_analyses
+         WHERE submission_id =
+           ANY($1::uuid[])`,
+        [submissionIds]
+      );
+
+    const analysisBySubmissionId =
+      new Map(
+        analysisResult.rows.map(
+          (analysis) => [
+            analysis.submission_id,
+            analysis,
+          ]
+        )
+      );
+
+    const tokenByStudentId =
+      new Map();
+
+    const archiveRows =
+      rows.map((submission) => {
+        const studentKey =
+          submission.student_id ||
+          submission.id;
+
+        if (
+          !tokenByStudentId.has(
+            studentKey
+          )
+        ) {
+          tokenByStudentId.set(
+            studentKey,
+            crypto.randomUUID()
+          );
+        }
+
+        return buildDeidentifiedArchiveRow(
+          submission,
+          {
+            reason,
+            classId,
+            studentToken:
+              tokenByStudentId.get(
+                studentKey
+              ),
+            analysis:
+              analysisBySubmissionId.get(
+                submission.id
+              ),
+          }
+        );
+      });
+
+    for (
+      const archiveRow
+      of archiveRows
+    ) {
+      await client.query(
+        `INSERT INTO public.submission_archive
+          (
+            original_submission_id,
+            assignment_id,
+            class_id,
+            student_token,
+            status,
+            writing_events,
+            keystroke_log,
+            fluency_summary,
+            analysis_version,
+            metrics,
+            original_submitted_at,
+            original_started_at,
+            original_updated_at,
+            archive_reason
+          )
+         VALUES (
+           $1,
+           $2,
+           $3,
+           $4,
+           $5,
+           $6::jsonb,
+           $7::jsonb,
+           $8::jsonb,
+           $9,
+           $10::jsonb,
+           $11,
+           $12,
+           $13,
+           $14
+         )`,
+        [
+          archiveRow.original_submission_id,
+          archiveRow.assignment_id,
+          archiveRow.class_id,
+          archiveRow.student_token,
+          archiveRow.status,
+          JSON.stringify(
+            archiveRow.writing_events || []
+          ),
+          JSON.stringify(
+            archiveRow.keystroke_log || []
+          ),
+          JSON.stringify(
+            archiveRow.fluency_summary || {}
+          ),
+          archiveRow.analysis_version,
+          JSON.stringify(
+            archiveRow.metrics || {}
+          ),
+          archiveRow.original_submitted_at,
+          archiveRow.original_started_at,
+          archiveRow.original_updated_at,
+          archiveRow.archive_reason,
+        ]
+      );
+    }
+
+    await client.query('COMMIT');
+
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {}
+
+    throw error;
+
+  } finally {
+    client.release();
+  }
 }
+
 
 async function ensureStudentBelongsToClass(
   classId,
   studentId,
-  client = supabase
+  _client = null
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT class_id
-         FROM public.class_members
-        WHERE class_id = $1
-          AND student_id = $2
-        LIMIT 1`,
-      [classId, studentId]
-    );
+  const { rows } = await db.query(
+    `SELECT class_id
+     FROM public.class_members
+     WHERE class_id = $1
+       AND student_id = $2
+     LIMIT 1`,
+    [classId, studentId]
+  );
 
-    return rows[0] || null;
-  }
-
-  const { data, error } = await client
-    .from('class_members')
-    .select('class_id')
-    .eq('class_id', classId)
-    .eq('student_id', studentId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data || null;
+  return rows[0] || null;
 }
 
 // Shared guard for teacher endpoints that act on a specific enrolled student.
 // Returns { error, status } on failure, or { user, readClient } on success.
 async function requireOwnedClassMember(req, { ownershipError }) {
-  const { user, error: teacherError, status } = await requireTeacherProfile(req);
-  if (teacherError) return { error: teacherError, status };
-  const readClient = getRequestScopedSupabase(req);
-  const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-  if (!ownedClass) return { error: ownershipError, status: 403 };
-  const enrolledStudent = await ensureStudentBelongsToClass(req.params.classId, req.params.studentId, readClient);
-  if (!enrolledStudent) return { error: 'That student is not enrolled in this class.', status: 404 };
-  return { user, readClient };
+  const { user, error: teacherError, status } =
+    await requireTeacherProfile(req);
+
+  if (teacherError) {
+    return {
+      error: teacherError,
+      status,
+    };
+  }
+
+  const ownedClass =
+    await ensureTeacherOwnsClass(
+      req.params.classId,
+      user.id
+    );
+
+  if (!ownedClass) {
+    return {
+      error: ownershipError,
+      status: 403,
+    };
+  }
+
+  const enrolledStudent =
+    await ensureStudentBelongsToClass(
+      req.params.classId,
+      req.params.studentId
+    );
+
+  if (!enrolledStudent) {
+    return {
+      error:
+        'That student is not enrolled in this class.',
+      status: 404,
+    };
+  }
+
+  return { user };
 }
 
-async function ensureUserCanAccessClass(classId, userId, client = supabase) {
-  const ownedClass = await ensureTeacherOwnsClass(classId, userId, client);
-  if (ownedClass) return { role: 'teacher', classRecord: ownedClass };
-  const enrolledClass = await ensureStudentBelongsToClass(classId, userId, client);
-  if (enrolledClass) return { role: 'student', classRecord: enrolledClass };
+
+async function ensureUserCanAccessClass(
+  classId,
+  userId,
+  _client = null
+) {
+  const ownedClass =
+    await ensureTeacherOwnsClass(
+      classId,
+      userId
+    );
+
+  if (ownedClass) {
+    return {
+      role: 'teacher',
+      classRecord: ownedClass,
+    };
+  }
+
+  const enrolledClass =
+    await ensureStudentBelongsToClass(
+      classId,
+      userId
+    );
+
+  if (enrolledClass) {
+    return {
+      role: 'student',
+      classRecord: enrolledClass,
+    };
+  }
+
   return null;
 }
+
 
 async function ensureStudentCanAccessAssignment(
   assignmentId,
   studentId,
-  client = supabase
+  _client = null
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT
-         a.id,
-         a.class_id,
-         a.title,
-         a.status,
-         c.archived AS class_archived
-       FROM public.assignments a
-       INNER JOIN public.classes c
-         ON c.id = a.class_id
-       INNER JOIN public.class_members cm
-         ON cm.class_id = a.class_id
-        AND cm.student_id = $2
-       WHERE a.id = $1
-         AND a.deleted_at IS NULL
-         AND a.status = 'published'
-       LIMIT 1`,
-      [assignmentId, studentId]
-    );
-
-    const row = rows[0];
-    if (!row) return null;
-
-    const { class_archived: classArchived, ...assignment } = row;
-
-    return {
-      ...assignment,
-      classArchived: classArchived === true,
-    };
-  }
-
-  const { data, error } = await client
-    .from('assignments')
-    .select('id, class_id, title, status')
-    .eq('id', assignmentId)
-    .is('deleted_at', null)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) return null;
-  if (data.status !== 'published') return null;
-
-  const enrolledClass = await ensureStudentBelongsToClass(
-    data.class_id,
-    studentId,
-    client
+  const { rows } = await db.query(
+    `SELECT
+       a.id,
+       a.class_id,
+       a.title,
+       a.status,
+       c.archived AS class_archived
+     FROM public.assignments a
+     INNER JOIN public.classes c
+       ON c.id = a.class_id
+     INNER JOIN public.class_members cm
+       ON cm.class_id = a.class_id
+      AND cm.student_id = $2
+     WHERE a.id = $1
+       AND a.deleted_at IS NULL
+       AND a.status = 'published'
+     LIMIT 1`,
+    [assignmentId, studentId]
   );
 
-  if (!enrolledClass) return null;
+  const row = rows[0];
+  if (!row) return null;
 
-  const { data: classRecord, error: classError } = await client
-    .from('classes')
-    .select('archived')
-    .eq('id', data.class_id)
-    .maybeSingle();
-
-  if (classError) throw classError;
+  const {
+    class_archived: classArchived,
+    ...assignment
+  } = row;
 
   return {
-    ...data,
-    classArchived: classRecord?.archived === true,
+    ...assignment,
+    classArchived: classArchived === true,
   };
 }
 
-async function ensureStudentCanModifyAssignment(assignmentId, studentId, client = supabase) {
-  const assignment = await ensureStudentCanAccessAssignment(assignmentId, studentId, client);
-  return assignment && assignment.classArchived !== true ? assignment : null;
+
+async function ensureStudentCanModifyAssignment(
+  assignmentId,
+  studentId,
+  _client = null
+) {
+  const assignment =
+    await ensureStudentCanAccessAssignment(
+      assignmentId,
+      studentId
+    );
+
+  return (
+    assignment &&
+    assignment.classArchived !== true
+  )
+    ? assignment
+    : null;
 }
+
 
 async function getSubmissionRecord(
   submissionId,
-  client = supabase
+  _client = null
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT
-         id,
-         assignment_id,
-         student_id,
-         status,
-         teacher_review,
-         version,
-         updated_at,
-         writing_events,
-         keystroke_log
-       FROM public.submissions
-       WHERE id = $1
-       LIMIT 1`,
-      [submissionId]
-    );
+  const { rows } = await db.query(
+    `SELECT
+       id,
+       assignment_id,
+       student_id,
+       status,
+       teacher_review,
+       version,
+       updated_at,
+       writing_events,
+       keystroke_log
+     FROM public.submissions
+     WHERE id = $1
+     LIMIT 1`,
+    [submissionId]
+  );
 
-    return rows[0] || null;
-  }
-
-  const { data, error } = await client
-    .from('submissions')
-    .select(
-      'id, assignment_id, student_id, status, teacher_review, version, updated_at, writing_events, keystroke_log'
-    )
-    .eq('id', submissionId)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data || null;
+  return rows[0] || null;
 }
 
 // Resolves append-only deltas sent by the client's auto-sync (Issue 1).
@@ -3287,7 +3576,7 @@ async function applyAppendDeltas(reqBody, submission, payload) {
   return { ok: true };
 }
 
-async function buildStudentPatchPayload(reqBody, submission, readClient) {
+async function buildStudentPatchPayload(reqBody, submission) {
   let payload = { ...sanitizeStudentSubmissionPayload(reqBody), updated_at: new Date().toISOString() };
   const appended = await applyAppendDeltas(reqBody, submission, payload);
   if (!appended.conflict) {
@@ -3326,7 +3615,7 @@ function getSubmissionProcessInputHash(submission = {}, assignment = {}, profile
 // Exclusion source recorded when profiles.exclude_from_writing_behavior is
 // set (research-consent exclusion). It must never reach a non-admin client:
 // sanitizeProcessAnalysisForViewer strips it from API responses, and the
-// column grants keep it unreadable through PostgREST with a user token.
+// API access controls keep it unreadable by non-admin users.
 const PROFILE_EXCLUSION_SOURCE = 'profile_exclusion';
 
 function getProcessAnalysisExclusionSources(submission = {}, profile = {}) {
@@ -3386,93 +3675,382 @@ function buildProcessAnalysisPayload({ submission, assignment, profile, analysis
   };
 }
 
-async function getProcessAnalysisContext(req, submissionId) {
-  const user = await getUser(req);
-  if (!user) return { status: 401, error: 'Not authenticated' };
-  const viewerProfile = await getProfile(user.id);
-  if (!viewerProfile) return { status: 409, error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE };
 
-  if (USE_POSTGRES_APP_DB) {
+async function getProcessAnalysisContext(
+  req,
+  submissionId
+) {
+  const user =
+    await getUser(req);
+
+  if (!user) {
     return {
-      status: 503,
-      error:
-        'Writing-process analysis is temporarily unavailable while its research tables are being migrated.',
+      status: 401,
+      error: 'Not authenticated',
     };
   }
 
-  const readClient = getRequestScopedSupabase(req);
-  const { data: submission, error: submissionError } = await readClient
-    .from('submissions')
-    .select('*')
-    .eq('id', submissionId)
-    .maybeSingle();
-  if (submissionError) return { status: 400, error: submissionError.message };
-  if (!submission) return { status: 404, error: 'Submission not found' };
+  const viewerProfile =
+    await getProfile(user.id);
 
-  const { data: assignment, error: assignmentError } = await readClient
-    .from('assignments')
-    .select('*')
-    .eq('id', submission.assignment_id)
-    .maybeSingle();
-  if (assignmentError) return { status: 400, error: assignmentError.message };
-  if (!assignment) return { status: 404, error: 'Assignment not found' };
-
-  let allowed = false;
-  if (viewerProfile.role === 'admin') {
-    allowed = true;
-  } else if (viewerProfile.role === 'student') {
-    allowed = submission.student_id === user.id;
-  } else if (viewerProfile.role === 'teacher') {
-    const ownedAssignment = await ensureTeacherOwnsAssignment(assignment.id, user.id, readClient);
-    allowed = Boolean(ownedAssignment);
+  if (!viewerProfile) {
+    return {
+      status: 409,
+      error:
+        ACCOUNT_SETUP_INCOMPLETE_MESSAGE,
+    };
   }
-  if (!allowed) return { status: 403, error: 'You do not have access to this writing process analysis.' };
 
-  const { data: studentProfile } = await supabase
-    .from('profiles')
-    .select('id, name, role, is_test_account, exclude_from_writing_behavior')
-    .eq('id', submission.student_id)
-    .maybeSingle();
+  try {
+    const submissionResult =
+      await db.query(
+        `SELECT *
+           FROM public.submissions
+          WHERE id = $1
+          LIMIT 1`,
+        [submissionId]
+      );
 
-  return {
-    status: 200,
-    user,
-    viewerProfile,
-    submission,
-    assignment,
-    studentProfile: studentProfile || {},
-  };
+    const submission =
+      submissionResult.rows[0];
+
+    if (!submission) {
+      return {
+        status: 404,
+        error:
+          'Submission not found',
+      };
+    }
+
+    const assignmentResult =
+      await db.query(
+        `SELECT *
+           FROM public.assignments
+          WHERE id = $1
+          LIMIT 1`,
+        [submission.assignment_id]
+      );
+
+    const assignment =
+      assignmentResult.rows[0];
+
+    if (!assignment) {
+      return {
+        status: 404,
+        error:
+          'Assignment not found',
+      };
+    }
+
+    let allowed = false;
+
+    if (
+      viewerProfile.role ===
+      'admin'
+    ) {
+      allowed = true;
+
+    } else if (
+      viewerProfile.role ===
+      'student'
+    ) {
+      allowed =
+        submission.student_id ===
+        user.id;
+
+    } else if (
+      viewerProfile.role ===
+      'teacher'
+    ) {
+      const ownedAssignment =
+        await ensureTeacherOwnsAssignment(
+          assignment.id,
+          user.id
+        );
+
+      allowed =
+        Boolean(ownedAssignment);
+    }
+
+    if (!allowed) {
+      return {
+        status: 403,
+        error:
+          'You do not have access to this writing process analysis.',
+      };
+    }
+
+    const studentProfileResult =
+      await db.query(
+        `SELECT
+           id,
+           name,
+           role,
+           is_test_account,
+           exclude_from_writing_behavior
+         FROM public.profiles
+         WHERE id = $1
+         LIMIT 1`,
+        [submission.student_id]
+      );
+
+    return {
+      status: 200,
+      user,
+      viewerProfile,
+      submission,
+      assignment,
+      studentProfile:
+        studentProfileResult.rows[0] ||
+        {},
+    };
+
+  } catch (error) {
+    console.error(
+      '[POSTGRES PROCESS ANALYSIS CONTEXT]',
+      safeLogError(error)
+    );
+
+    return {
+      status: 500,
+      error:
+        'Could not load writing process analysis.',
+    };
+  }
 }
 
-async function computeAndStoreProcessAnalysis(context, { store = true } = {}) {
-  const exclusionSources = getProcessAnalysisExclusionSources(context.submission, context.studentProfile);
-  const analysis = analyzeSubmission(context.submission, context.assignment, {
-    excludedFromAnalytics: exclusionSources.length > 0,
-    exclusionSources,
-  });
-  const inputHash = getSubmissionProcessInputHash(context.submission, context.assignment, context.studentProfile);
-  const payload = buildProcessAnalysisPayload({
-    submission: context.submission,
-    assignment: context.assignment,
-    profile: context.studentProfile,
-    analysis,
-    inputHash,
-  });
 
-  if (!store) return { analysis, inputHash, stored: null, storageError: null };
+async function computeAndStoreProcessAnalysis(
+  context,
+  {
+    store = true,
+  } = {}
+) {
+  const exclusionSources =
+    getProcessAnalysisExclusionSources(
+      context.submission,
+      context.studentProfile
+    );
 
-  const { data, error } = await supabase
-    .from('submission_process_analyses')
-    .upsert(payload, { onConflict: 'submission_id' })
-    .select()
-    .single();
+  const analysis =
+    analyzeSubmission(
+      context.submission,
+      context.assignment,
+      {
+        excludedFromAnalytics:
+          exclusionSources.length > 0,
 
-  return {
-    analysis,
-    inputHash,
-    stored: data || null,
-    storageError: error ? error.message : null,
-  };
+        exclusionSources,
+      }
+    );
+
+  const inputHash =
+    getSubmissionProcessInputHash(
+      context.submission,
+      context.assignment,
+      context.studentProfile
+    );
+
+  const payload =
+    buildProcessAnalysisPayload({
+      submission:
+        context.submission,
+
+      assignment:
+        context.assignment,
+
+      profile:
+        context.studentProfile,
+
+      analysis,
+
+      inputHash,
+    });
+
+  if (!store) {
+    return {
+      analysis,
+      inputHash,
+      stored: null,
+      storageError: null,
+    };
+  }
+
+  try {
+    const { rows } =
+      await db.query(
+        `INSERT INTO public.submission_process_analyses
+          (
+            submission_id,
+            assignment_id,
+            class_id,
+            student_id,
+            analysis_version,
+            input_hash,
+            process_status,
+            process_status_label,
+            reason,
+            metrics,
+            timeline,
+            evidence,
+            paste_evidence,
+            cohort_comparison,
+            coach_baseline,
+            excluded_from_analytics,
+            exclusion_sources,
+            calculated_at,
+            updated_at
+          )
+         VALUES (
+           $1,
+           $2,
+           $3,
+           $4,
+           $5,
+           $6,
+           $7,
+           $8,
+           $9,
+           $10::jsonb,
+           $11::jsonb,
+           $12::jsonb,
+           $13::jsonb,
+           $14::jsonb,
+           $15::jsonb,
+           $16,
+           $17::jsonb,
+           $18,
+           $19
+         )
+         ON CONFLICT (submission_id)
+         DO UPDATE SET
+           assignment_id =
+             EXCLUDED.assignment_id,
+
+           class_id =
+             EXCLUDED.class_id,
+
+           student_id =
+             EXCLUDED.student_id,
+
+           analysis_version =
+             EXCLUDED.analysis_version,
+
+           input_hash =
+             EXCLUDED.input_hash,
+
+           process_status =
+             EXCLUDED.process_status,
+
+           process_status_label =
+             EXCLUDED.process_status_label,
+
+           reason =
+             EXCLUDED.reason,
+
+           metrics =
+             EXCLUDED.metrics,
+
+           timeline =
+             EXCLUDED.timeline,
+
+           evidence =
+             EXCLUDED.evidence,
+
+           paste_evidence =
+             EXCLUDED.paste_evidence,
+
+           cohort_comparison =
+             EXCLUDED.cohort_comparison,
+
+           coach_baseline =
+             EXCLUDED.coach_baseline,
+
+           excluded_from_analytics =
+             EXCLUDED.excluded_from_analytics,
+
+           exclusion_sources =
+             EXCLUDED.exclusion_sources,
+
+           calculated_at =
+             EXCLUDED.calculated_at,
+
+           updated_at =
+             EXCLUDED.updated_at
+         RETURNING *`,
+        [
+          payload.submission_id,
+          payload.assignment_id,
+          payload.class_id,
+          payload.student_id,
+          payload.analysis_version,
+          payload.input_hash,
+          payload.process_status,
+          payload.process_status_label,
+          payload.reason || '',
+
+          JSON.stringify(
+            payload.metrics || {}
+          ),
+
+          JSON.stringify(
+            payload.timeline || []
+          ),
+
+          JSON.stringify(
+            payload.evidence || []
+          ),
+
+          JSON.stringify(
+            payload.paste_evidence || []
+          ),
+
+          JSON.stringify(
+            payload.cohort_comparison || {}
+          ),
+
+          JSON.stringify(
+            payload.coach_baseline || {}
+          ),
+
+          Boolean(
+            payload.excluded_from_analytics
+          ),
+
+          JSON.stringify(
+            payload.exclusion_sources || []
+          ),
+
+          payload.calculated_at ||
+            new Date().toISOString(),
+
+          payload.updated_at ||
+            new Date().toISOString(),
+        ]
+      );
+
+    return {
+      analysis,
+      inputHash,
+      stored:
+        rows[0] || null,
+      storageError: null,
+    };
+
+  } catch (error) {
+    console.error(
+      '[POSTGRES PROCESS ANALYSIS SAVE]',
+      safeLogError(error)
+    );
+
+    return {
+      analysis,
+      inputHash,
+      stored: null,
+      storageError:
+        safeLogError(error),
+    };
+  }
 }
 
 function submissionHasProcessInput(submission = {}) {
@@ -3542,17 +4120,33 @@ async function recomputeProcessAnalysisContexts(staleContexts) {
   return { storageWarnings, recomputed };
 }
 
-async function recomputeStaleProcessAnalyses({ limit = 50 } = {}) {
-  const cappedLimit = Math.max(1, Math.min(Number(limit) || 50, 100));
-  const { data: assignments, error: assignmentError } = await supabase
-    .from('assignments')
-    .select('*');
-  if (assignmentError) throw assignmentError;
 
-  const assignmentIds = (assignments || []).map((assignment) => assignment.id).filter(Boolean);
-  if (!assignmentIds.length) {
+async function recomputeStaleProcessAnalyses({
+  limit = 50,
+} = {}) {
+  const cappedLimit =
+    Math.max(
+      1,
+      Math.min(
+        Number(limit) || 50,
+        100
+      )
+    );
+
+  const assignmentResult =
+    await db.query(
+      `SELECT *
+         FROM public.assignments`
+    );
+
+  const assignments =
+    assignmentResult.rows;
+
+  if (!assignments.length) {
     return {
-      analysisVersion: ANALYSIS_VERSION,
+      analysisVersion:
+        ANALYSIS_VERSION,
+
       checked: 0,
       stale: 0,
       recomputed: 0,
@@ -3567,37 +4161,80 @@ async function recomputeStaleProcessAnalyses({ limit = 50 } = {}) {
     analysesResult,
     profilesResult,
   ] = await Promise.all([
-    supabase
-      .from('submissions')
-      .select('*'),
-    supabase
-      .from('submission_process_analyses')
-      .select('submission_id, analysis_version, input_hash'),
-    supabase
-      .from('profiles')
-      .select('id, name, role, is_test_account, exclude_from_writing_behavior'),
+    db.query(
+      `SELECT *
+         FROM public.submissions`
+    ),
+
+    db.query(
+      `SELECT
+         submission_id,
+         analysis_version,
+         input_hash
+       FROM public.submission_process_analyses`
+    ),
+
+    db.query(
+      `SELECT
+         id,
+         name,
+         role,
+         is_test_account,
+         exclude_from_writing_behavior
+       FROM public.profiles`
+    ),
   ]);
 
-  if (submissionsResult.error) throw submissionsResult.error;
-  if (analysesResult.error) throw analysesResult.error;
-  if (profilesResult.error && !isMissingProfileFlagColumn(profilesResult.error)) throw profilesResult.error;
+  const lookups =
+    buildProcessAnalysisLookup(
+      assignments,
+      analysesResult.rows,
+      {
+        data:
+          profilesResult.rows,
+        error: null,
+      }
+    );
 
-  const lookups = buildProcessAnalysisLookup(assignments, analysesResult.data, profilesResult);
-  const { staleContexts, checked, stale, skipped } = collectStaleProcessAnalysisContexts(
-    submissionsResult.data,
-    lookups,
-    cappedLimit
-  );
-  const { storageWarnings, recomputed } = await recomputeProcessAnalysisContexts(staleContexts);
+  const {
+    staleContexts,
+    checked,
+    stale,
+    skipped,
+  } =
+    collectStaleProcessAnalysisContexts(
+      submissionsResult.rows,
+      lookups,
+      cappedLimit
+    );
+
+  const {
+    storageWarnings,
+    recomputed,
+  } =
+    await recomputeProcessAnalysisContexts(
+      staleContexts
+    );
 
   return {
-    analysisVersion: ANALYSIS_VERSION,
+    analysisVersion:
+      ANALYSIS_VERSION,
+
     checked,
     stale,
     recomputed,
     skipped,
-    limit: cappedLimit,
-    remainingEstimate: Math.max(0, stale - staleContexts.length),
+
+    limit:
+      cappedLimit,
+
+    remainingEstimate:
+      Math.max(
+        0,
+        stale -
+          staleContexts.length
+      ),
+
     storageWarnings,
   };
 }
@@ -3884,465 +4521,343 @@ app.get("/api/rubric/parse-jobs/:jobId", async (req, res) => {
 // Alias for the new React frontend naming.
 app.get('/api/rubrics', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    let data = [];
-    let queryError = null;
+    const { user, error, status } =
+      await requireTeacherProfile(req);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT *
-             FROM public.rubric_library
-            WHERE owner_id = $1
-              AND status <> 'archived'
-            ORDER BY updated_at DESC`,
-          [user.id]
-        );
-
-        data = rows;
-      } catch (error) {
-        queryError = error;
-      }
-    } else {
-      const client = getRequestScopedSupabase(req);
-
-      const result = await client
-        .from('rubric_library')
-        .select('*')
-        .eq('owner_id', user.id)
-        .neq('status', 'archived')
-        .order('updated_at', { ascending: false });
-
-      data = result.data;
-      queryError = result.error;
+    if (error) {
+      return res.status(status).json({ error });
     }
 
-    if (queryError) {
-      if (!USE_POSTGRES_APP_DB && isMissingRelation(queryError)) {
-        return res.json({
-          rubrics: [],
-          libraryAvailable: false,
-        });
-      }
+    const { rows } = await db.query(
+      `SELECT *
+         FROM public.rubric_library
+        WHERE owner_id = $1
+          AND status <> 'archived'
+        ORDER BY updated_at DESC`,
+      [user.id]
+    );
 
-      return res.status(400).json({
-        error: queryError.message,
-      });
-    }
-
-    res.json({ rubrics: data || [] });
+    return res.json({
+      rubrics: rows || [],
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.post('/api/rubrics', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    const rubricSchema = req.body?.rubric_schema || req.body?.rubricSchema || {};
-    const title = String(req.body?.title || rubricSchema.title || 'Untitled rubric').trim();
-    const rubricStatus =
-      String(req.body?.status || 'active').toLowerCase();
+    const { user, error, status } =
+      await requireTeacherProfile(req);
 
-    let data;
-    let writeError = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `INSERT INTO public.rubric_library
-            (
-              owner_id,
-              title,
-              rubric_schema,
-              status
-            )
-           VALUES ($1, $2, $3::jsonb, $4)
-           RETURNING *`,
-          [
-            user.id,
-            title,
-            JSON.stringify(rubricSchema),
-            rubricStatus,
-          ]
-        );
-
-        data = rows[0];
-      } catch (error) {
-        writeError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('rubric_library')
-              .insert({
-                owner_id: user.id,
-                title,
-                rubric_schema: rubricSchema,
-                status: rubricStatus,
-              })
-              .select()
-              .single()
-        );
-
-      data = result.data;
-      writeError = result.error;
+    if (error) {
+      return res.status(status).json({ error });
     }
 
-    if (writeError) {
-      return res.status(400).json({
-        error: writeError.message,
-      });
-    }
+    const rubricSchema =
+      req.body?.rubric_schema ||
+      req.body?.rubricSchema ||
+      {};
 
-    res.json({ rubric: data });
+    const title = String(
+      req.body?.title ||
+      rubricSchema.title ||
+      'Untitled rubric'
+    ).trim();
+
+    const rubricStatus = String(
+      req.body?.status || 'active'
+    ).toLowerCase();
+
+    const { rows } = await db.query(
+      `INSERT INTO public.rubric_library
+       (
+         owner_id,
+         title,
+         rubric_schema,
+         status
+       )
+       VALUES ($1, $2, $3::jsonb, $4)
+       RETURNING *`,
+      [
+        user.id,
+        title,
+        JSON.stringify(rubricSchema),
+        rubricStatus,
+      ]
+    );
+
+    return res.json({
+      rubric: rows[0],
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.patch('/api/rubrics/:id', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
+    const { user, error, status } =
+      await requireTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json({ error });
+    }
+
     const patch = {};
-    if (req.body?.title !== undefined) patch.title = String(req.body.title).trim();
-    if (req.body?.rubric_schema !== undefined || req.body?.rubricSchema !== undefined) {
-      patch.rubric_schema = req.body.rubric_schema || req.body.rubricSchema;
-    }
-    if (req.body?.status !== undefined) patch.status = String(req.body.status).toLowerCase();
-    let data;
-    let writeError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const entries = Object.entries(patch);
-
-        if (!entries.length) {
-          return res.status(400).json({
-            error: 'No rubric changes were provided.',
-          });
-        }
-
-        const setParts = [];
-        const values = [];
-
-        for (const [key, value] of entries) {
-          values.push(
-            key === 'rubric_schema'
-              ? JSON.stringify(value)
-              : value
-          );
-
-          const index = values.length;
-
-          if (key === 'rubric_schema') {
-            setParts.push(
-              `${key} = $${index}::jsonb`
-            );
-          } else {
-            setParts.push(
-              `${key} = $${index}`
-            );
-          }
-        }
-
-        setParts.push('updated_at = NOW()');
-
-        values.push(
-          req.params.id,
-          user.id
-        );
-
-        const idParam = values.length - 1;
-        const ownerParam = values.length;
-
-        const { rows } = await db.query(
-          `UPDATE public.rubric_library
-              SET ${setParts.join(', ')}
-            WHERE id = $${idParam}
-              AND owner_id = $${ownerParam}
-          RETURNING *`,
-          values
-        );
-
-        data = rows[0] || null;
-      } catch (error) {
-        writeError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('rubric_library')
-              .update(patch)
-              .eq('id', req.params.id)
-              .eq('owner_id', user.id)
-              .select()
-              .maybeSingle()
-        );
-
-      data = result.data;
-      writeError = result.error;
+    if (req.body?.title !== undefined) {
+      patch.title =
+        String(req.body.title).trim();
     }
 
-    if (writeError) {
+    if (
+      req.body?.rubric_schema !== undefined ||
+      req.body?.rubricSchema !== undefined
+    ) {
+      patch.rubric_schema =
+        req.body.rubric_schema ||
+        req.body.rubricSchema;
+    }
+
+    if (req.body?.status !== undefined) {
+      patch.status =
+        String(req.body.status).toLowerCase();
+    }
+
+    const entries =
+      Object.entries(patch);
+
+    if (!entries.length) {
       return res.status(400).json({
-        error: writeError.message,
+        error:
+          'No rubric changes were provided.',
       });
     }
 
-    if (!data) {
+    const setParts = [];
+    const values = [];
+
+    for (const [key, value] of entries) {
+      values.push(
+        key === 'rubric_schema'
+          ? JSON.stringify(value)
+          : value
+      );
+
+      const index = values.length;
+
+      setParts.push(
+        key === 'rubric_schema'
+          ? `${key} = $${index}::jsonb`
+          : `${key} = $${index}`
+      );
+    }
+
+    setParts.push(
+      'updated_at = NOW()'
+    );
+
+    values.push(
+      req.params.id,
+      user.id
+    );
+
+    const idParam =
+      values.length - 1;
+
+    const ownerParam =
+      values.length;
+
+    const { rows } = await db.query(
+      `UPDATE public.rubric_library
+          SET ${setParts.join(', ')}
+        WHERE id = $${idParam}
+          AND owner_id = $${ownerParam}
+      RETURNING *`,
+      values
+    );
+
+    if (!rows[0]) {
       return res.status(404).json({
         error: 'Rubric not found.',
       });
     }
 
-    res.json({ rubric: data });
+    return res.json({
+      rubric: rows[0],
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.delete('/api/rubrics/:id', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    let data;
-    let writeError = null;
+    const { user, error, status } =
+      await requireTeacherProfile(req);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `UPDATE public.rubric_library
-              SET status = 'archived',
-                  updated_at = NOW()
-            WHERE id = $1
-              AND owner_id = $2
-          RETURNING id`,
-          [
-            req.params.id,
-            user.id,
-          ]
-        );
-
-        data = rows[0] || null;
-      } catch (error) {
-        writeError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('rubric_library')
-              .update({
-                status: 'archived',
-              })
-              .eq('id', req.params.id)
-              .eq('owner_id', user.id)
-              .select('id')
-              .maybeSingle()
-        );
-
-      data = result.data;
-      writeError = result.error;
+    if (error) {
+      return res.status(status).json({ error });
     }
 
-    if (writeError) {
-      return res.status(400).json({
-        error: writeError.message,
-      });
-    }
+    const { rows } = await db.query(
+      `UPDATE public.rubric_library
+          SET status = 'archived',
+              updated_at = NOW()
+        WHERE id = $1
+          AND owner_id = $2
+      RETURNING id`,
+      [
+        req.params.id,
+        user.id,
+      ]
+    );
 
-    if (!data) {
+    if (!rows[0]) {
       return res.status(404).json({
         error: 'Rubric not found.',
       });
     }
 
-    res.json({ ok: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Durable, per-teacher assignment-builder recovery state.
-app.get('/api/assignment-builder-draft', async (req, res) => {
-  try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    let data;
-    let readError = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT draft_state, updated_at
-             FROM public.assignment_builder_drafts
-            WHERE owner_id = $1
-            LIMIT 1`,
-          [user.id]
-        );
-
-        data = rows[0] || null;
-      } catch (error) {
-        readError = error;
-      }
-    } else {
-      const client = getRequestScopedSupabase(req);
-
-      const result = await client
-        .from('assignment_builder_drafts')
-        .select('draft_state, updated_at')
-        .eq('owner_id', user.id)
-        .maybeSingle();
-
-      data = result.data;
-      readError = result.error;
-    }
-
-    if (readError) {
-      return res.status(400).json({
-        error: readError.message,
-      });
-    }
-
-    res.json({
-      draft: data?.draft_state || null,
-      updatedAt: data?.updated_at || null,
+    return res.json({
+      ok: true,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message,
+    });
   }
 });
+
+
+// Durable, per-teacher assignment-builder recovery state.
+
+app.get('/api/assignment-builder-draft', async (req, res) => {
+  try {
+    const { user, error, status } =
+      await requireTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json({ error });
+    }
+
+    const { rows } = await db.query(
+      `SELECT
+         draft_state,
+         updated_at
+       FROM public.assignment_builder_drafts
+       WHERE owner_id = $1
+       LIMIT 1`,
+      [user.id]
+    );
+
+    const data =
+      rows[0] || null;
+
+    return res.json({
+      draft:
+        data?.draft_state || null,
+      updatedAt:
+        data?.updated_at || null,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
 
 app.put('/api/assignment-builder-draft', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    const draftState = req.body?.draft;
-    if (!draftState || typeof draftState !== 'object' || Array.isArray(draftState)) {
-      return res.status(400).json({ error: 'A valid assignment draft is required.' });
-    }
-    let data;
-    let writeError = null;
+    const { user, error, status } =
+      await requireTeacherProfile(req);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `INSERT INTO public.assignment_builder_drafts
-            (
-              owner_id,
-              draft_state,
-              updated_at
-            )
-           VALUES ($1, $2::jsonb, NOW())
-           ON CONFLICT (owner_id)
-           DO UPDATE SET
-             draft_state = EXCLUDED.draft_state,
-             updated_at = NOW()
-           RETURNING updated_at`,
-          [
-            user.id,
-            JSON.stringify(draftState),
-          ]
-        );
-
-        data = rows[0];
-      } catch (error) {
-        writeError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('assignment_builder_drafts')
-              .upsert(
-                {
-                  owner_id: user.id,
-                  draft_state: draftState,
-                  updated_at:
-                    new Date().toISOString(),
-                },
-                {
-                  onConflict: 'owner_id',
-                }
-              )
-              .select('updated_at')
-              .single()
-        );
-
-      data = result.data;
-      writeError = result.error;
+    if (error) {
+      return res.status(status).json({ error });
     }
 
-    if (writeError) {
+    const draftState =
+      req.body?.draft;
+
+    if (
+      !draftState ||
+      typeof draftState !== 'object' ||
+      Array.isArray(draftState)
+    ) {
       return res.status(400).json({
-        error: writeError.message,
+        error:
+          'A valid assignment draft is required.',
       });
     }
 
-    res.json({
+    const { rows } = await db.query(
+      `INSERT INTO public.assignment_builder_drafts
+       (
+         owner_id,
+         draft_state,
+         updated_at
+       )
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (owner_id)
+       DO UPDATE SET
+         draft_state = EXCLUDED.draft_state,
+         updated_at = NOW()
+       RETURNING updated_at`,
+      [
+        user.id,
+        JSON.stringify(draftState),
+      ]
+    );
+
+    return res.json({
       ok: true,
-      updatedAt: data.updated_at,
+      updatedAt:
+        rows[0].updated_at,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.delete('/api/assignment-builder-draft', async (req, res) => {
   try {
-    const { user, error, status } = await requireTeacherProfile(req);
-    if (error) return res.status(status).json({ error });
-    let deleteError = null;
+    const { user, error, status } =
+      await requireTeacherProfile(req);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        await db.query(
-          `DELETE FROM public.assignment_builder_drafts
-            WHERE owner_id = $1`,
-          [user.id]
-        );
-      } catch (error) {
-        deleteError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('assignment_builder_drafts')
-              .delete()
-              .eq('owner_id', user.id)
-        );
-
-      deleteError = result.error;
+    if (error) {
+      return res.status(status).json({ error });
     }
 
-    if (deleteError) {
-      return res.status(400).json({
-        error: deleteError.message,
-      });
-    }
+    await db.query(
+      `DELETE FROM public.assignment_builder_drafts
+        WHERE owner_id = $1`,
+      [user.id]
+    );
 
-    res.json({ ok: true });
+    return res.json({
+      ok: true,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(400).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.post("/api/rubrics/parse", uploadRubricSingle, async (req, res) => {
   return handleRubricFileParse(req, res);
@@ -4692,68 +5207,47 @@ function validateSignupPayload({ email, password, name, role }, signupCode) {
   return validatePasswordStrength(password);
 }
 
-async function deleteSignupUser(userId, email) {
-  try {
-    const { error } = await supabase.auth.admin.deleteUser(userId);
-    if (error) {
-      console.error('ORPHAN AUTH USER - manual cleanup needed:', {
-        userRef: safeLogId(userId),
-        emailRef: safeLogId(email),
-        reason: safeLogError(error),
-      });
-    }
-  } catch (error) {
-    console.error('ORPHAN AUTH USER - manual cleanup needed:', {
-      userRef: safeLogId(userId),
-      emailRef: safeLogId(email),
-      reason: safeLogError(error),
-    });
-  }
-}
 
 async function createSignupProfile(
   userId,
   name,
   role,
-  email = null
+  email,
+  passwordHash
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    try {
-      const { rows } = await db.query(
-        `INSERT INTO public.profiles
-          (id, name, role, email)
-         VALUES ($1, $2, $3, $4)
-         RETURNING *`,
-        [
-          userId,
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO public.profiles
+        (
+          id,
           name,
           role,
-          normalizeEmail(email),
-        ]
-      );
+          email,
+          password_hash,
+          password_updated_at,
+          auth_disabled
+        )
+       VALUES ($1, $2, $3, $4, $5, NOW(), false)
+       RETURNING *`,
+      [
+        userId,
+        name,
+        role,
+        normalizeEmail(email),
+        passwordHash,
+      ]
+    );
 
-      return {
-        data: rows[0] || null,
-        error: null,
-      };
-    } catch (error) {
-      return {
-        data: null,
-        error,
-      };
-    }
+    return {
+      data: rows[0] || null,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      data: null,
+      error,
+    };
   }
-
-  return supabase
-    .from('profiles')
-    .insert({
-      id: userId,
-      name,
-      role,
-      email,
-    })
-    .select()
-    .single();
 }
 
 function isAuiEmail(email) {
@@ -4765,50 +5259,112 @@ function authDeliveryErrorMessage() {
 }
 
 // Sign up
+
 app.post('/api/auth/signup', async (req, res) => {
-  let createdUserId = null;
-  let createdUserEmail = null;
   try {
-    const { email, password, name, role, signupCode, otpCode } = req.body;
+    const {
+      email,
+      password,
+      name,
+      role,
+      signupCode,
+      otpCode,
+    } = req.body;
+
     const cleanEmail = normalizeEmail(email);
     const cleanName = String(name || '').trim();
-    const validationError = validateSignupPayload({ email: cleanEmail, password, name: cleanName, role }, signupCode);
-    if (validationError) return res.status(400).json({ error: validationError });
-    if (!/^\d{6}$/.test(String(otpCode || '').trim())) {
-      return res.status(400).json({ error: 'A valid 6-digit verification code is required.' });
+
+    const validationError =
+      validateSignupPayload(
+        {
+          email: cleanEmail,
+          password,
+          name: cleanName,
+          role,
+        },
+        signupCode
+      );
+
+    if (validationError) {
+      return res.status(400).json({
+        error: validationError,
+      });
     }
 
-    const otpCheck = await verifyOtpCode(cleanEmail, OTP_PURPOSE_SIGNUP, otpCode);
-    if (!otpCheck.ok) {
-      return res.status(400).json({ error: otpCheck.error });
+    if (
+      !/^\d{6}$/.test(
+        String(otpCode || '').trim()
+      )
+    ) {
+      return res.status(400).json({
+        error:
+          'A valid 6-digit verification code is required.',
+      });
     }
 
-    const existingUser = await getAuthUserByEmail(cleanEmail);
+    const existingUser =
+      await getAuthUserByEmail(cleanEmail);
+
     if (existingUser) {
-      return res.status(400).json({ error: 'An account with this email already exists.' });
+      return res.status(400).json({
+        error:
+          'An account with this email already exists.',
+      });
     }
 
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: cleanEmail,
-      password,
-      user_metadata: { name: cleanName, role },
-      email_confirm: true,
-    });
-    if (error) return res.status(400).json({ error: error.message });
-    createdUserId = data?.user?.id || null;
-    createdUserEmail = data?.user?.email || cleanEmail;
-    if (!createdUserId) return res.status(500).json({ error: SIGNUP_PROFILE_ERROR_MESSAGE });
+    const otpCheck =
+      await verifyOtpCode(
+        cleanEmail,
+        OTP_PURPOSE_SIGNUP,
+        otpCode
+      );
 
-    const { data: profile, error: profileError } = await createSignupProfile(createdUserId, cleanName, role, cleanEmail);
+    if (!otpCheck.ok) {
+      return res.status(400).json({
+        error: otpCheck.error,
+      });
+    }
+
+    const userId = crypto.randomUUID();
+
+    const passwordHash =
+      await hashPostgresPassword(password);
+
+    const {
+      data: profile,
+      error: profileError,
+    } = await createSignupProfile(
+      userId,
+      cleanName,
+      role,
+      cleanEmail,
+      passwordHash
+    );
+
     if (profileError || !profile) {
-      await deleteSignupUser(createdUserId, createdUserEmail);
-      return res.status(500).json({ error: SIGNUP_PROFILE_ERROR_MESSAGE });
+      console.error(
+        '[POSTGRES SIGNUP]',
+        safeLogError(profileError)
+      );
+
+      return res.status(500).json({
+        error: SIGNUP_PROFILE_ERROR_MESSAGE,
+      });
     }
 
-    return res.status(201).json({ profile: sanitizeProfileForClient(profile) });
+    return res.status(201).json({
+      profile:
+        sanitizeProfileForClient(profile),
+    });
   } catch (error) {
-    if (createdUserId) await deleteSignupUser(createdUserId, createdUserEmail || req.body?.email);
-    res.status(500).json({ error: createdUserId ? SIGNUP_PROFILE_ERROR_MESSAGE : error.message });
+    console.error(
+      '[POSTGRES SIGNUP]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error: SIGNUP_PROFILE_ERROR_MESSAGE,
+    });
   }
 });
 
@@ -4899,79 +5455,179 @@ function groupBenchmarkMetricsByLevel(submissions, assignmentById, excludedStude
   return byLevel;
 }
 
-// Sign in
+// Sign in using PostgreSQL credentials
 app.post('/api/auth/signin', async (req, res) => {
   try {
     const { email, password, stayLoggedIn = true } = req.body;
-    const cleanEmail = String(email || '').trim().toLowerCase();
 
-    const rateLimit = checkSigninRateLimit(req, cleanEmail);
+    const cleanEmail =
+      String(email || '').trim().toLowerCase();
+
+    const rateLimit =
+      checkSigninRateLimit(req, cleanEmail);
+
     if (rateLimit.blocked) {
-      res.set('Retry-After', String(rateLimit.retryAfterSeconds));
-      const isShortCooldown = rateLimit.reason === 'cooldown';
+      res.set(
+        'Retry-After',
+        String(rateLimit.retryAfterSeconds)
+      );
+
+      const isShortCooldown =
+        rateLimit.reason === 'cooldown';
+
       return res.status(429).json({
         error: isShortCooldown
           ? 'Too many recent sign-in attempts for this account. Please wait a few seconds and try again.'
           : 'Too many sign-in attempts. Please try again later.',
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
+        retryAfterSeconds:
+          rateLimit.retryAfterSeconds,
       });
     }
 
     if (!isAuiEmail(cleanEmail)) {
       registerSigninFailure(req, cleanEmail);
-      return res.status(401).json({ error: 'Invalid email or password.' });
+
+      return res.status(401).json({
+        error: 'Invalid email or password.',
+      });
     }
-    const { data, error } = await supabaseUserAuth.auth.signInWithPassword({ email: cleanEmail, password });
-    if (error) {
+
+    const { rows } = await db.query(
+      `SELECT *
+         FROM public.profiles
+        WHERE LOWER(email) = LOWER($1)
+        LIMIT 1`,
+      [cleanEmail]
+    );
+
+    const profile = rows[0] || null;
+
+    const passwordMatches =
+      profile?.password_hash
+        ? await verifyPostgresPassword(
+            password,
+            profile.password_hash
+          )
+        : false;
+
+    if (
+      !profile ||
+      profile.auth_disabled === true ||
+      !passwordMatches
+    ) {
       registerSigninFailure(req, cleanEmail);
-      return res.status(401).json({ error: 'Invalid email or password.' });
-    }
-    const profile = await getProfile(data.user.id);
-    if (!profile) {
-      registerSigninFailure(req, cleanEmail);
-      return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
+
+      return res.status(401).json({
+        error: 'Invalid email or password.',
+      });
     }
 
     clearSigninFailures(req, cleanEmail);
-    setAuthCookies(req, res, data.session, Boolean(stayLoggedIn));
-    res.json({ profile: sanitizeProfileForClient(profile) });
+
+    await db.query(
+      `UPDATE public.profiles
+          SET last_login_at = NOW()
+        WHERE id = $1`,
+      [profile.id]
+    );
+
+    const session =
+      await createPostgresAuthSession(
+        profile.id,
+        Boolean(stayLoggedIn)
+      );
+
+    setAuthCookies(
+      req,
+      res,
+      session,
+      Boolean(stayLoggedIn)
+    );
+
+    return res.json({
+      profile: sanitizeProfileForClient(profile),
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES SIGNIN]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error: 'Could not sign in right now.',
+    });
   }
 });
 
-// Refresh expired Supabase session
+// Refresh PostgreSQL session
 app.post('/api/auth/refresh', async (req, res) => {
   try {
     if (req.sessionInactive === true) {
-      return res.status(401).json({ error: 'Session expired due to inactivity.' });
+      clearAuthCookies(req, res);
+
+      return res.status(401).json({
+        error: 'Session expired due to inactivity.',
+      });
     }
-    const refresh_token = req.body?.refresh_token || getCookieValue(req, 'praxis_rt');
-    if (!refresh_token) return res.status(400).json({ error: 'refresh_token required' });
 
-    const stayLoggedIn = req.body?.stayLoggedIn === true || getCookieValue(req, 'praxis_rm') !== '0';
+    const refreshToken =
+      req.body?.refresh_token ||
+      getCookieValue(req, 'praxis_rt');
 
-    const { data, error } = await supabaseUserAuth.auth.refreshSession({ refresh_token });
-    if (error) return res.status(401).json({ error: error.message });
+    if (!refreshToken) {
+      clearAuthCookies(req, res);
 
-    setAuthCookies(req, res, data.session, stayLoggedIn);
-    res.json({ ok: true });
+      return res.status(401).json({
+        error: 'No refresh session available.',
+      });
+    }
+
+    const session =
+      await rotatePostgresAuthSession(refreshToken);
+
+    if (!session) {
+      clearAuthCookies(req, res);
+
+      return res.status(401).json({
+        error: 'Invalid or expired session.',
+      });
+    }
+
+    setAuthCookies(
+      req,
+      res,
+      session,
+      session.remember_me
+    );
+
+    return res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES REFRESH]',
+      safeLogError(error)
+    );
+
+    clearAuthCookies(req, res);
+
+    return res.status(500).json({
+      error: 'Could not refresh session.',
+    });
   }
 });
 
-// Sign out
+// Sign out PostgreSQL session
 app.post('/api/auth/signout', async (req, res) => {
   try {
-    const token = getBearerToken(req);
-    if (token) await supabase.auth.admin.signOut(token);
+    await revokePostgresAuthSession(req);
   } catch (error) {
-    clearAuthCookies(req, res);
-    return res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES SIGNOUT]',
+      safeLogError(error)
+    );
   }
+
   clearAuthCookies(req, res);
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
 
 app.post('/api/auth/forgot-password', async (req, res) => {
@@ -5007,53 +5663,168 @@ app.post('/api/auth/forgot-password', async (req, res) => {
   }
 });
 
+
 app.post('/api/auth/forgot-password/reset', async (req, res) => {
   try {
-    const email = normalizeEmail(req.body?.email);
-    const code = String(req.body?.code || '').trim();
-    const password = String(req.body?.password || '');
+    const email =
+      normalizeEmail(req.body?.email);
+
+    const code =
+      String(req.body?.code || '').trim();
+
+    const password =
+      String(req.body?.password || '');
 
     if (!email || !code || !password) {
-      return res.status(400).json({ error: 'Email, code and password are required.' });
+      return res.status(400).json({
+        error:
+          'Email, code and password are required.',
+      });
     }
+
     if (!isAuiEmail(email)) {
-      return res.status(400).json({ error: 'Access is restricted to @aui.ma accounts.' });
+      return res.status(400).json({
+        error:
+          'Access is restricted to @aui.ma accounts.',
+      });
     }
 
-    const passwordError = validatePasswordStrength(password);
-    if (passwordError) return res.status(400).json({ error: passwordError });
+    const passwordError =
+      validatePasswordStrength(password);
 
-    const otpCheck = await verifyOtpCode(email, OTP_PURPOSE_PASSWORD_RESET, code);
+    if (passwordError) {
+      return res.status(400).json({
+        error: passwordError,
+      });
+    }
+
+    const user =
+      await getAuthUserByEmail(email);
+
+    if (
+      !user ||
+      user.auth_disabled === true
+    ) {
+      return res.status(400).json({
+        error:
+          'Invalid or expired verification code.',
+      });
+    }
+
+    const otpCheck =
+      await verifyOtpCode(
+        email,
+        OTP_PURPOSE_PASSWORD_RESET,
+        code
+      );
+
     if (!otpCheck.ok) {
-      return res.status(400).json({ error: otpCheck.error });
+      return res.status(400).json({
+        error: otpCheck.error,
+      });
     }
 
-    const user = await getAuthUserByEmail(email);
-    if (!user) {
-      return res.status(400).json({ error: 'Invalid or expired verification code.' });
-    }
+    const passwordHash =
+      await hashPostgresPassword(password);
 
-    const { error } = await supabase.auth.admin.updateUserById(user.id, { password });
-    if (error) return res.status(400).json({ error: error.message });
+    await db.query(
+      `UPDATE public.profiles
+          SET password_hash = $2,
+              password_updated_at = NOW()
+        WHERE id = $1`,
+      [user.id, passwordHash]
+    );
+
+    // Password reset revokes all existing sessions.
+    await db.query(
+      `UPDATE public.auth_sessions
+          SET revoked_at =
+            COALESCE(revoked_at, NOW())
+        WHERE user_id = $1
+          AND revoked_at IS NULL`,
+      [user.id]
+    );
 
     return res.json({ ok: true });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES PASSWORD RESET]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not reset password right now.',
+    });
   }
 });
+
 
 app.post('/api/auth/update-password', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const password = String(req.body?.password || '');
-    const passwordError = validatePasswordStrength(password);
-    if (passwordError) return res.status(400).json({ error: passwordError });
-    const { error } = await supabase.auth.admin.updateUserById(user.id, { password });
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ ok: true });
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
+    }
+
+    const password =
+      String(req.body?.password || '');
+
+    const passwordError =
+      validatePasswordStrength(password);
+
+    if (passwordError) {
+      return res.status(400).json({
+        error: passwordError,
+      });
+    }
+
+    const passwordHash =
+      await hashPostgresPassword(password);
+
+    await db.query(
+      `UPDATE public.profiles
+          SET password_hash = $2,
+              password_updated_at = NOW()
+        WHERE id = $1`,
+      [user.id, passwordHash]
+    );
+
+    const currentToken =
+      getBearerToken(req);
+
+    const currentHash =
+      currentToken
+        ? hashAuthToken(currentToken)
+        : '';
+
+    // Revoke other sessions but keep this browser logged in.
+    await db.query(
+      `UPDATE public.auth_sessions
+          SET revoked_at =
+            COALESCE(revoked_at, NOW())
+        WHERE user_id = $1
+          AND revoked_at IS NULL
+          AND access_token_hash <> $2`,
+      [user.id, currentHash]
+    );
+
+    return res.json({ ok: true });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES UPDATE PASSWORD]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not update password right now.',
+    });
   }
 });
 
@@ -5079,36 +5850,90 @@ app.get('/api/notifications/status', async (req, res) => {
 
 app.post('/api/bug-reports', async (req, res) => {
   let uploadedPath = null;
+
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const profile = await getProfile(user.id);
-    if (!profile) return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
-    const description = String(req.body?.description || '').trim();
-    if (description.length < 10 || description.length > 5000) {
-      return res.status(400).json({ error: 'Description must be between 10 and 5000 characters.' });
-    }
-    let attachment = null;
-    try {
-      attachment = decodeBugReportAttachment(req.body?.screenshot || null);
-    } catch (error) {
-      const status = /3 MB or smaller/.test(error.message) ? 413 : 400;
-      return res.status(status).json({ error: error.message });
+    const user =
+      await getUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
     }
 
-    const reportId = crypto.randomUUID();
+    const profile =
+      await getProfile(user.id);
+
+    if (!profile) {
+      return res.status(409).json({
+        error:
+          ACCOUNT_SETUP_INCOMPLETE_MESSAGE,
+      });
+    }
+
+    const description =
+      String(
+        req.body?.description || ''
+      ).trim();
+
+    if (
+      description.length < 10 ||
+      description.length > 5000
+    ) {
+      return res.status(400).json({
+        error:
+          'Description must be between 10 and 5000 characters.',
+      });
+    }
+
+    let attachment = null;
+
+    try {
+      attachment =
+        decodeBugReportAttachment(
+          req.body?.screenshot || null
+        );
+
+    } catch (error) {
+      const status =
+        /3 MB or smaller/.test(
+          error.message
+        )
+          ? 413
+          : 400;
+
+      return res.status(status).json({
+        error: error.message,
+      });
+    }
+
+    const reportId =
+      crypto.randomUUID();
+
     if (attachment) {
-      const attachmentPath = `${user.id}/${reportId}/${attachment.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from(BUG_REPORT_BUCKET)
-        .upload(attachmentPath, attachment.buffer, {
-          contentType: attachment.mimeType,
-          upsert: false,
+      const attachmentPath =
+        `${user.id}/${reportId}/${attachment.name}`;
+
+      try {
+        await saveBugReportAttachment(
+          attachmentPath,
+          attachment.buffer
+        );
+
+        uploadedPath =
+          attachmentPath;
+
+      } catch (uploadError) {
+        console.error(
+          '[BUG REPORT LOCAL STORAGE]',
+          safeLogError(uploadError)
+        );
+
+        return res.status(500).json({
+          error:
+            'Screenshot upload failed.',
         });
-      if (uploadError) {
-        return res.status(400).json({ error: `Screenshot upload failed: ${uploadError.message}` });
       }
-      uploadedPath = attachmentPath;
     }
 
     const reportContext =
@@ -5118,177 +5943,172 @@ app.post('/api/bug-reports', async (req, res) => {
         : {};
 
     const reportRoute =
-      String(req.body?.route || '')
-        .slice(0, 500) || null;
+      String(
+        req.body?.route || ''
+      ).slice(0, 500) || null;
 
     let data;
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    try {
+      const { rows } =
+        await db.query(
           `INSERT INTO public.bug_reports
-            (
-              id,
-              reporter_id,
-              reporter_role,
-              reporter_name,
-              reporter_email,
-              description,
-              attachment_path,
-              attachment_name,
-              attachment_mime_type,
-              attachment_size,
-              route,
-              context
-            )
-           VALUES
-            (
-              $1, $2, $3, $4,
-              $5, $6, $7, $8,
-              $9, $10, $11, $12::jsonb
-            )
-           RETURNING *`,
+          (
+            id,
+            reporter_id,
+            reporter_role,
+            reporter_name,
+            reporter_email,
+            description,
+            attachment_path,
+            attachment_name,
+            attachment_mime_type,
+            attachment_size,
+            route,
+            context
+          )
+          VALUES
+          (
+            $1, $2, $3, $4,
+            $5, $6, $7, $8,
+            $9, $10, $11, $12::jsonb
+          )
+          RETURNING *`,
           [
             reportId,
             user.id,
             profile.role,
             profile.name,
-            profile.email || user.email || null,
+            profile.email ||
+              user.email ||
+              null,
             description,
             uploadedPath,
-            attachment?.name || null,
-            attachment?.mimeType || null,
-            attachment?.size || null,
+            attachment?.name ||
+              null,
+            attachment?.mimeType ||
+              null,
+            attachment?.size ||
+              null,
             reportRoute,
-            JSON.stringify(reportContext),
+            JSON.stringify(
+              reportContext
+            ),
           ]
         );
 
-        data = rows[0];
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result =
-        await submissionWriteWithFallback(
-          req,
-          (client) =>
-            client
-              .from('bug_reports')
-              .insert({
-                id: reportId,
-                reporter_id: user.id,
-                reporter_role: profile.role,
-                reporter_name: profile.name,
-                reporter_email:
-                  profile.email ||
-                  user.email ||
-                  null,
-                description,
-                attachment_path:
-                  uploadedPath,
-                attachment_name:
-                  attachment?.name || null,
-                attachment_mime_type:
-                  attachment?.mimeType || null,
-                attachment_size:
-                  attachment?.size || null,
-                route: reportRoute,
-                context: reportContext,
-              })
-              .select()
-              .single()
-        );
+      data =
+        rows[0] || null;
 
-      data = result.data;
-      error = result.error;
-    }
-
-    if (error) {
+    } catch (writeError) {
       if (uploadedPath) {
-        await supabase.storage
-          .from(BUG_REPORT_BUCKET)
-          .remove([uploadedPath]);
+        try {
+          await deleteBugReportAttachment(
+            uploadedPath
+          );
+
+        } catch (cleanupError) {
+          console.error(
+            '[BUG REPORT CLEANUP]',
+            safeLogError(
+              cleanupError
+            )
+          );
+        }
       }
 
-      return res
-        .status(isRlsDenial(error) ? 403 : 400)
-        .json({
-          error: error.message,
-        });
+      return res.status(400).json({
+        error:
+          writeError.message,
+      });
     }
 
-    res.json({ report: data });
+    if (!data) {
+      if (uploadedPath) {
+        try {
+          await deleteBugReportAttachment(
+            uploadedPath
+          );
+        } catch {
+          // Preserve original failure.
+        }
+      }
+
+      return res.status(500).json({
+        error:
+          'The report could not be saved.',
+      });
+    }
+
+    return res.json({
+      report: data,
+    });
+
   } catch (error) {
     if (uploadedPath) {
       try {
-        await supabase.storage.from(BUG_REPORT_BUCKET).remove([uploadedPath]);
+        await deleteBugReportAttachment(
+          uploadedPath
+        );
       } catch {
-        // Preserve the original request error; orphan cleanup can be retried operationally.
+        // Preserve the original request error.
       }
     }
-    res.status(500).json({ error: 'The report could not be saved.' });
+
+    return res.status(500).json({
+      error:
+        'The report could not be saved.',
+    });
   }
 });
 
+
 app.get('/api/admin/bug-reports', async (req, res) => {
   try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
-    let data = [];
-    let error = null;
+    const user =
+      await requireAdmin(req, res);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    if (!user) return;
+
+    try {
+      const { rows } =
+        await db.query(
           `SELECT *
              FROM public.bug_reports
             ORDER BY created_at DESC
             LIMIT 500`
         );
 
-        data = rows;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const result = await supabase
-        .from('bug_reports')
-        .select('*')
-        .order('created_at', {
-          ascending: false,
-        })
-        .limit(500);
+      return res.json({
+        reports: rows || [],
+      });
 
-      data = result.data;
-      error = result.error;
-    }
-
-    if (error) {
+    } catch (readError) {
       return res.status(400).json({
-        error: error.message,
+        error: readError.message,
       });
     }
 
-    res.json({
-      reports: data || [],
-    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
+
 app.get('/api/admin/bug-reports/:id/attachment', async (req, res) => {
   try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
-    let report;
-    let error = null;
+    const user =
+      await requireAdmin(req, res);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    if (!user) return;
+
+    let report;
+
+    try {
+      const { rows } =
+        await db.query(
           `SELECT attachment_path
              FROM public.bug_reports
             WHERE id = $1
@@ -5296,24 +6116,12 @@ app.get('/api/admin/bug-reports/:id/attachment', async (req, res) => {
           [req.params.id]
         );
 
-        report = rows[0] || null;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const result = await supabase
-        .from('bug_reports')
-        .select('attachment_path')
-        .eq('id', req.params.id)
-        .maybeSingle();
+      report =
+        rows[0] || null;
 
-      report = result.data;
-      error = result.error;
-    }
-
-    if (error) {
+    } catch (readError) {
       return res.status(400).json({
-        error: error.message,
+        error: readError.message,
       });
     }
 
@@ -5325,79 +6133,247 @@ app.get('/api/admin/bug-reports/:id/attachment', async (req, res) => {
 
     if (!report.attachment_path) {
       return res.status(404).json({
-        error: 'This report has no screenshot.',
+        error:
+          'This report has no screenshot.',
       });
     }
 
-    const { data, error: signedUrlError } = await supabase.storage
-      .from(BUG_REPORT_BUCKET)
-      .createSignedUrl(report.attachment_path, 300);
-    if (signedUrlError) return res.status(400).json({ error: signedUrlError.message });
-    res.json({ url: data.signedUrl, expiresIn: 300 });
+    return res.json({
+      url:
+        `/api/admin/bug-reports/${encodeURIComponent(req.params.id)}/attachment/file`,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
-app.patch('/api/admin/bug-reports/:id', async (req, res) => {
-  try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
-    const allowedStatuses = new Set(['open', 'in_progress', 'resolved', 'closed']);
-    const allowedPriorities = new Set(['low', 'normal', 'high', 'urgent']);
-    const patch = {};
-    if (req.body?.status !== undefined) {
-      const status = String(req.body.status).toLowerCase();
-      if (!allowedStatuses.has(status)) return res.status(400).json({ error: 'Invalid report status.' });
-      patch.status = status;
-      patch.resolved_at = ['resolved', 'closed'].includes(status) ? new Date().toISOString() : null;
-    }
-    if (req.body?.priority !== undefined) {
-      const priority = String(req.body.priority).toLowerCase();
-      if (!allowedPriorities.has(priority)) return res.status(400).json({ error: 'Invalid report priority.' });
-      patch.priority = priority;
-    }
-    if (req.body?.adminNotes !== undefined) {
-      patch.admin_notes = String(req.body.adminNotes).slice(0, 5000);
-    }
-    let data;
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
+app.get(
+  '/api/admin/bug-reports/:id/attachment/file',
+  async (req, res) => {
+    try {
+      const user = await requireAdmin(req, res);
+      if (!user) return;
+
+      const { rows } = await db.query(
+        `SELECT
+           attachment_path,
+           attachment_name,
+           attachment_mime_type
+         FROM public.bug_reports
+         WHERE id = $1
+         LIMIT 1`,
+        [req.params.id]
+      );
+
+      const report = rows[0] || null;
+
+      if (!report) {
+        return res.status(404).json({
+          error: 'Report not found.',
+        });
+      }
+
+      if (!report.attachment_path) {
+        return res.status(404).json({
+          error: 'This report has no screenshot.',
+        });
+      }
+
+      const fullPath =
+        resolveBugReportAttachmentPath(
+          report.attachment_path
+        );
+
+      let fileBuffer;
+
       try {
-        const allowedColumns = new Set([
-          'status',
-          'priority',
-          'admin_notes',
-          'resolved_at',
-        ]);
-
-        const entries = Object.entries(patch)
-          .filter(([key]) =>
-            allowedColumns.has(key)
-          );
-
-        if (!entries.length) {
-          return res.status(400).json({
-            error:
-              'No supported report changes were provided.',
+        fileBuffer = await fs.readFile(fullPath);
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          return res.status(404).json({
+            error: 'Screenshot file not found.',
           });
         }
 
-        const setParts = entries.map(
-          ([key], index) =>
-            `${key} = $${index + 1}`
+        throw error;
+      }
+
+      const allowedMimeTypes = new Set([
+        'image/jpeg',
+        'image/png',
+        'image/webp',
+      ]);
+
+      const mimeType =
+        allowedMimeTypes.has(
+          report.attachment_mime_type
+        )
+          ? report.attachment_mime_type
+          : 'application/octet-stream';
+
+      const safeName =
+        String(
+          report.attachment_name ||
+          'screenshot'
+        )
+          .replace(
+            /[^a-zA-Z0-9._-]+/g,
+            '-'
+          )
+          .slice(0, 120);
+
+      res.set(
+        'Content-Type',
+        mimeType
+      );
+
+      res.set(
+        'Content-Disposition',
+        `inline; filename="${safeName}"`
+      );
+
+      res.set(
+        'Cache-Control',
+        'private, no-store'
+      );
+
+      return res.send(fileBuffer);
+
+    } catch (error) {
+      console.error(
+        '[BUG REPORT FILE ACCESS]',
+        safeLogError(error)
+      );
+
+      return res.status(500).json({
+        error:
+          'The screenshot could not be loaded.',
+      });
+    }
+  }
+);
+
+
+app.patch('/api/admin/bug-reports/:id', async (req, res) => {
+  try {
+    const user =
+      await requireAdmin(req, res);
+
+    if (!user) return;
+
+    const allowedStatuses =
+      new Set([
+        'open',
+        'in_progress',
+        'resolved',
+        'closed',
+      ]);
+
+    const allowedPriorities =
+      new Set([
+        'low',
+        'normal',
+        'high',
+        'urgent',
+      ]);
+
+    const patch = {};
+
+    if (req.body?.status !== undefined) {
+      const status =
+        String(
+          req.body.status
+        ).toLowerCase();
+
+      if (!allowedStatuses.has(status)) {
+        return res.status(400).json({
+          error:
+            'Invalid report status.',
+        });
+      }
+
+      patch.status = status;
+
+      patch.resolved_at =
+        ['resolved', 'closed'].includes(status)
+          ? new Date().toISOString()
+          : null;
+    }
+
+    if (req.body?.priority !== undefined) {
+      const priority =
+        String(
+          req.body.priority
+        ).toLowerCase();
+
+      if (!allowedPriorities.has(priority)) {
+        return res.status(400).json({
+          error:
+            'Invalid report priority.',
+        });
+      }
+
+      patch.priority = priority;
+    }
+
+    if (req.body?.adminNotes !== undefined) {
+      patch.admin_notes =
+        String(
+          req.body.adminNotes
+        ).slice(0, 5000);
+    }
+
+    const allowedColumns =
+      new Set([
+        'status',
+        'priority',
+        'admin_notes',
+        'resolved_at',
+      ]);
+
+    const entries =
+      Object.entries(patch)
+        .filter(
+          ([key]) =>
+            allowedColumns.has(key)
         );
 
-        setParts.push('updated_at = NOW()');
+    if (!entries.length) {
+      return res.status(400).json({
+        error:
+          'No supported report changes were provided.',
+      });
+    }
 
-        const values = entries.map(
-          ([, value]) => value
-        );
+    const setParts =
+      entries.map(
+        ([key], index) =>
+          `${key} = $${index + 1}`
+      );
 
-        values.push(req.params.id);
+    setParts.push(
+      'updated_at = NOW()'
+    );
 
-        const { rows } = await db.query(
+    const values =
+      entries.map(
+        ([, value]) =>
+          value
+      );
+
+    values.push(
+      req.params.id
+    );
+
+    let data;
+
+    try {
+      const { rows } =
+        await db.query(
           `UPDATE public.bug_reports
               SET ${setParts.join(', ')}
             WHERE id = $${values.length}
@@ -5405,39 +6381,33 @@ app.patch('/api/admin/bug-reports/:id', async (req, res) => {
           values
         );
 
-        data = rows[0] || null;
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result = await supabase
-        .from('bug_reports')
-        .update(patch)
-        .eq('id', req.params.id)
-        .select()
-        .maybeSingle();
+      data =
+        rows[0] || null;
 
-      data = result.data;
-      error = result.error;
-    }
-
-    if (error) {
+    } catch (writeError) {
       return res.status(400).json({
-        error: error.message,
+        error: writeError.message,
       });
     }
 
     if (!data) {
       return res.status(404).json({
-        error: 'Report not found.',
+        error:
+          'Report not found.',
       });
     }
 
-    res.json({ report: data });
+    return res.json({
+      report: data,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.post('/api/notifications/test', async (req, res) => {
   try {
@@ -5471,104 +6441,68 @@ app.get('/api/notifications/diagnose-submission', async (req, res) => {
       return res.status(400).json({ error: 'assignmentId and studentId are required.' });
     }
 
-    const readClient = getRequestScopedSupabase(req);
-    const assignment = await ensureTeacherOwnsAssignment(assignmentId, user.id, readClient);
-    if (!assignment) return res.status(403).json({ error: 'You can only diagnose your own assignments.' });
 
-    let classRow;
-    let classError = null;
+    const assignment =
+      await ensureTeacherOwnsAssignment(
+        assignmentId,
+        user.id
+      );
 
-    let submission;
-    let submissionError = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const classResult = await db.query(
-          `SELECT id, name, teacher_id
-             FROM public.classes
-            WHERE id = $1
-            LIMIT 1`,
-          [assignment.class_id]
-        );
-
-        classRow =
-          classResult.rows[0] || null;
-
-        const submissionResult =
-          await db.query(
-            `SELECT
-               s.*,
-               CASE
-                 WHEN p.id IS NULL THEN NULL
-                 ELSE jsonb_build_object(
-                   'id', p.id,
-                   'name', p.name
-                 )
-               END AS profiles
-             FROM public.submissions s
-             LEFT JOIN public.profiles p
-               ON p.id = s.student_id
-             WHERE s.assignment_id = $1
-               AND s.student_id = $2
-             LIMIT 1`,
-            [
-              assignmentId,
-              studentId,
-            ]
-          );
-
-        submission =
-          submissionResult.rows[0] || null;
-      } catch (readError) {
-        submissionError = readError;
-      }
-    } else {
-      const classResult = await supabase
-        .from('classes')
-        .select('id, name, teacher_id')
-        .eq('id', assignment.class_id)
-        .maybeSingle();
-
-      classRow =
-        classResult.data;
-
-      classError =
-        classResult.error;
-
-      if (!classError) {
-        const submissionResult =
-          await supabase
-            .from('submissions')
-            .select(
-              '*, profiles(id, name)'
-            )
-            .eq(
-              'assignment_id',
-              assignmentId
-            )
-            .eq(
-              'student_id',
-              studentId
-            )
-            .maybeSingle();
-
-        submission =
-          submissionResult.data;
-
-        submissionError =
-          submissionResult.error;
-      }
-    }
-
-    if (classError) {
-      return res.status(400).json({
-        error: classError.message,
+    if (!assignment) {
+      return res.status(403).json({
+        error:
+          'You can only diagnose your own assignments.',
       });
     }
 
-    if (submissionError) {
+    let classRow;
+    let submission;
+
+    try {
+      const classResult =
+        await db.query(
+          `SELECT
+             id,
+             name,
+             teacher_id
+           FROM public.classes
+           WHERE id = $1
+           LIMIT 1`,
+          [assignment.class_id]
+        );
+
+      classRow =
+        classResult.rows[0] || null;
+
+      const submissionResult =
+        await db.query(
+          `SELECT
+             s.*,
+             CASE
+               WHEN p.id IS NULL THEN NULL
+               ELSE jsonb_build_object(
+                 'id', p.id,
+                 'name', p.name
+               )
+             END AS profiles
+           FROM public.submissions s
+           LEFT JOIN public.profiles p
+             ON p.id = s.student_id
+           WHERE s.assignment_id = $1
+             AND s.student_id = $2
+           LIMIT 1`,
+          [
+            assignmentId,
+            studentId,
+          ]
+        );
+
+      submission =
+        submissionResult.rows[0] || null;
+
+    } catch (readError) {
       return res.status(400).json({
-        error: submissionError.message,
+        error: readError.message,
       });
     }
 
@@ -5693,140 +6627,170 @@ function generateClassInviteCode() {
   ).join('');
 }
 
-async function createClassWithUniqueInviteCode(client, classData) {
+async function createClassWithUniqueInviteCode(classData) {
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const inviteCode = generateClassInviteCode();
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `INSERT INTO public.classes
-            (
-              teacher_id,
-              name,
-              invite_code,
-              description,
-              semester,
-              is_published,
-              archived
-            )
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           RETURNING *`,
-          [
-            classData.teacher_id,
-            classData.name,
-            inviteCode,
-            classData.description,
-            classData.semester,
-            classData.is_published,
-            classData.archived,
-          ]
-        );
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO public.classes
+          (
+            teacher_id,
+            name,
+            invite_code,
+            description,
+            semester,
+            is_published,
+            archived
+          )
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          classData.teacher_id,
+          classData.name,
+          inviteCode,
+          classData.description,
+          classData.semester,
+          classData.is_published,
+          classData.archived,
+        ]
+      );
 
-        return { data: rows[0], error: null };
-      } catch (error) {
-        if (error.code !== '23505') {
-          return { data: null, error };
-        }
-        continue;
+      return {
+        data: rows[0],
+        error: null,
+      };
+    } catch (error) {
+      if (error.code !== '23505') {
+        return {
+          data: null,
+          error,
+        };
       }
     }
-
-    const { data, error } = await client
-      .from('classes')
-      .insert({ ...classData, invite_code: inviteCode })
-      .select()
-      .single();
-
-    if (!error) return { data, error: null };
-    if (error.code !== '23505') return { data: null, error };
   }
 
   return {
     data: null,
-    error: new Error('Could not generate a unique course access code.'),
+    error: new Error(
+      'Could not generate a unique course access code.'
+    ),
   };
 }
 
 // Get teacher's classes
 app.get('/api/classes', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    // Authorization is established above and teacher_id scopes the result.
-    // Use the server client so profile RLS does not erase nested roster names.
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
-        `SELECT
-           c.*,
-           COALESCE(
-             jsonb_agg(
-               jsonb_build_object(
-                 'student_id', cm.student_id,
-                 'status', cm.status,
-                 'profiles', jsonb_build_object(
-                   'id', p.id,
-                   'name', p.name,
-                   'email', p.email
-                 )
-               )
-               ORDER BY cm.created_at
-             ) FILTER (WHERE cm.id IS NOT NULL),
-             '[]'::jsonb
-           ) AS class_members
-         FROM public.classes c
-         LEFT JOIN public.class_members cm
-           ON cm.class_id = c.id
-         LEFT JOIN public.profiles p
-           ON p.id = cm.student_id
-         WHERE c.teacher_id = $1
-         GROUP BY c.id
-         ORDER BY c.created_at DESC`,
-        [user.id]
-      );
-
-      return res.json({ classes: rows });
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
     }
 
-    const { data, error } = await supabase
-      .from('classes')
-      .select('*, class_members(student_id, status, profiles(id, name, email))')
-      .eq('teacher_id', user.id)
-      .order('created_at', { ascending: false });
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ classes: data });
+    const { rows } = await db.query(
+      `SELECT
+         c.*,
+         COALESCE(
+           jsonb_agg(
+             jsonb_build_object(
+               'student_id', cm.student_id,
+               'status', cm.status,
+               'profiles', jsonb_build_object(
+                 'id', p.id,
+                 'name', p.name,
+                 'email', p.email
+               )
+             )
+             ORDER BY cm.created_at
+           ) FILTER (WHERE cm.id IS NOT NULL),
+           '[]'::jsonb
+         ) AS class_members
+       FROM public.classes c
+       LEFT JOIN public.class_members cm
+         ON cm.class_id = c.id
+       LEFT JOIN public.profiles p
+         ON p.id = cm.student_id
+       WHERE c.teacher_id = $1
+       GROUP BY c.id
+       ORDER BY c.created_at DESC`,
+      [user.id]
+    );
+
+    return res.json({
+      classes: rows,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Create a class
 app.post('/api/classes', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const name = String(req.body?.name || '').trim();
-    if (!name) return res.status(400).json({ error: 'A course name is required.' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const name = String(
+      req.body?.name || ''
+    ).trim();
+
+    if (!name) {
+      return res.status(400).json({
+        error: 'A course name is required.',
+      });
+    }
+
     const classData = {
       name,
       teacher_id: user.id,
-      description: String(req.body?.description || '').trim() || null,
-      semester: String(req.body?.semester || '').trim() || null,
-      is_published: req.body?.isPublished !== false,
+      description:
+        String(
+          req.body?.description || ''
+        ).trim() || null,
+      semester:
+        String(
+          req.body?.semester || ''
+        ).trim() || null,
+      is_published:
+        req.body?.isPublished !== false,
       archived: false,
     };
-    const { data, error } = await writeWithRequestScopedFallback(
-      req,
-      (client) => createClassWithUniqueInviteCode(
-        client,
+
+    const { data, error } =
+      await createClassWithUniqueInviteCode(
         classData
-      )
-    );
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ class: data });
+      );
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      class: data,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -5834,45 +6798,107 @@ app.post('/api/classes', async (req, res) => {
 app.post('/api/classes/join-by-code', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const profile = await getProfile(user.id);
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
+    }
+
+    const profile =
+      await getProfile(user.id);
+
     if (profile?.role !== 'student') {
-      return res.status(403).json({ error: 'Only student accounts can join courses.' });
+      return res.status(403).json({
+        error:
+          'Only student accounts can join courses.',
+      });
     }
 
     const now = Date.now();
     const ip = getClientIp(req);
     const studentKey = `${ip}:${user.id}`;
-    cleanupRateBucket(joinCodeRateLimiter, now, JOIN_CODE_RATE_WINDOW_MS);
-    cleanupRateBucket(joinCodeIpRateLimiter, now, JOIN_CODE_RATE_WINDOW_MS);
-    const studentRate = evaluateRateBucket(joinCodeRateLimiter, studentKey, now, {
-      windowMs: JOIN_CODE_RATE_WINDOW_MS,
-      maxAttempts: JOIN_CODE_RATE_MAX_FAILURES,
-      blockMs: JOIN_CODE_RATE_BLOCK_MS,
-    });
-    const ipRate = evaluateRateBucket(joinCodeIpRateLimiter, ip, now, {
-      windowMs: JOIN_CODE_RATE_WINDOW_MS,
-      maxAttempts: JOIN_CODE_IP_RATE_MAX_FAILURES,
-      blockMs: JOIN_CODE_RATE_BLOCK_MS,
-    });
-    const joinRate = studentRate.blocked ? studentRate : ipRate;
+
+    cleanupRateBucket(
+      joinCodeRateLimiter,
+      now,
+      JOIN_CODE_RATE_WINDOW_MS
+    );
+
+    cleanupRateBucket(
+      joinCodeIpRateLimiter,
+      now,
+      JOIN_CODE_RATE_WINDOW_MS
+    );
+
+    const studentRate =
+      evaluateRateBucket(
+        joinCodeRateLimiter,
+        studentKey,
+        now,
+        {
+          windowMs:
+            JOIN_CODE_RATE_WINDOW_MS,
+          maxAttempts:
+            JOIN_CODE_RATE_MAX_FAILURES,
+          blockMs:
+            JOIN_CODE_RATE_BLOCK_MS,
+        }
+      );
+
+    const ipRate =
+      evaluateRateBucket(
+        joinCodeIpRateLimiter,
+        ip,
+        now,
+        {
+          windowMs:
+            JOIN_CODE_RATE_WINDOW_MS,
+          maxAttempts:
+            JOIN_CODE_IP_RATE_MAX_FAILURES,
+          blockMs:
+            JOIN_CODE_RATE_BLOCK_MS,
+        }
+      );
+
+    const joinRate =
+      studentRate.blocked
+        ? studentRate
+        : ipRate;
+
     if (joinRate.blocked) {
-      res.set('Retry-After', String(joinRate.retryAfterSeconds));
+      res.set(
+        'Retry-After',
+        String(
+          joinRate.retryAfterSeconds
+        )
+      );
+
       return res.status(429).json({
-        error: 'Too many incorrect course-code attempts. Please wait and try again.',
-        retryAfterSeconds: joinRate.retryAfterSeconds,
+        error:
+          'Too many incorrect course-code attempts. Please wait and try again.',
+        retryAfterSeconds:
+          joinRate.retryAfterSeconds,
       });
     }
 
-    const inviteCode = normalizeClassInviteCode(req.body?.code);
-    if (!inviteCode) return res.status(400).json({ error: 'Please enter a valid course code.' });
+    const inviteCode =
+      normalizeClassInviteCode(
+        req.body?.code
+      );
+
+    if (!inviteCode) {
+      return res.status(400).json({
+        error:
+          'Please enter a valid course code.',
+      });
+    }
 
     let classRow;
-    let classError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    try {
+      const { rows } =
+        await db.query(
           `SELECT
              id,
              name,
@@ -5887,116 +6913,212 @@ app.post('/api/classes/join-by-code', async (req, res) => {
            LIMIT 1`,
           [inviteCode]
         );
-        classRow = rows[0] || null;
-      } catch (error) {
-        classError = error;
-      }
-    } else {
-      const result = await supabase
-        .from('classes')
-        .select('id, name, invite_code, description, semester, is_published, archived, teacher_id')
-        .ilike('invite_code', inviteCode)
-        .maybeSingle();
 
-      classRow = result.data;
-      classError = result.error;
+      classRow = rows[0] || null;
+
+    } catch (classError) {
+      return res.status(400).json({
+        error: classError.message,
+      });
     }
 
-    if (classError) return res.status(400).json({ error: classError.message });
     if (!classRow) {
-      registerRateFailure(joinCodeRateLimiter, studentKey, now, {
-        windowMs: JOIN_CODE_RATE_WINDOW_MS,
-        maxAttempts: JOIN_CODE_RATE_MAX_FAILURES,
-        blockMs: JOIN_CODE_RATE_BLOCK_MS,
+      registerRateFailure(
+        joinCodeRateLimiter,
+        studentKey,
+        now,
+        {
+          windowMs:
+            JOIN_CODE_RATE_WINDOW_MS,
+          maxAttempts:
+            JOIN_CODE_RATE_MAX_FAILURES,
+          blockMs:
+            JOIN_CODE_RATE_BLOCK_MS,
+        }
+      );
+
+      registerRateFailure(
+        joinCodeIpRateLimiter,
+        ip,
+        now,
+        {
+          windowMs:
+            JOIN_CODE_RATE_WINDOW_MS,
+          maxAttempts:
+            JOIN_CODE_IP_RATE_MAX_FAILURES,
+          blockMs:
+            JOIN_CODE_RATE_BLOCK_MS,
+        }
+      );
+
+      return res.status(404).json({
+        error:
+          'Invalid course code. Please check the code provided by your instructor.',
       });
-      registerRateFailure(joinCodeIpRateLimiter, ip, now, {
-        windowMs: JOIN_CODE_RATE_WINDOW_MS,
-        maxAttempts: JOIN_CODE_IP_RATE_MAX_FAILURES,
-        blockMs: JOIN_CODE_RATE_BLOCK_MS,
-      });
-      return res.status(404).json({ error: 'Invalid course code. Please check the code provided by your instructor.' });
     }
-    if (classRow.archived || classRow.is_published === false) {
-      return res.status(409).json({ error: 'This course is currently unavailable. Please contact your instructor.' });
+
+    if (
+      classRow.archived ||
+      classRow.is_published === false
+    ) {
+      return res.status(409).json({
+        error:
+          'This course is currently unavailable. Please contact your instructor.',
+      });
     }
 
     let membership;
-    let membershipError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    try {
+      const { rows } =
+        await db.query(
           `INSERT INTO public.class_members
-            (class_id, student_id, status)
+            (
+              class_id,
+              student_id,
+              status
+            )
            VALUES ($1, $2, 'approved')
-           ON CONFLICT (class_id, student_id)
-           DO UPDATE SET status = EXCLUDED.status
-           RETURNING class_id, student_id, status`,
-          [classRow.id, user.id]
+           ON CONFLICT
+             (class_id, student_id)
+           DO UPDATE SET
+             status = EXCLUDED.status
+           RETURNING
+             class_id,
+             student_id,
+             status`,
+          [
+            classRow.id,
+            user.id,
+          ]
         );
-        membership = rows[0];
-      } catch (error) {
-        membershipError = error;
-      }
-    } else {
-      const result = await writeWithRequestScopedFallback(
-        req,
-        (client) => client
-          .from('class_members')
-          .upsert(
-            { class_id: classRow.id, student_id: user.id, status: 'approved' },
-            { onConflict: 'class_id,student_id' }
-          )
-          .select('class_id, student_id, status')
-          .single()
-      );
 
-      membership = result.data;
-      membershipError = result.error;
+      membership =
+        rows[0];
+
+    } catch (membershipError) {
+      return res.status(400).json({
+        error:
+          membershipError.message,
+      });
     }
-    if (membershipError) return res.status(400).json({ error: membershipError.message });
 
-    clearRateBucketEntry(joinCodeRateLimiter, studentKey);
-    res.json({ ok: true, class: classRow, membership });
+    clearRateBucketEntry(
+      joinCodeRateLimiter,
+      studentKey
+    );
+
+    return res.json({
+      ok: true,
+      class: classRow,
+      membership,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
+
 app.patch('/api/classes/:classId', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
+      );
+
     if (!ownedClass) {
-      return res.status(403).json({ error: 'You can only update your own classes.' });
+      return res.status(403).json({
+        error:
+          'You can only update your own classes.',
+      });
     }
 
     const patch = {};
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
-      const name = String(req.body.name || '').trim();
-      if (!name) return res.status(400).json({ error: 'A course name is required.' });
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'name'
+      )
+    ) {
+      const name =
+        String(req.body.name || '').trim();
+
+      if (!name) {
+        return res.status(400).json({
+          error:
+            'A course name is required.',
+        });
+      }
+
       patch.name = name;
     }
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'description')) {
-      patch.description = String(req.body.description || '').trim() || null;
-    }
-    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'semester')) {
-      patch.semester = String(req.body.semester || '').trim() || null;
-    }
-    if (typeof req.body?.isPublished === 'boolean') {
-      patch.is_published = req.body.isPublished;
-    }
-    if (typeof req.body?.archived === 'boolean') {
-      patch.archived = req.body.archived;
-    }
-    if (!Object.keys(patch).length) {
-      return res.status(400).json({ error: 'No supported course changes were provided.' });
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'description'
+      )
+    ) {
+      patch.description =
+        String(
+          req.body.description || ''
+        ).trim() || null;
     }
 
-    if (USE_POSTGRES_APP_DB) {
-      const allowedColumns = new Set([
+    if (
+      Object.prototype.hasOwnProperty.call(
+        req.body || {},
+        'semester'
+      )
+    ) {
+      patch.semester =
+        String(
+          req.body.semester || ''
+        ).trim() || null;
+    }
+
+    if (
+      typeof req.body?.isPublished ===
+      'boolean'
+    ) {
+      patch.is_published =
+        req.body.isPublished;
+    }
+
+    if (
+      typeof req.body?.archived ===
+      'boolean'
+    ) {
+      patch.archived =
+        req.body.archived;
+    }
+
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({
+        error:
+          'No supported course changes were provided.',
+      });
+    }
+
+    const allowedColumns =
+      new Set([
         'name',
         'description',
         'semester',
@@ -6004,17 +7126,33 @@ app.patch('/api/classes/:classId', async (req, res) => {
         'archived',
       ]);
 
-      const entries = Object.entries(patch)
-        .filter(([key]) => allowedColumns.has(key));
+    const entries =
+      Object.entries(patch)
+        .filter(
+          ([key]) =>
+            allowedColumns.has(key)
+        );
 
-      const setSql = entries
-        .map(([key], index) => `${key} = $${index + 1}`)
+    const setSql =
+      entries
+        .map(
+          ([key], index) =>
+            `${key} = $${index + 1}`
+        )
         .join(', ');
 
-      const values = entries.map(([, value]) => value);
-      values.push(req.params.classId, user.id);
+    const values =
+      entries.map(
+        ([, value]) => value
+      );
 
-      const { rows } = await db.query(
+    values.push(
+      req.params.classId,
+      user.id
+    );
+
+    const { rows } =
+      await db.query(
         `UPDATE public.classes
             SET ${setSql}
           WHERE id = $${entries.length + 1}
@@ -6023,109 +7161,166 @@ app.patch('/api/classes/:classId', async (req, res) => {
         values
       );
 
-      if (!rows[0]) {
-        return res.status(404).json({ error: 'Course not found.' });
-      }
-
-      return res.json({ class: rows[0] });
+    if (!rows[0]) {
+      return res.status(404).json({
+        error: 'Course not found.',
+      });
     }
 
-    const { data, error } = await writeWithRequestScopedFallback(
-      req,
-      (client) => client
-        .from('classes')
-        .update(patch)
-        .eq('id', req.params.classId)
-        .eq('teacher_id', user.id)
-        .select()
-        .single()
-    );
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ class: data });
+    return res.json({
+      class: rows[0],
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Add student to class
+
 app.post('/api/classes/:classId/members', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only add students to your own classes.' });
-    const { studentEmail } = req.body;
-    // Find student by email
-    const { data: authUsers } = await supabase.auth.admin.listUsers();
-    const authUser = authUsers.users.find(u => u.email === studentEmail);
-    if (!authUser) return res.status(404).json({ error: 'No student found with that email' });
-    const studentProfile = await getProfile(authUser.id);
-    if (!studentProfile || studentProfile.role !== 'student') {
-      return res.status(404).json({ error: 'No student found with that email' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
     }
-    if (USE_POSTGRES_APP_DB) {
-      await db.query(
-        `INSERT INTO public.class_members
-          (class_id, student_id, status)
-         VALUES ($1, $2, 'approved')
-         ON CONFLICT (class_id, student_id)
-         DO UPDATE SET status = EXCLUDED.status`,
-        [req.params.classId, authUser.id]
-      );
-    } else {
-      const { error } = await writeWithRequestScopedFallback(
-        req,
-        (client) => client
-          .from('class_members')
-          .upsert(
-            {
-              class_id: req.params.classId,
-              student_id: authUser.id,
-              status: 'approved',
-            },
-            { onConflict: 'class_id,student_id' }
-          )
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
       );
 
-      if (error) {
-        return res.status(400).json({ error: error.message });
-      }
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only add students to your own classes.',
+      });
     }
-    res.json({ ok: true });
+
+    const studentEmail =
+      normalizeEmail(
+        req.body?.studentEmail
+      );
+
+    if (!studentEmail) {
+      return res.status(400).json({
+        error:
+          'Student email is required.',
+      });
+    }
+
+    const { rows } =
+      await db.query(
+        `SELECT
+           id,
+           name,
+           email,
+           role
+         FROM public.profiles
+         WHERE LOWER(email) = LOWER($1)
+           AND role = 'student'
+           AND auth_disabled = false
+         LIMIT 1`,
+        [studentEmail]
+      );
+
+    const studentProfile =
+      rows[0] || null;
+
+    if (!studentProfile) {
+      return res.status(404).json({
+        error:
+          'No student found with that email',
+      });
+    }
+
+    await db.query(
+      `INSERT INTO public.class_members
+        (
+          class_id,
+          student_id,
+          status
+        )
+       VALUES ($1, $2, 'approved')
+       ON CONFLICT (class_id, student_id)
+       DO UPDATE SET
+         status = EXCLUDED.status`,
+      [
+        req.params.classId,
+        studentProfile.id,
+      ]
+    );
+
+    return res.json({
+      ok: true,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Email a course invitation without enrolling the recipient automatically.
+
 app.post('/api/classes/:classId/invitations', async (req, res) => {
   try {
-    const { user, profile, error: teacherError, status } =
-      await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
+    const {
+      user,
+      profile,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    const studentEmail = String(req.body?.studentEmail || '')
-      .trim()
-      .toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(studentEmail)) {
-      return res.status(400).json({ error: 'Enter a valid student email address.' });
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
     }
 
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(
-      req.params.classId,
-      user.id,
-      readClient
-    );
+    const studentEmail =
+      String(
+        req.body?.studentEmail || ''
+      )
+        .trim()
+        .toLowerCase();
+
+    if (
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/
+        .test(studentEmail)
+    ) {
+      return res.status(400).json({
+        error:
+          'Enter a valid student email address.',
+      });
+    }
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
+      );
+
     if (!ownedClass) {
-      return res.status(403).json({ error: 'You can only invite students to your own courses.' });
+      return res.status(403).json({
+        error:
+          'You can only invite students to your own courses.',
+      });
     }
 
-    let course;
-
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT
            id,
            name,
@@ -6139,151 +7334,279 @@ app.post('/api/classes/:classId/invitations', async (req, res) => {
         [req.params.classId]
       );
 
-      course = rows[0];
-      if (!course) {
-        return res.status(404).json({ error: 'Course not found.' });
-      }
-    } else {
-      const { data, error: courseError } = await readClient
-        .from('classes')
-        .select('id, name, invite_code, semester, is_published, archived')
-        .eq('id', req.params.classId)
-        .single();
+    const course =
+      rows[0] || null;
 
-      if (courseError) throw courseError;
-      course = data;
+    if (!course) {
+      return res.status(404).json({
+        error: 'Course not found.',
+      });
     }
+
     if (course.archived === true) {
-      return res.status(400).json({ error: 'Restore this course before inviting students.' });
-    }
-    if (course.is_published === false) {
-      return res.status(400).json({ error: 'Publish this course before inviting students.' });
+      return res.status(400).json({
+        error:
+          'Restore this course before inviting students.',
+      });
     }
 
-    const courseName = course.name || 'your course';
-    const instructorName = profile?.name || 'Your instructor';
-    const accessCode = String(course.invite_code || '').trim().toUpperCase();
-    const joinUrl = `${getRequestBaseUrl(req)}/join?code=${encodeURIComponent(accessCode)}`;
-    const safeCourseName = escapeHtmlEmail(courseName);
-    const safeInstructorName = escapeHtmlEmail(instructorName);
-    const safeAccessCode = escapeHtmlEmail(accessCode);
-    const safeJoinUrl = escapeHtmlEmail(joinUrl);
-    const emailResult = await sendEmail({
-      to: studentEmail,
-      subject: `You're invited to join ${courseName} on Praxis`,
-      text: [
-        `You are invited to join ${courseName} on Praxis.`,
-        '',
-        `Instructor: ${instructorName}`,
-        `Access code: ${accessCode}`,
-        `Join here: ${joinUrl}`,
-        '',
-        'Sign in to your Praxis account, or create an account, then follow the link to join the course.',
-      ].join('\n'),
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#0f172a;line-height:1.6;">
-          <h1 style="font-size:24px;margin-bottom:8px;">You're invited to join ${safeCourseName}</h1>
-          <p>${safeInstructorName} invited you to join a course on Praxis.</p>
-          <div style="margin:24px 0;padding:18px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff;">
-            <p style="margin:0 0 6px;"><strong>Course:</strong> ${safeCourseName}</p>
-            <p style="margin:0;"><strong>Access code:</strong> ${safeAccessCode}</p>
+    if (
+      course.is_published === false
+    ) {
+      return res.status(400).json({
+        error:
+          'Publish this course before inviting students.',
+      });
+    }
+
+    const courseName =
+      course.name || 'your course';
+
+    const instructorName =
+      profile?.name ||
+      'Your instructor';
+
+    const accessCode =
+      String(
+        course.invite_code || ''
+      )
+        .trim()
+        .toUpperCase();
+
+    const joinUrl =
+      `${getRequestBaseUrl(req)}/join?code=${encodeURIComponent(accessCode)}`;
+
+    const safeCourseName =
+      escapeHtmlEmail(courseName);
+
+    const safeInstructorName =
+      escapeHtmlEmail(
+        instructorName
+      );
+
+    const safeAccessCode =
+      escapeHtmlEmail(accessCode);
+
+    const safeJoinUrl =
+      escapeHtmlEmail(joinUrl);
+
+    const emailResult =
+      await sendEmail({
+        to: studentEmail,
+
+        subject:
+          `You're invited to join ${courseName} on Praxis`,
+
+        text: [
+          `You are invited to join ${courseName} on Praxis.`,
+          '',
+          `Instructor: ${instructorName}`,
+          `Access code: ${accessCode}`,
+          `Join here: ${joinUrl}`,
+          '',
+          'Sign in to your Praxis account, or create an account, then follow the link to join the course.',
+        ].join('\n'),
+
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#0f172a;line-height:1.6;">
+            <h1 style="font-size:24px;margin-bottom:8px;">You're invited to join ${safeCourseName}</h1>
+            <p>${safeInstructorName} invited you to join a course on Praxis.</p>
+            <div style="margin:24px 0;padding:18px;border:1px solid #dbeafe;border-radius:14px;background:#eff6ff;">
+              <p style="margin:0 0 6px;"><strong>Course:</strong> ${safeCourseName}</p>
+              <p style="margin:0;"><strong>Access code:</strong> ${safeAccessCode}</p>
+            </div>
+            <a href="${safeJoinUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#2563eb;color:white;text-decoration:none;font-weight:700;">Join course on Praxis</a>
+            <p style="margin-top:22px;font-size:13px;color:#64748b;">Sign in or create a student account, then Praxis will continue your invitation.</p>
           </div>
-          <a href="${safeJoinUrl}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#2563eb;color:white;text-decoration:none;font-weight:700;">Join course on Praxis</a>
-          <p style="margin-top:22px;font-size:13px;color:#64748b;">Sign in or create a student account, then Praxis will continue your invitation.</p>
-        </div>
-      `,
-      idempotencyKey: `course-invite:${course.id}:${studentEmail}:${Date.now()}`,
-    });
+        `,
+
+        idempotencyKey:
+          `course-invite:${course.id}:${studentEmail}:${Date.now()}`,
+      });
 
     if (emailResult?.skipped) {
-      return res.status(503).json({ error: 'Email delivery is not configured on this server.' });
+      return res.status(503).json({
+        error:
+          'Email delivery is not configured on this server.',
+      });
     }
 
-    return res.json({ ok: true, recipient: studentEmail });
+    return res.json({
+      ok: true,
+      recipient: studentEmail,
+    });
+
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'The invitation could not be sent.' });
+    return res.status(500).json({
+      error:
+        error.message ||
+        'The invitation could not be sent.',
+    });
   }
 });
+
 
 app.delete('/api/classes/:classId', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only delete your own classes.' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
         error:
-          'Class deletion is temporarily unavailable while research archive tables are being migrated.',
+          'You can only delete your own classes.',
       });
     }
 
-    const { data: assignments } = await supabase
-      .from('assignments')
-      .select('id')
-      .eq('class_id', req.params.classId);
-    const assignmentIds = (assignments || []).map(a => a.id);
-    if (assignmentIds.length) {
-      const { data: submissionsToArchive, error: fetchError } = await supabase
-        .from('submissions')
-        .select('*')
-        .in('assignment_id', assignmentIds);
-      if (fetchError) return res.status(400).json({ error: fetchError.message });
-      // Preserve de-identified keystroke/writing-process data before the hard delete.
-      await archiveSubmissionsForDeletion(submissionsToArchive, {
-        reason: 'class_deleted',
-        classId: req.params.classId,
-      });
-      const submissionIds = (submissionsToArchive || [])
-        .map((submission) => submission.id)
+    const assignmentResult =
+      await db.query(
+        `SELECT id
+           FROM public.assignments
+          WHERE class_id = $1`,
+        [req.params.classId]
+      );
+
+    const assignmentIds =
+      assignmentResult.rows
+        .map((row) => row.id)
         .filter(Boolean);
-      if (submissionIds.length) {
-        const { error: submissionRevisionError } = await supabase
-          .from('submission_revisions')
-          .delete()
-          .in('submission_id', submissionIds);
-        if (submissionRevisionError) {
-          return res.status(400).json({ error: submissionRevisionError.message });
+
+    let submissionsToArchive = [];
+
+    if (assignmentIds.length) {
+      const submissionResult =
+        await db.query(
+          `SELECT *
+             FROM public.submissions
+            WHERE assignment_id =
+              ANY($1::uuid[])`,
+          [assignmentIds]
+        );
+
+      submissionsToArchive =
+        submissionResult.rows;
+
+      await archiveSubmissionsForDeletion(
+        submissionsToArchive,
+        {
+          reason: 'class_deleted',
+          classId:
+            req.params.classId,
         }
-      }
-      const { error: submissionDeleteError } = await supabase
-        .from('submissions')
-        .delete()
-        .in('assignment_id', assignmentIds);
-      if (submissionDeleteError) {
-        return res.status(400).json({ error: submissionDeleteError.message });
-      }
-      const { error: assignmentRevisionError } = await supabase
-        .from('assignment_revisions')
-        .delete()
-        .in('assignment_id', assignmentIds);
-      if (assignmentRevisionError) {
-        return res.status(400).json({ error: assignmentRevisionError.message });
-      }
-      const { error: assignmentDeleteError } = await supabase
-        .from('assignments')
-        .delete()
-        .in('id', assignmentIds);
-      if (assignmentDeleteError) {
-        return res.status(400).json({ error: assignmentDeleteError.message });
-      }
+      );
     }
-    const { error: membershipDeleteError } = await supabase
-      .from('class_members')
-      .delete()
-      .eq('class_id', req.params.classId);
-    if (membershipDeleteError) {
-      return res.status(400).json({ error: membershipDeleteError.message });
+
+    const client =
+      await db.pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      if (assignmentIds.length) {
+        const submissionIds =
+          submissionsToArchive
+            .map(
+              (submission) =>
+                submission.id
+            )
+            .filter(Boolean);
+
+        if (submissionIds.length) {
+          await client.query(
+            `DELETE FROM public.submission_revisions
+              WHERE submission_id =
+                ANY($1::uuid[])`,
+            [submissionIds]
+          );
+        }
+
+        await client.query(
+          `DELETE FROM public.submissions
+            WHERE assignment_id =
+              ANY($1::uuid[])`,
+          [assignmentIds]
+        );
+
+        await client.query(
+          `DELETE FROM public.assignment_revisions
+            WHERE assignment_id =
+              ANY($1::uuid[])`,
+          [assignmentIds]
+        );
+
+        await client.query(
+          `DELETE FROM public.assignments
+            WHERE id =
+              ANY($1::uuid[])`,
+          [assignmentIds]
+        );
+      }
+
+      await client.query(
+        `DELETE FROM public.class_members
+          WHERE class_id = $1`,
+        [req.params.classId]
+      );
+
+      const deleteResult =
+        await client.query(
+          `DELETE FROM public.classes
+            WHERE id = $1
+              AND teacher_id = $2
+          RETURNING id`,
+          [
+            req.params.classId,
+            user.id,
+          ]
+        );
+
+      if (!deleteResult.rows[0]) {
+        throw new Error(
+          'Course not found.'
+        );
+      }
+
+      await client.query('COMMIT');
+
+    } catch (deleteError) {
+      try {
+        await client.query(
+          'ROLLBACK'
+        );
+      } catch {}
+
+      throw deleteError;
+
+    } finally {
+      client.release();
     }
-    const { error } = await supabase.from('classes').delete().eq('id', req.params.classId);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ ok: true });
+
+    return res.json({
+      ok: true,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
+
 
 app.delete('/api/classes/:classId/members/:studentId', async (req, res) => {
   try {
@@ -6299,14 +7622,10 @@ app.delete('/api/classes/:classId/members/:studentId', async (req, res) => {
       });
     }
 
-    const readClient =
-      getRequestScopedSupabase(req);
-
     const ownedClass =
       await ensureTeacherOwnsClass(
         req.params.classId,
-        user.id,
-        readClient
+        user.id
       );
 
     if (!ownedClass) {
@@ -6316,56 +7635,27 @@ app.delete('/api/classes/:classId/members/:studentId', async (req, res) => {
       });
     }
 
-    let error = null;
+    await db.query(
+      `DELETE FROM public.class_members
+        WHERE class_id = $1
+          AND student_id = $2`,
+      [
+        req.params.classId,
+        req.params.studentId,
+      ]
+    );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        await db.query(
-          `DELETE FROM public.class_members
-            WHERE class_id = $1
-              AND student_id = $2`,
-          [
-            req.params.classId,
-            req.params.studentId,
-          ]
-        );
-      } catch (deleteError) {
-        error = deleteError;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('class_members')
-              .delete()
-              .eq(
-                'class_id',
-                req.params.classId
-              )
-              .eq(
-                'student_id',
-                req.params.studentId
-              )
-        );
+    return res.json({
+      ok: true,
+    });
 
-      error = result.error;
-    }
-
-    if (error) {
-      return res.status(400).json({
-        error: error.message,
-      });
-    }
-
-    res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
+
 
 app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
   try {
@@ -6381,14 +7671,10 @@ app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
       });
     }
 
-    const readClient =
-      getRequestScopedSupabase(req);
-
     const ownedClass =
       await ensureTeacherOwnsClass(
         req.params.classId,
-        user.id,
-        readClient
+        user.id
       );
 
     if (!ownedClass) {
@@ -6401,8 +7687,7 @@ app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
     const enrolledStudent =
       await ensureStudentBelongsToClass(
         req.params.classId,
-        req.params.studentId,
-        readClient
+        req.params.studentId
       );
 
     if (!enrolledStudent) {
@@ -6413,7 +7698,9 @@ app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
     }
 
     const name =
-      String(req.body?.name || '').trim();
+      String(
+        req.body?.name || ''
+      ).trim();
 
     if (!name) {
       return res.status(400).json({
@@ -6422,49 +7709,23 @@ app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
       });
     }
 
-    let profile;
-    let error = null;
+    const { rows } =
+      await db.query(
+        `UPDATE public.profiles
+            SET name = $1
+          WHERE id = $2
+        RETURNING
+          id,
+          name,
+          role`,
+        [
+          name,
+          req.params.studentId,
+        ]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `UPDATE public.profiles
-              SET name = $1
-            WHERE id = $2
-          RETURNING id, name, role`,
-          [
-            name,
-            req.params.studentId,
-          ]
-        );
-
-        profile = rows[0] || null;
-      } catch (updateError) {
-        error = updateError;
-      }
-    } else {
-      const result = await supabase
-        .from('profiles')
-        .update({ name })
-        .eq(
-          'id',
-          req.params.studentId
-        )
-        .select('id, name, role');
-
-      error = result.error;
-
-      profile =
-        Array.isArray(result.data)
-          ? result.data[0]
-          : result.data;
-    }
-
-    if (error) {
-      return res.status(400).json({
-        error: error.message,
-      });
-    }
+    const profile =
+      rows[0] || null;
 
     if (!profile) {
       return res.status(404).json({
@@ -6473,9 +7734,12 @@ app.patch('/api/classes/:classId/members/:studentId', async (req, res) => {
       });
     }
 
-    res.json({ profile });
+    return res.json({
+      profile,
+    });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
@@ -6501,49 +7765,20 @@ app.post('/api/classes/:classId/members/:studentId/approve', async (req, res) =>
         });
     }
 
-    let error = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        await db.query(
-          `UPDATE public.class_members
-              SET status = 'approved'
-            WHERE class_id = $1
-              AND student_id = $2`,
-          [
-            req.params.classId,
-            req.params.studentId,
-          ]
-        );
-      } catch (updateError) {
-        error = updateError;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('class_members')
-              .update({
-                status: 'approved',
-              })
-              .eq(
-                'class_id',
-                req.params.classId
-              )
-              .eq(
-                'student_id',
-                req.params.studentId
-              )
-        );
-
-      error = result.error;
-    }
-
-    if (error) {
+    try {
+      await db.query(
+        `UPDATE public.class_members
+            SET status = 'approved'
+          WHERE class_id = $1
+            AND student_id = $2`,
+        [
+          req.params.classId,
+          req.params.studentId,
+        ]
+      );
+    } catch (updateError) {
       return res.status(400).json({
-        error: error.message,
+        error: updateError.message,
       });
     }
 
@@ -6556,6 +7791,7 @@ app.post('/api/classes/:classId/members/:studentId/approve', async (req, res) =>
 });
 
 // Get classes for a student
+
 app.get('/api/student/classes', async (req, res) => {
   try {
     const user = await getUser(req);
@@ -6566,55 +7802,28 @@ app.get('/api/student/classes', async (req, res) => {
       });
     }
 
-    let memberships = [];
-    let membershipError = null;
+    const membershipResult =
+      await db.query(
+        `SELECT class_id, status
+           FROM public.class_members
+          WHERE student_id = $1`,
+        [user.id]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT class_id, status
-             FROM public.class_members
-            WHERE student_id = $1`,
-          [user.id]
-        );
+    const memberships =
+      membershipResult.rows || [];
 
-        memberships = rows;
-      } catch (error) {
-        membershipError = error;
-      }
-    } else {
-      const readClient =
-        getRequestScopedSupabase(req);
-
-      const result = await readClient
-        .from('class_members')
-        .select('class_id, status')
-        .eq('student_id', user.id);
-
-      memberships =
-        result.data || [];
-
-      membershipError =
-        result.error;
-    }
-
-    if (membershipError) {
-      return res.status(400).json({
-        error:
-          membershipError.message,
-      });
-    }
-
-    const classIds = Array.from(
-      new Set(
-        (memberships || [])
-          .map(
-            (entry) =>
-              entry.class_id
-          )
-          .filter(Boolean)
-      )
-    );
+    const classIds =
+      Array.from(
+        new Set(
+          memberships
+            .map(
+              (entry) =>
+                entry.class_id
+            )
+            .filter(Boolean)
+        )
+      );
 
     if (!classIds.length) {
       return res.json({
@@ -6623,174 +7832,140 @@ app.get('/api/student/classes', async (req, res) => {
       });
     }
 
-    let classRows = [];
-    let classError = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT
-             c.id,
-             c.name,
-             c.teacher_id,
-             c.invite_code,
-             c.description,
-             c.semester,
-             c.is_published,
-             c.archived,
-             CASE
-               WHEN p.id IS NULL THEN NULL
-               ELSE jsonb_build_object(
-                 'name', p.name
-               )
-             END AS profiles
-           FROM public.classes c
-           LEFT JOIN public.profiles p
-             ON p.id = c.teacher_id
-           WHERE c.id = ANY($1::uuid[])`,
-          [classIds]
-        );
-
-        classRows = rows;
-      } catch (error) {
-        classError = error;
-      }
-    } else {
-      const result = await supabase
-        .from('classes')
-        .select(
-          'id, name, teacher_id, invite_code, description, semester, is_published, archived, profiles(name)'
-        )
-        .in('id', classIds);
-
-      classRows =
-        result.data || [];
-
-      classError =
-        result.error;
-    }
-
-    if (classError) {
-      return res.status(400).json({
-        error: classError.message,
-      });
-    }
-
-    const classesById = new Map(
-      (classRows || []).map(
-        (classRow) => [
-          String(classRow.id),
-          classRow,
-        ]
-      )
-    );
-
-    const rows = (memberships || [])
-      .map((membership) => ({
-        ...membership,
-        classes:
-          classesById.get(
-            String(
-              membership.class_id
-            )
-          ) || null,
-      }))
-      .filter(
-        (entry) =>
-          entry.classes
+    const classResult =
+      await db.query(
+        `SELECT
+           c.id,
+           c.name,
+           c.teacher_id,
+           c.invite_code,
+           c.description,
+           c.semester,
+           c.is_published,
+           c.archived,
+           CASE
+             WHEN p.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', p.name
+             )
+           END AS profiles
+         FROM public.classes c
+         LEFT JOIN public.profiles p
+           ON p.id = c.teacher_id
+         WHERE c.id = ANY($1::uuid[])`,
+        [classIds]
       );
 
-    res.json({
-      classes: rows
+    const classRows =
+      classResult.rows || [];
+
+    const classesById =
+      new Map(
+        classRows.map(
+          (classRow) => [
+            String(classRow.id),
+            classRow,
+          ]
+        )
+      );
+
+    const rows =
+      memberships
+        .map(
+          (membership) => ({
+            ...membership,
+            classes:
+              classesById.get(
+                String(
+                  membership.class_id
+                )
+              ) || null,
+          })
+        )
         .filter(
           (entry) =>
-            entry.status !== 'pending'
-        )
-        .map(
-          (entry) =>
             entry.classes
-        ),
-      pendingClasses: rows
-        .filter(
-          (entry) =>
-            entry.status === 'pending'
-        )
-        .map(
-          (entry) =>
-            entry.classes
-        ),
+        );
+
+    return res.json({
+      classes:
+        rows
+          .filter(
+            (entry) =>
+              entry.status !== 'pending'
+          )
+          .map(
+            (entry) =>
+              entry.classes
+          ),
+
+      pendingClasses:
+        rows
+          .filter(
+            (entry) =>
+              entry.status === 'pending'
+          )
+          .map(
+            (entry) =>
+              entry.classes
+          ),
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
 
 // Join class via invite token
+
 app.get('/api/classes/:classId/invite', async (req, res) => {
   try {
-    let data;
-    let error = null;
+    const { rows } =
+      await db.query(
+        `SELECT
+           c.name,
+           CASE
+             WHEN p.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', p.name
+             )
+           END AS profiles
+         FROM public.classes c
+         LEFT JOIN public.profiles p
+           ON p.id = c.teacher_id
+         WHERE c.id = $1
+         LIMIT 1`,
+        [req.params.classId]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT
-             c.name,
-             CASE
-               WHEN p.id IS NULL THEN NULL
-               ELSE jsonb_build_object(
-                 'name', p.name
-               )
-             END AS profiles
-           FROM public.classes c
-           LEFT JOIN public.profiles p
-             ON p.id = c.teacher_id
-           WHERE c.id = $1
-           LIMIT 1`,
-          [req.params.classId]
-        );
+    const data =
+      rows[0] || null;
 
-        data = rows[0] || null;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const result = await supabase
-        .from('classes')
-        .select(
-          'name, profiles(name)'
-        )
-        .eq(
-          'id',
-          req.params.classId
-        )
-        .single();
-
-      data = result.data;
-      error = result.error;
-    }
-
-    if (error || !data) {
+    if (!data) {
       return res.status(404).json({
         error: 'Class not found',
       });
     }
 
-    res.json({
-      className: data.name,
+    return res.json({
+      className:
+        data.name,
+
       teacherName:
         data.profiles?.name || '',
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
 
 // Auto-join class after signup
+
 app.post('/api/classes/:classId/join', async (req, res) => {
   try {
     const user = await getUser(req);
@@ -6811,72 +7986,46 @@ app.post('/api/classes/:classId/join', async (req, res) => {
       });
     }
 
-    let error = null;
+    try {
+      await db.query(
+        `INSERT INTO public.class_members
+          (
+            class_id,
+            student_id,
+            status
+          )
+         VALUES ($1, $2, 'pending')`,
+        [
+          req.params.classId,
+          user.id,
+        ]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        await db.query(
-          `INSERT INTO public.class_members
-            (
-              class_id,
-              student_id,
-              status
-            )
-           VALUES ($1, $2, 'pending')`,
-          [
-            req.params.classId,
-            user.id,
-          ]
-        );
-      } catch (insertError) {
-        error = insertError;
+    } catch (insertError) {
+      if (insertError?.code === '23505') {
+        return res.json({
+          ok: true,
+          alreadyJoined: true,
+        });
       }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('class_members')
-              .insert({
-                class_id:
-                  req.params.classId,
-                student_id:
-                  user.id,
-                status: 'pending',
-              })
-              .select(
-                'class_id, student_id'
-              )
-              .single()
-        );
 
-      error = result.error;
-    }
-
-    if (error?.code === '23505') {
-      return res.json({
-        ok: true,
-        alreadyJoined: true,
-      });
-    }
-
-    if (error) {
       return res.status(400).json({
-        error: error.message,
+        error: insertError.message,
       });
     }
 
-    res.json({
+    return res.json({
       ok: true,
       pending: true,
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
+
 
 app.get('/api/classes/:classId/members', async (req, res) => {
   try {
@@ -6892,14 +8041,10 @@ app.get('/api/classes/:classId/members', async (req, res) => {
       });
     }
 
-    const readClient =
-      getRequestScopedSupabase(req);
-
     const ownedClass =
       await ensureTeacherOwnsClass(
         req.params.classId,
-        user.id,
-        readClient
+        user.id
       );
 
     if (!ownedClass) {
@@ -6909,75 +8054,47 @@ app.get('/api/classes/:classId/members', async (req, res) => {
       });
     }
 
-    let data = [];
-    let error = null;
+    const { rows } =
+      await db.query(
+        `SELECT
+           cm.student_id,
+           cm.status,
+           CASE
+             WHEN p.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'id', p.id,
+               'name', p.name,
+               'email', p.email
+             )
+           END AS profiles
+         FROM public.class_members cm
+         LEFT JOIN public.profiles p
+           ON p.id = cm.student_id
+         WHERE cm.class_id = $1`,
+        [req.params.classId]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT
-             cm.student_id,
-             cm.status,
-             CASE
-               WHEN p.id IS NULL THEN NULL
-               ELSE jsonb_build_object(
-                 'id', p.id,
-                 'name', p.name,
-                 'email', p.email
-               )
-             END AS profiles
-           FROM public.class_members cm
-           LEFT JOIN public.profiles p
-             ON p.id = cm.student_id
-           WHERE cm.class_id = $1`,
-          [req.params.classId]
-        );
-
-        data = rows;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const result = await supabase
-        .from('class_members')
-        .select(
-          'student_id, status, profiles(id, name, email)'
-        )
-        .eq(
-          'class_id',
-          req.params.classId
-        );
-
-      data =
-        result.data || [];
-
-      error =
-        result.error;
-    }
-
-    if (error) {
-      return res.status(400).json({
-        error: error.message,
-      });
-    }
-
-    res.json({
-      members: (data || [])
-        .filter(
-          (entry) =>
-            entry.student_id !==
-              user.id &&
-            entry.profiles
-        )
-        .map((entry) => ({
-          ...entry.profiles,
-          status:
-            entry.status ||
-            'approved',
-        })),
+    return res.json({
+      members:
+        (rows || [])
+          .filter(
+            (entry) =>
+              entry.student_id !==
+                user.id &&
+              entry.profiles
+          )
+          .map(
+            (entry) => ({
+              ...entry.profiles,
+              status:
+                entry.status ||
+                'approved',
+            })
+          ),
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
@@ -7011,47 +8128,30 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
         ? 'individual'
         : 'all';
 
+
     let classRow;
-    let classError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT
-             id,
-             name,
-             teacher_id,
-             is_published,
-             archived
-           FROM public.classes
-           WHERE id = $1
-             AND teacher_id = $2
-           LIMIT 1`,
-          [
-            req.params.classId,
-            user.id,
-          ]
-        );
+    try {
+      const { rows } = await db.query(
+        `SELECT
+           id,
+           name,
+           teacher_id,
+           is_published,
+           archived
+         FROM public.classes
+         WHERE id = $1
+           AND teacher_id = $2
+         LIMIT 1`,
+        [
+          req.params.classId,
+          user.id,
+        ]
+      );
 
-        classRow = rows[0] || null;
-      } catch (error) {
-        classError = error;
-      }
-    } else {
-      const result = await supabase
-        .from('classes')
-        .select(
-          'id, name, teacher_id, is_published, archived'
-        )
-        .eq('id', req.params.classId)
-        .eq('teacher_id', user.id)
-        .maybeSingle();
+      classRow = rows[0] || null;
 
-      classRow = result.data;
-      classError = result.error;
-    }
-
-    if (classError) {
+    } catch (classError) {
       return res.status(400).json({
         error: classError.message,
       });
@@ -7079,44 +8179,25 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       .replace(/[^A-Za-z0-9_-]/g, '')
       .slice(0, 120);
 
+
     let existingMessage;
-    let existingMessageError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT *
-             FROM public.course_messages
-            WHERE teacher_id = $1
-              AND provider_request_id = $2
-            LIMIT 1`,
-          [
-            user.id,
-            requestId,
-          ]
-        );
+    try {
+      const { rows } = await db.query(
+        `SELECT *
+         FROM public.course_messages
+         WHERE teacher_id = $1
+           AND provider_request_id = $2
+         LIMIT 1`,
+        [
+          user.id,
+          requestId,
+        ]
+      );
 
-        existingMessage =
-          rows[0] || null;
-      } catch (error) {
-        existingMessageError = error;
-      }
-    } else {
-      const result = await supabase
-        .from('course_messages')
-        .select('*')
-        .eq('teacher_id', user.id)
-        .eq(
-          'provider_request_id',
-          requestId
-        )
-        .maybeSingle();
+      existingMessage = rows[0] || null;
 
-      existingMessage = result.data;
-      existingMessageError = result.error;
-    }
-
-    if (existingMessageError) {
+    } catch (existingMessageError) {
       throw existingMessageError;
     }
 
@@ -7176,76 +8257,46 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
       });
     }
 
+
     let memberships = [];
-    let membershipError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const values = [
-          classRow.id,
-        ];
+    try {
+      const values = [
+        classRow.id,
+      ];
 
-        let studentSql = '';
-
-        if (recipientMode === 'individual') {
-          values.push(studentId);
-          studentSql =
-            ' AND cm.student_id = $2';
-        }
-
-        const { rows } = await db.query(
-          `SELECT
-             cm.student_id,
-             cm.status,
-             CASE
-               WHEN p.id IS NULL THEN NULL
-               ELSE jsonb_build_object(
-                 'id', p.id,
-                 'name', p.name,
-                 'email', p.email
-               )
-             END AS profiles
-           FROM public.class_members cm
-           LEFT JOIN public.profiles p
-             ON p.id = cm.student_id
-           WHERE cm.class_id = $1
-             AND cm.status = 'approved'
-             ${studentSql}`,
-          values
-        );
-
-        memberships = rows;
-      } catch (error) {
-        membershipError = error;
-      }
-    } else {
-      let membershipQuery = supabase
-        .from('class_members')
-        .select(
-          'student_id, status, profiles(id, name, email)'
-        )
-        .eq('class_id', classRow.id)
-        .eq('status', 'approved');
+      let studentSql = '';
 
       if (recipientMode === 'individual') {
-        membershipQuery =
-          membershipQuery.eq(
-            'student_id',
-            studentId
-          );
+        values.push(studentId);
+        studentSql =
+          ' AND cm.student_id = $2';
       }
 
-      const result =
-        await membershipQuery;
+      const { rows } = await db.query(
+        `SELECT
+           cm.student_id,
+           cm.status,
+           CASE
+             WHEN p.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'id', p.id,
+               'name', p.name,
+               'email', p.email
+             )
+           END AS profiles
+         FROM public.class_members cm
+         LEFT JOIN public.profiles p
+           ON p.id = cm.student_id
+         WHERE cm.class_id = $1
+           AND cm.status = 'approved'
+           ${studentSql}`,
+        values
+      );
 
-      memberships =
-        result.data || [];
+      memberships = rows;
 
-      membershipError =
-        result.error;
-    }
-
-    if (membershipError) {
+    } catch (membershipError) {
       return res.status(400).json({
         error: membershipError.message,
       });
@@ -7317,135 +8368,79 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
           recipient.email
       );
 
-    let storedMessage;
-    let messageStoreError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `INSERT INTO public.course_messages
-            (
-              teacher_id,
-              class_id,
-              recipient_mode,
-              recipient_student_id,
-              recipient_emails,
-              subject,
-              body,
-              status,
-              delivered_count,
-              failed_count,
-              provider_request_id,
-              updated_at
-            )
-           VALUES
-            (
-              $1,
-              $2,
-              $3,
-              $4,
-              $5::jsonb,
-              $6,
-              $7,
-              'queued',
-              0,
-              0,
-              $8,
-              NOW()
-            )
-           ON CONFLICT
-             (teacher_id, provider_request_id)
-           DO NOTHING
-           RETURNING *`,
+    let storedMessage;
+
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO public.course_messages
+        (
+          teacher_id,
+          class_id,
+          recipient_mode,
+          recipient_student_id,
+          recipient_emails,
+          subject,
+          body,
+          status,
+          delivered_count,
+          failed_count,
+          provider_request_id,
+          updated_at
+        )
+        VALUES
+        (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5::jsonb,
+          $6,
+          $7,
+          'queued',
+          0,
+          0,
+          $8,
+          NOW()
+        )
+        ON CONFLICT
+          (teacher_id, provider_request_id)
+        DO NOTHING
+        RETURNING *`,
+        [
+          user.id,
+          classRow.id,
+          recipientMode,
+          recipientMode === 'individual'
+            ? recipients[0].id
+            : null,
+          JSON.stringify(recipientEmails),
+          subject,
+          body,
+          requestId,
+        ]
+      );
+
+      storedMessage = rows[0] || null;
+
+      if (!storedMessage) {
+        const replay = await db.query(
+          `SELECT *
+           FROM public.course_messages
+           WHERE teacher_id = $1
+             AND provider_request_id = $2
+           LIMIT 1`,
           [
             user.id,
-            classRow.id,
-            recipientMode,
-            recipientMode ===
-            'individual'
-              ? recipients[0].id
-              : null,
-            JSON.stringify(
-              recipientEmails
-            ),
-            subject,
-            body,
             requestId,
           ]
         );
 
         storedMessage =
-          rows[0] || null;
-
-        if (!storedMessage) {
-          const replay =
-            await db.query(
-              `SELECT *
-                 FROM public.course_messages
-                WHERE teacher_id = $1
-                  AND provider_request_id = $2
-                LIMIT 1`,
-              [
-                user.id,
-                requestId,
-              ]
-            );
-
-          storedMessage =
-            replay.rows[0] || null;
-        }
-      } catch (error) {
-        messageStoreError = error;
+          replay.rows[0] || null;
       }
-    } else {
-      const messageRecord = {
-        teacher_id: user.id,
-        class_id: classRow.id,
-        recipient_mode:
-          recipientMode,
-        recipient_student_id:
-          recipientMode ===
-          'individual'
-            ? recipients[0].id
-            : null,
-        recipient_emails:
-          recipientEmails,
-        subject,
-        body,
-        status: 'queued',
-        delivered_count: 0,
-        failed_count: 0,
-        provider_request_id:
-          requestId,
-        updated_at:
-          new Date().toISOString(),
-      };
 
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('course_messages')
-              .upsert(
-                messageRecord,
-                {
-                  onConflict:
-                    'teacher_id,provider_request_id',
-                }
-              )
-              .select()
-              .single()
-        );
-
-      storedMessage =
-        result.data;
-
-      messageStoreError =
-        result.error;
-    }
-
-    if (messageStoreError) {
+    } catch (messageStoreError) {
       throw messageStoreError;
     }
 
@@ -7516,6 +8511,7 @@ app.post('/api/classes/:classId/messages', async (req, res) => {
   }
 });
 
+
 app.get('/api/course-messages', async (req, res) => {
   try {
     const {
@@ -7530,66 +8526,36 @@ app.get('/api/course-messages', async (req, res) => {
         .json({ error });
     }
 
-    let data = [];
-    let readError = null;
+    const { rows } =
+      await db.query(
+        `SELECT
+           m.*,
+           CASE
+             WHEN c.id IS NULL THEN NULL
+             ELSE jsonb_build_object(
+               'name', c.name,
+               'invite_code', c.invite_code
+             )
+           END AS classes
+         FROM public.course_messages m
+         LEFT JOIN public.classes c
+           ON c.id = m.class_id
+         WHERE m.teacher_id = $1
+         ORDER BY m.created_at DESC`,
+        [user.id]
+      );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT
-             m.*,
-             CASE
-               WHEN c.id IS NULL THEN NULL
-               ELSE jsonb_build_object(
-                 'name', c.name,
-                 'invite_code', c.invite_code
-               )
-             END AS classes
-           FROM public.course_messages m
-           LEFT JOIN public.classes c
-             ON c.id = m.class_id
-           WHERE m.teacher_id = $1
-           ORDER BY m.created_at DESC`,
-          [user.id]
-        );
-
-        data = rows;
-      } catch (error) {
-        readError = error;
-      }
-    } else {
-      const client =
-        getRequestScopedSupabase(req);
-
-      const result = await client
-        .from('course_messages')
-        .select(
-          '*, classes(name, invite_code)'
-        )
-        .eq('teacher_id', user.id)
-        .order('created_at', {
-          ascending: false,
-        });
-
-      data = result.data;
-      readError = result.error;
-    }
-
-    if (readError) {
-      return res.status(400).json({
-        error: readError.message,
-      });
-    }
-
-    res.json({
-      messages: data || [],
+    return res.json({
+      messages: rows || [],
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
+
 
 app.post('/api/course-messages/drafts', async (req, res) => {
   try {
@@ -7613,8 +8579,7 @@ app.post('/api/course-messages/drafts', async (req, res) => {
     const ownedClass =
       await ensureTeacherOwnsClass(
         classId,
-        user.id,
-        getRequestScopedSupabase(req)
+        user.id
       );
 
     if (!ownedClass) {
@@ -7655,141 +8620,82 @@ app.post('/api/course-messages/drafts', async (req, res) => {
       ).trim();
 
     let data;
-    let writeError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        if (draftId) {
-          const { rows } =
-            await db.query(
-              `UPDATE public.course_messages
-                  SET class_id = $3,
-                      recipient_mode = $4,
-                      recipient_student_id = $5,
-                      recipient_emails = $6::jsonb,
-                      subject = $7,
-                      body = $8,
-                      updated_at = NOW()
-                WHERE id = $1
-                  AND teacher_id = $2
-                  AND status = 'draft'
-              RETURNING *`,
-              [
-                draftId,
-                user.id,
-                classId,
-                recipientMode,
-                recipientStudentId,
-                JSON.stringify(
-                  recipientEmails
-                ),
-                subject,
-                body,
-              ]
-            );
+    if (draftId) {
+      const { rows } =
+        await db.query(
+          `UPDATE public.course_messages
+              SET class_id = $3,
+                  recipient_mode = $4,
+                  recipient_student_id = $5,
+                  recipient_emails = $6::jsonb,
+                  subject = $7,
+                  body = $8,
+                  updated_at = NOW()
+            WHERE id = $1
+              AND teacher_id = $2
+              AND status = 'draft'
+          RETURNING *`,
+          [
+            draftId,
+            user.id,
+            classId,
+            recipientMode,
+            recipientStudentId,
+            JSON.stringify(
+              recipientEmails
+            ),
+            subject,
+            body,
+          ]
+        );
 
-          data =
-            rows[0] || null;
-        } else {
-          const { rows } =
-            await db.query(
-              `INSERT INTO public.course_messages
-                (
-                  teacher_id,
-                  class_id,
-                  recipient_mode,
-                  recipient_student_id,
-                  recipient_emails,
-                  subject,
-                  body,
-                  status,
-                  updated_at
-                )
-               VALUES
-                (
-                  $1,
-                  $2,
-                  $3,
-                  $4,
-                  $5::jsonb,
-                  $6,
-                  $7,
-                  'draft',
-                  NOW()
-                )
-               RETURNING *`,
-              [
-                user.id,
-                classId,
-                recipientMode,
-                recipientStudentId,
-                JSON.stringify(
-                  recipientEmails
-                ),
-                subject,
-                body,
-              ]
-            );
+      data =
+        rows[0] || null;
 
-          data = rows[0];
-        }
-      } catch (error) {
-        writeError = error;
-      }
     } else {
-      const payload = {
-        teacher_id: user.id,
-        class_id: classId,
-        recipient_mode:
-          recipientMode,
-        recipient_student_id:
-          recipientStudentId,
-        recipient_emails:
-          recipientEmails,
-        subject,
-        body,
-        status: 'draft',
-        updated_at:
-          new Date().toISOString(),
-      };
-
-      const result = draftId
-        ? await writeWithRequestScopedFallback(
-            req,
-            (client) =>
-              client
-                .from('course_messages')
-                .update(payload)
-                .eq('id', draftId)
-                .eq(
-                  'teacher_id',
-                  user.id
-                )
-                .eq(
-                  'status',
-                  'draft'
-                )
-                .select()
-                .single()
+      const { rows } =
+        await db.query(
+          `INSERT INTO public.course_messages
+          (
+            teacher_id,
+            class_id,
+            recipient_mode,
+            recipient_student_id,
+            recipient_emails,
+            subject,
+            body,
+            status,
+            updated_at
           )
-        : await writeWithRequestScopedFallback(
-            req,
-            (client) =>
-              client
-                .from('course_messages')
-                .insert(payload)
-                .select()
-                .single()
-          );
+          VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5::jsonb,
+            $6,
+            $7,
+            'draft',
+            NOW()
+          )
+          RETURNING *`,
+          [
+            user.id,
+            classId,
+            recipientMode,
+            recipientStudentId,
+            JSON.stringify(
+              recipientEmails
+            ),
+            subject,
+            body,
+          ]
+        );
 
-      data = result.data;
-      writeError = result.error;
-    }
-
-    if (writeError) {
-      return res.status(400).json({
-        error: writeError.message,
-      });
+      data =
+        rows[0] || null;
     }
 
     if (!data) {
@@ -7799,15 +8705,17 @@ app.post('/api/course-messages/drafts', async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       message: data,
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
+
 
 app.delete('/api/course-messages/:id', async (req, res) => {
   try {
@@ -7823,49 +8731,22 @@ app.delete('/api/course-messages/:id', async (req, res) => {
         .json({ error });
     }
 
-    let deleteError = null;
+    await db.query(
+      `DELETE FROM public.course_messages
+        WHERE id = $1
+          AND teacher_id = $2`,
+      [
+        req.params.id,
+        user.id,
+      ]
+    );
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        await db.query(
-          `DELETE FROM public.course_messages
-            WHERE id = $1
-              AND teacher_id = $2`,
-          [
-            req.params.id,
-            user.id,
-          ]
-        );
-      } catch (error) {
-        deleteError = error;
-      }
-    } else {
-      const result =
-        await writeWithRequestScopedFallback(
-          req,
-          (client) =>
-            client
-              .from('course_messages')
-              .delete()
-              .eq('id', req.params.id)
-              .eq(
-                'teacher_id',
-                user.id
-              )
-        );
+    return res.json({
+      ok: true,
+    });
 
-      deleteError = result.error;
-    }
-
-    if (deleteError) {
-      return res.status(400).json({
-        error: deleteError.message,
-      });
-    }
-
-    res.json({ ok: true });
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
@@ -7894,68 +8775,82 @@ const ASSIGNMENT_ALLOWED_FIELDS = new Set([
   'class_id',
 ]);
 
-async function saveAssignmentRevision(assignment, userId, changeType) {
+
+async function saveAssignmentRevision(
+  assignment,
+  userId,
+  changeType
+) {
   if (!assignment?.id) return;
-  const revisionNumber = Number(assignment.version || 1);
 
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `INSERT INTO public.assignment_revisions
-        (assignment_id, revision_number, snapshot, change_type, created_by)
-       VALUES ($1, $2, $3::jsonb, $4, $5)
-       ON CONFLICT (assignment_id, revision_number) DO NOTHING`,
-      [
-        assignment.id,
-        revisionNumber,
-        JSON.stringify(assignment),
-        changeType || 'autosave',
-        userId || null,
-      ]
+  const revisionNumber =
+    Number(
+      assignment.version || 1
     );
-    return;
-  }
 
-  const { error } = await supabase.from('assignment_revisions').upsert({
-    assignment_id: assignment.id,
-    revision_number: revisionNumber,
-    snapshot: assignment,
-    change_type: changeType,
-    created_by: userId || null,
-  }, { onConflict: 'assignment_id,revision_number', ignoreDuplicates: true });
-
-  if (error) throw error;
+  await db.query(
+    `INSERT INTO public.assignment_revisions
+      (
+        assignment_id,
+        revision_number,
+        snapshot,
+        change_type,
+        created_by
+      )
+     VALUES
+      ($1, $2, $3::jsonb, $4, $5)
+     ON CONFLICT
+      (assignment_id, revision_number)
+     DO NOTHING`,
+    [
+      assignment.id,
+      revisionNumber,
+      JSON.stringify(
+        assignment
+      ),
+      changeType || 'autosave',
+      userId || null,
+    ]
+  );
 }
 
-async function saveSubmissionRevision(submission, userId, changeType) {
+
+async function saveSubmissionRevision(
+  submission,
+  userId,
+  changeType
+) {
   if (!submission?.id) return;
-  const revisionNumber = Number(submission.version || 1);
 
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `INSERT INTO public.submission_revisions
-        (submission_id, revision_number, snapshot, change_type, created_by)
-       VALUES ($1, $2, $3::jsonb, $4, $5)
-       ON CONFLICT (submission_id, revision_number) DO NOTHING`,
-      [
-        submission.id,
-        revisionNumber,
-        JSON.stringify(submission),
-        changeType || 'autosave',
-        userId || null,
-      ]
+  const revisionNumber =
+    Number(
+      submission.version || 1
     );
-    return;
-  }
 
-  const { error } = await supabase.from('submission_revisions').upsert({
-    submission_id: submission.id,
-    revision_number: revisionNumber,
-    snapshot: submission,
-    change_type: changeType,
-    created_by: userId || null,
-  }, { onConflict: 'submission_id,revision_number', ignoreDuplicates: true });
-
-  if (error) throw error;
+  await db.query(
+    `INSERT INTO public.submission_revisions
+      (
+        submission_id,
+        revision_number,
+        snapshot,
+        change_type,
+        created_by
+      )
+     VALUES
+      ($1, $2, $3::jsonb, $4, $5)
+     ON CONFLICT
+      (submission_id, revision_number)
+     DO NOTHING`,
+    [
+      submission.id,
+      revisionNumber,
+      JSON.stringify(
+        submission
+      ),
+      changeType || 'autosave',
+      userId || null,
+    ]
+  );
 }
 
 async function enqueueDomainEvent({
@@ -7965,68 +8860,62 @@ async function enqueueDomainEvent({
   idempotencyKey,
   payload,
 }) {
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `INSERT INTO public.notification_outbox
-        (event_type, aggregate_type, aggregate_id, idempotency_key, payload)
-       VALUES ($1, $2, $3, $4, $5::jsonb)
-       ON CONFLICT (idempotency_key) DO NOTHING`,
-      [
-        eventType,
-        aggregateType,
-        aggregateId,
-        idempotencyKey,
-        JSON.stringify(payload || {}),
-      ]
-    );
-    return;
-  }
-
-  const { error } = await supabase.from('notification_outbox').upsert({
-    event_type: eventType,
-    aggregate_type: aggregateType,
-    aggregate_id: aggregateId,
-    idempotency_key: idempotencyKey,
-    payload: payload || {},
-  }, { onConflict: 'idempotency_key', ignoreDuplicates: true });
-
-  if (error) throw error;
+  await db.query(
+    `INSERT INTO public.notification_outbox
+      (
+        event_type,
+        aggregate_type,
+        aggregate_id,
+        idempotency_key,
+        payload
+      )
+     VALUES ($1, $2, $3, $4, $5::jsonb)
+     ON CONFLICT (idempotency_key)
+     DO NOTHING`,
+    [
+      eventType,
+      aggregateType,
+      aggregateId,
+      idempotencyKey,
+      JSON.stringify(payload || {}),
+    ]
+  );
 }
 
 function getIdempotencyKey(req) {
   return String(req.get('Idempotency-Key') || '').trim().slice(0, 200);
 }
 
-async function getIdempotentResponse(userId, operation, idempotencyKey) {
-  if (!idempotencyKey) return null;
 
-  if (USE_POSTGRES_APP_DB) {
-    const { rows } = await db.query(
-      `SELECT response_status, response_body
-         FROM public.api_idempotency_keys
-        WHERE user_id = $1
-          AND operation = $2
-          AND idempotency_key = $3
-          AND expires_at > NOW()
-        LIMIT 1`,
-      [userId, operation, idempotencyKey]
-    );
-
-    return rows[0] || null;
+async function getIdempotentResponse(
+  userId,
+  operation,
+  idempotencyKey
+) {
+  if (!idempotencyKey) {
+    return null;
   }
 
-  const { data, error } = await supabase
-    .from('api_idempotency_keys')
-    .select('response_status, response_body')
-    .eq('user_id', userId)
-    .eq('operation', operation)
-    .eq('idempotency_key', idempotencyKey)
-    .gt('expires_at', new Date().toISOString())
-    .maybeSingle();
+  const { rows } = await db.query(
+    `SELECT
+       response_status,
+       response_body
+     FROM public.api_idempotency_keys
+     WHERE user_id = $1
+       AND operation = $2
+       AND idempotency_key = $3
+       AND expires_at > NOW()
+     LIMIT 1`,
+    [
+      userId,
+      operation,
+      idempotencyKey,
+    ]
+  );
 
-  if (error) throw error;
-  return data || null;
+  return rows[0] || null;
 }
+
 
 async function saveIdempotentResponse({
   userId,
@@ -8037,51 +8926,44 @@ async function saveIdempotentResponse({
   responseStatus,
   responseBody,
 }) {
-  if (!idempotencyKey) return;
-
-  if (USE_POSTGRES_APP_DB) {
-    await db.query(
-      `INSERT INTO public.api_idempotency_keys
-        (
-          user_id,
-          operation,
-          idempotency_key,
-          resource_type,
-          resource_id,
-          response_status,
-          response_body
-        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
-       ON CONFLICT (user_id, operation, idempotency_key)
-       DO UPDATE SET
-         resource_type = EXCLUDED.resource_type,
-         resource_id = EXCLUDED.resource_id,
-         response_status = EXCLUDED.response_status,
-         response_body = EXCLUDED.response_body`,
-      [
-        userId,
-        operation,
-        idempotencyKey,
-        resourceType || null,
-        resourceId || null,
-        responseStatus || null,
-        JSON.stringify(responseBody ?? null),
-      ]
-    );
+  if (!idempotencyKey) {
     return;
   }
 
-  const { error } = await supabase.from('api_idempotency_keys').upsert({
-    user_id: userId,
-    operation,
-    idempotency_key: idempotencyKey,
-    resource_type: resourceType,
-    resource_id: resourceId,
-    response_status: responseStatus,
-    response_body: responseBody,
-  }, { onConflict: 'user_id,operation,idempotency_key' });
-
-  if (error) throw error;
+  await db.query(
+    `INSERT INTO public.api_idempotency_keys
+      (
+        user_id,
+        operation,
+        idempotency_key,
+        resource_type,
+        resource_id,
+        response_status,
+        response_body
+      )
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+     ON CONFLICT (
+       user_id,
+       operation,
+       idempotency_key
+     )
+     DO UPDATE SET
+       resource_type = EXCLUDED.resource_type,
+       resource_id = EXCLUDED.resource_id,
+       response_status = EXCLUDED.response_status,
+       response_body = EXCLUDED.response_body`,
+    [
+      userId,
+      operation,
+      idempotencyKey,
+      resourceType || null,
+      resourceId || null,
+      responseStatus || null,
+      JSON.stringify(
+        responseBody ?? null
+      ),
+    ]
+  );
 }
 
 function sanitizePayload(payload = {}, allowedFields = new Set()) {
@@ -8126,264 +9008,387 @@ function buildPostgresAssignmentWrite(payload = {}) {
     );
 }
 
-async function assignmentWriteWithFallback(req, writeFn) {
-  return writeWithRequestScopedFallback(req, writeFn);
-}
+async function queryAssignmentsForClass(
+  _req,
+  classId,
+  accessRole
+) {
+  const values = [
+    classId,
+  ];
 
-async function submissionWriteWithFallback(req, writeFn) {
-  return writeWithRequestScopedFallback(req, writeFn);
-}
+  let statusSql = '';
 
-async function writeWithRequestScopedFallback(req, writeFn) {
-  const requestScopedSupabase = getRequestScopedSupabase(req);
-  const candidates = [];
-  if (requestScopedSupabase && requestScopedSupabase !== supabase) {
-    candidates.push({ client: requestScopedSupabase, label: 'authenticated session' });
-  }
-  candidates.push({ client: supabase, label: 'server key' });
-
-  let lastResult = { data: null, error: null, label: '' };
-  for (const candidate of candidates) {
-    const { data, error } = await writeFn(candidate.client);
-    lastResult = { data, error, label: candidate.label };
-    if (!error) return lastResult;
-    if (!/row-level security policy/i.test(error.message || '')) break;
-  }
-  return lastResult;
-}
-
-async function queryAssignmentsForClass(req, classId, accessRole) {
-  if (USE_POSTGRES_APP_DB) {
-    const values = [classId];
-    let statusSql = '';
-
-    if (accessRole === 'student') {
-      values.push('published');
-      statusSql = ' AND status = $2';
-    }
-
-    const { rows } = await db.query(
-      `SELECT *
-         FROM public.assignments
-        WHERE class_id = $1
-          AND deleted_at IS NULL
-          ${statusSql}
-        ORDER BY created_at DESC`,
-      values
+  if (accessRole === 'student') {
+    values.push(
+      'published'
     );
 
-    return { data: rows, error: null };
+    statusSql =
+      ' AND status = $2';
   }
 
-  const requestScopedSupabase = getRequestScopedSupabase(req);
-  const candidates = [];
+  try {
+    const { rows } =
+      await db.query(
+        `SELECT *
+           FROM public.assignments
+          WHERE class_id = $1
+            AND deleted_at IS NULL
+            ${statusSql}
+          ORDER BY created_at DESC`,
+        values
+      );
 
-  if (requestScopedSupabase && requestScopedSupabase !== supabase) {
-    candidates.push(requestScopedSupabase);
+    return {
+      data: rows,
+      error: null,
+    };
+
+  } catch (error) {
+    return {
+      data: [],
+      error,
+    };
   }
-
-  candidates.push(supabase);
-
-  let lastError = null;
-
-  for (let index = 0; index < candidates.length; index += 1) {
-    const client = candidates[index];
-
-    let query = client
-      .from('assignments')
-      .select('*')
-      .eq('class_id', classId)
-      .is('deleted_at', null)
-      .order('created_at', { ascending: false });
-
-    if (accessRole === 'student') {
-      query = query.eq('status', 'published');
-    }
-
-    const { data, error } = await query;
-
-    if (error) {
-      lastError = error;
-      continue;
-    }
-
-    if (Array.isArray(data) && data.length > 0) {
-      return { data, error: null };
-    }
-
-    const isLastCandidate = index === candidates.length - 1;
-
-    if (accessRole !== 'teacher' || isLastCandidate) {
-      return { data: data || [], error: null };
-    }
-  }
-
-  return { data: [], error: lastError };
 }
 
 // Get assignments for a class
+
 app.get('/api/classes/:classId/assignments', async (req, res) => {
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const access = await ensureUserCanAccessClass(req.params.classId, user.id, readClient);
-    if (!access) return res.status(403).json({ error: 'You do not have access to this class.' });
-    const { data, error } = await queryAssignmentsForClass(req, req.params.classId, access.role);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ assignments: data });
+    const user =
+      await getUser(req);
+
+    if (!user) {
+      return res.status(401).json({
+        error:
+          'Not authenticated',
+      });
+    }
+
+    const access =
+      await ensureUserCanAccessClass(
+        req.params.classId,
+        user.id
+      );
+
+    if (!access) {
+      return res.status(403).json({
+        error:
+          'You do not have access to this class.',
+      });
+    }
+
+    const {
+      data,
+      error,
+    } =
+      await queryAssignmentsForClass(
+        req,
+        req.params.classId,
+        access.role
+      );
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      assignments: data,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Create assignment
+
 app.post('/api/classes/:classId/assignments', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only add assignments to your own classes.' });
-    const idempotencyKey = getIdempotencyKey(req);
-    const replay = await getIdempotentResponse(user.id, 'create_assignment', idempotencyKey);
-    if (replay?.response_body) {
-      return res.status(replay.response_status || 200).json(replay.response_body);
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
     }
-    const payload = sanitizeAssignmentPayload(req.body);
+
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only add assignments to your own classes.',
+      });
+    }
+
+    const idempotencyKey =
+      getIdempotencyKey(req);
+
+    const replay =
+      await getIdempotentResponse(
+        user.id,
+        'create_assignment',
+        idempotencyKey
+      );
+
+    if (replay?.response_body) {
+      return res
+        .status(
+          replay.response_status || 200
+        )
+        .json(
+          replay.response_body
+        );
+    }
+
+    const payload =
+      sanitizeAssignmentPayload(
+        req.body
+      );
 
     let data;
-    let error = null;
-    let label = '';
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const entries = buildPostgresAssignmentWrite(payload);
+    try {
+      const entries =
+        buildPostgresAssignmentWrite(
+          payload
+        );
 
-        const columns = ['class_id', ...entries.map(([key]) => key)];
-        const values = [
-          req.params.classId,
-          ...entries.map(([, value]) => value),
-        ];
+      const columns = [
+        'class_id',
+        ...entries.map(
+          ([key]) => key
+        ),
+      ];
 
-        const placeholders = values
-          .map((_, index) => `$${index + 1}`)
+      const values = [
+        req.params.classId,
+        ...entries.map(
+          ([, value]) => value
+        ),
+      ];
+
+      const placeholders =
+        values
+          .map(
+            (_, index) =>
+              `$${index + 1}`
+          )
           .join(', ');
 
-        const { rows } = await db.query(
+      const { rows } =
+        await db.query(
           `INSERT INTO public.assignments
             (${columns.join(', ')})
-           VALUES (${placeholders})
+           VALUES
+            (${placeholders})
            RETURNING *`,
           values
         );
 
-        data = rows[0];
-        label = 'postgres';
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result = await assignmentWriteWithFallback(
-        req,
-        (client) => client
-          .from('assignments')
-          .insert({ ...payload, class_id: req.params.classId })
-          .select()
-          .single()
-      );
+      data =
+        rows[0] || null;
 
-      data = result.data;
-      error = result.error;
-      label = result.label;
+    } catch (writeError) {
+      return res.status(400).json({
+        error:
+          writeError.message,
+      });
     }
-    if (error) {
-      if (/row-level security policy/i.test(error.message || "")) {
-        return res.status(400).json({
-         error: SUPABASE_SERVER_KEY
-            ? 'Assignment save is blocked by Supabase RLS. The teacher session and server key were rejected - check the assignments INSERT policy in your Supabase dashboard.'
-            : 'Assignment save failed: SUPABASE_SERVICE_ROLE_KEY is missing from server environment. Add it to your .env file or hosting platform settings.'
-        });
-      }
-      return res.status(400).json({ error: error.message });
+
+    if (!data) {
+      return res.status(400).json({
+        error:
+          'Assignment could not be created.',
+      });
     }
-    if (label && label !== 'server key') {
-      console.info(`Assignment created with ${label} after teacher ownership verification.`);
-    }
-    await saveAssignmentRevision(data, user.id, 'created');
-    if (data?.status === 'published') {
+
+    await saveAssignmentRevision(
+      data,
+      user.id,
+      'created'
+    );
+
+    if (
+      data.status === 'published'
+    ) {
       await enqueueDomainEvent({
-        eventType: 'assignment_published',
-        aggregateType: 'assignment',
-        aggregateId: data.id,
-        idempotencyKey: `assignment-published:${data.id}:${data.version}`,
-        payload: { assignmentId: data.id, classId: data.class_id, version: data.version },
+        eventType:
+          'assignment_published',
+        aggregateType:
+          'assignment',
+        aggregateId:
+          data.id,
+        idempotencyKey:
+          `assignment-published:${data.id}:${data.version}`,
+        payload: {
+          assignmentId:
+            data.id,
+          classId:
+            data.class_id,
+          version:
+            data.version,
+        },
       });
-      processNotificationOutbox().catch((notifyError) => {
-        console.error('Assignment publish outbox processing failed:', notifyError);
-      });
+
+      processNotificationOutbox()
+        .catch(
+          (notifyError) => {
+            console.error(
+              'Assignment publish outbox processing failed:',
+              notifyError
+            );
+          }
+        );
     }
-    const responseBody = { assignment: data };
+
+    const responseBody = {
+      assignment: data,
+    };
+
     await saveIdempotentResponse({
-      userId: user.id,
-      operation: 'create_assignment',
+      userId:
+        user.id,
+      operation:
+        'create_assignment',
       idempotencyKey,
-      resourceType: 'assignment',
-      resourceId: data.id,
-      responseStatus: 200,
+      resourceType:
+        'assignment',
+      resourceId:
+        data.id,
+      responseStatus:
+        200,
       responseBody,
     });
-    res.json(responseBody);
+
+    return res.json(
+      responseBody
+    );
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Update assignment
+
 app.patch('/api/assignments/:id', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedAssignment = await ensureTeacherOwnsAssignment(req.params.id, user.id, readClient);
-    if (!ownedAssignment) return res.status(403).json({ error: 'You can only update assignments in your own classes.' });
-    const expectedVersion = Number(req.body?.expected_version || ownedAssignment.version || 1);
-    if (Number(ownedAssignment.version || 1) !== expectedVersion) {
-      return res.status(409).json({
-        error: 'Assignment was modified elsewhere. Refresh before saving again.',
-        conflict: true,
-        version: ownedAssignment.version,
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
       });
     }
+
+    const ownedAssignment =
+      await ensureTeacherOwnsAssignment(
+        req.params.id,
+        user.id
+      );
+
+    if (!ownedAssignment) {
+      return res.status(403).json({
+        error:
+          'You can only update assignments in your own classes.',
+      });
+    }
+
+    const expectedVersion =
+      Number(
+        req.body?.expected_version ||
+        ownedAssignment.version ||
+        1
+      );
+
+    if (
+      Number(
+        ownedAssignment.version || 1
+      ) !== expectedVersion
+    ) {
+      return res.status(409).json({
+        error:
+          'Assignment was modified elsewhere. Refresh before saving again.',
+        conflict: true,
+        version:
+          ownedAssignment.version,
+      });
+    }
+
     const payload = {
-      ...sanitizeAssignmentPayload(req.body),
-      version: expectedVersion + 1,
+      ...sanitizeAssignmentPayload(
+        req.body
+      ),
+      version:
+        expectedVersion + 1,
     };
+
     let data;
-    let error = null;
-    let label = '';
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const entries = buildPostgresAssignmentWrite(payload);
-
-        const setParts = entries.map(
-          ([key], index) => `${key} = $${index + 1}`
+    try {
+      const entries =
+        buildPostgresAssignmentWrite(
+          payload
         );
 
-        const values = entries.map(([, value]) => value);
+      const setParts =
+        entries.map(
+          ([key], index) =>
+            `${key} = $${index + 1}`
+        );
 
-        setParts.push(`version = $${values.length + 1}`);
-        values.push(expectedVersion + 1);
+      const values =
+        entries.map(
+          ([, value]) => value
+        );
 
-        setParts.push('updated_at = NOW()');
+      setParts.push(
+        `version = $${values.length + 1}`
+      );
 
-        values.push(req.params.id, expectedVersion);
+      values.push(
+        expectedVersion + 1
+      );
 
-        const idIndex = values.length - 1;
-        const versionIndex = values.length;
+      setParts.push(
+        'updated_at = NOW()'
+      );
 
-        const { rows } = await db.query(
+      values.push(
+        req.params.id,
+        expectedVersion
+      );
+
+      const idIndex =
+        values.length - 1;
+
+      const versionIndex =
+        values.length;
+
+      const { rows } =
+        await db.query(
           `UPDATE public.assignments
               SET ${setParts.join(', ')}
             WHERE id = $${idIndex}
@@ -8393,153 +9398,191 @@ app.patch('/api/assignments/:id', async (req, res) => {
           values
         );
 
-        data = rows[0] || null;
-        label = 'postgres';
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result = await assignmentWriteWithFallback(
-        req,
-        (client) => client
-          .from('assignments')
-          .update(payload)
-          .eq('id', req.params.id)
-          .eq('version', expectedVersion)
-          .is('deleted_at', null)
-          .select()
-          .maybeSingle()
-      );
+      data =
+        rows[0] || null;
 
-      data = result.data;
-      error = result.error;
-      label = result.label;
+    } catch (writeError) {
+      return res.status(400).json({
+        error:
+          writeError.message,
+      });
     }
-    if (error) {
-      if (/row-level security policy/i.test(error.message || "")) {
-        return res.status(400).json({
-          error: SUPABASE_SERVER_KEY
-            ? 'Assignment update is blocked by Supabase RLS. The teacher session and server key were rejected - check the assignments UPDATE policy in your Supabase dashboard.'
-            : 'Assignment update failed: SUPABASE_SERVICE_ROLE_KEY is missing from server environment. Add it to your .env file or hosting platform settings.'
-        });
-      }
-      return res.status(400).json({ error: error.message });
-    }
+
     if (!data) {
       return res.status(409).json({
-        error: 'Assignment was modified elsewhere. Refresh before saving again.',
+        error:
+          'Assignment was modified elsewhere. Refresh before saving again.',
         conflict: true,
       });
     }
-    if (label && label !== 'server key') {
-      console.info(`Assignment updated with ${label} after teacher ownership verification.`);
-    }
-    if (ownedAssignment.status !== 'published' && data?.status === 'published') {
+
+    if (
+      ownedAssignment.status !==
+        'published' &&
+      data.status ===
+        'published'
+    ) {
       await enqueueDomainEvent({
-        eventType: 'assignment_published',
-        aggregateType: 'assignment',
-        aggregateId: data.id,
-        idempotencyKey: `assignment-published:${data.id}:${data.version}`,
-        payload: { assignmentId: data.id, classId: data.class_id, version: data.version },
+        eventType:
+          'assignment_published',
+        aggregateType:
+          'assignment',
+        aggregateId:
+          data.id,
+        idempotencyKey:
+          `assignment-published:${data.id}:${data.version}`,
+        payload: {
+          assignmentId:
+            data.id,
+          classId:
+            data.class_id,
+          version:
+            data.version,
+        },
       });
-      processNotificationOutbox().catch((notifyError) => {
-        console.error('Assignment publish outbox processing failed:', notifyError);
-      });
+
+      processNotificationOutbox()
+        .catch(
+          (notifyError) => {
+            console.error(
+              'Assignment publish outbox processing failed:',
+              notifyError
+            );
+          }
+        );
     }
+
     await saveAssignmentRevision(
       data,
       user.id,
-      ownedAssignment.status !== 'published' && data.status === 'published'
+      ownedAssignment.status !==
+        'published' &&
+      data.status ===
+        'published'
         ? 'published'
         : 'updated'
     );
-    res.json({ assignment: data });
+
+    return res.json({
+      assignment: data,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Delete assignment
+
 app.delete('/api/assignments/:id', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedAssignment = await ensureTeacherOwnsAssignment(req.params.id, user.id, readClient);
-    if (!ownedAssignment) return res.status(403).json({ error: 'You can only delete assignments in your own classes.' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    const deletedAt = new Date().toISOString();
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    const ownedAssignment =
+      await ensureTeacherOwnsAssignment(
+        req.params.id,
+        user.id
+      );
+
+    if (!ownedAssignment) {
+      return res.status(403).json({
+        error:
+          'You can only delete assignments in your own classes.',
+      });
+    }
+
+    const deletedAt =
+      new Date().toISOString();
 
     let data;
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    try {
+      const { rows } =
+        await db.query(
           `UPDATE public.assignments
               SET deleted_at = $2,
                   status = 'archived',
                   version = $3,
                   updated_at = NOW()
             WHERE id = $1
+              AND deleted_at IS NULL
           RETURNING *`,
           [
             req.params.id,
             deletedAt,
-            Number(ownedAssignment.version || 1) + 1,
+            Number(
+              ownedAssignment.version || 1
+            ) + 1,
           ]
         );
 
-        data = rows[0] || null;
+      data =
+        rows[0] || null;
 
-        if (!data) {
-          return res.status(404).json({
-            error: 'Assignment not found.',
-          });
-        }
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result = await supabase
-        .from('assignments')
-        .update({
-          deleted_at: deletedAt,
-          status: 'archived',
-          version: Number(ownedAssignment.version || 1) + 1,
-        })
-        .eq('id', req.params.id)
-        .select()
-        .single();
-
-      data = result.data;
-      error = result.error;
+    } catch (writeError) {
+      return res.status(400).json({
+        error:
+          writeError.message,
+      });
     }
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
+    if (!data) {
+      return res.status(404).json({
+        error:
+          'Assignment not found.',
+      });
     }
-    await saveAssignmentRevision(data, user.id, 'archived');
-    res.json({ ok: true });
+
+    await saveAssignmentRevision(
+      data,
+      user.id,
+      'archived'
+    );
+
+    return res.json({
+      ok: true,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // ── Submissions endpoints ────────────────────────────────────
 
+
 async function querySubmissionsForAssignments(
   assignmentIds,
-  client = supabase,
+  _client = null,
   { includeAttempts = true } = {}
 ) {
-  if (USE_POSTGRES_APP_DB) {
-    if (!Array.isArray(assignmentIds) || !assignmentIds.length) {
-      return { data: [], error: null };
-    }
+  if (
+    !Array.isArray(assignmentIds) ||
+    !assignmentIds.length
+  ) {
+    return {
+      data: [],
+      error: null,
+    };
+  }
 
-    try {
-      const { rows } = await db.query(
+  try {
+    const { rows } =
+      await db.query(
         `SELECT
            s.id,
            s.assignment_id,
@@ -8547,13 +9590,27 @@ async function querySubmissionsForAssignments(
            s.status,
            s.draft_text,
            s.final_text,
+           s.writing_events,
+           s.keystroke_log,
            s.reflections,
            s.self_assessment,
+           s.outline,
            s.teacher_review,
-           s.submitted_at,
+           s.feedback_history,
+           s.submission_snapshot,
+           s.fluency_summary,
+           s.idea_responses,
+           s.chat_history,
+           s.focus_annotations,
+           s.chat_started_at,
+           s.chat_skipped_at,
+           s.chat_expired_at,
+           s.chat_elapsed_ms,
            s.started_at,
+           s.submitted_at,
            s.created_at,
            s.updated_at,
+           s.final_unlocked,
            s.version,
            s.deleted_at,
            CASE
@@ -8567,28 +9624,37 @@ async function querySubmissionsForAssignments(
          FROM public.submissions s
          LEFT JOIN public.profiles p
            ON p.id = s.student_id
-         WHERE s.assignment_id = ANY($1::uuid[])`,
+         WHERE s.assignment_id =
+           ANY($1::uuid[])`,
         [assignmentIds]
       );
 
-      if (!includeAttempts) {
-        return {
-          data: rows.map((submission) => ({
-            ...submission,
-            detail_loaded: false,
-          })),
-          error: null,
-        };
-      }
+    if (!includeAttempts) {
+      return {
+        data:
+          rows.map(
+            (submission) => ({
+              ...submission,
+              detail_loaded: false,
+            })
+          ),
+        error: null,
+      };
+    }
 
-      const submissionIds = rows
-        .map((submission) => submission.id)
+    const submissionIds =
+      rows
+        .map(
+          (submission) =>
+            submission.id
+        )
         .filter(Boolean);
 
-      let revisions = [];
+    let revisions = [];
 
-      if (submissionIds.length) {
-        const revisionResult = await db.query(
+    if (submissionIds.length) {
+      const revisionResult =
+        await db.query(
           `SELECT
              submission_id,
              revision_number,
@@ -8596,168 +9662,153 @@ async function querySubmissionsForAssignments(
              change_type,
              created_at
            FROM public.submission_revisions
-           WHERE submission_id = ANY($1::uuid[])
-             AND change_type = ANY($2::text[])
+           WHERE submission_id =
+             ANY($1::uuid[])
+             AND change_type =
+             ANY($2::text[])
            ORDER BY revision_number ASC`,
           [
             submissionIds,
-            ['submitted', 'reviewed'],
+            [
+              'submitted',
+              'reviewed',
+            ],
           ]
         );
 
-        revisions = revisionResult.rows;
-      }
-
-      const attempts = buildSubmissionAttemptList(rows, revisions);
-
-      return {
-        data: attempts.map((submission) => ({
-          ...submission,
-          detail_loaded: submission.detail_loaded === true,
-        })),
-        error: null,
-      };
-    } catch (error) {
-      return { data: [], error };
+      revisions =
+        revisionResult.rows;
     }
-  }
 
-  const { data, error } = await client
-    .from('submissions')
-    .select([
-      'id',
-      'assignment_id',
-      'student_id',
-      'status',
-      'draft_text',
-      'final_text',
-      'reflections',
-      'self_assessment',
-      'teacher_review',
-      'submitted_at',
-      'started_at',
-      'created_at',
-      'updated_at',
-      'version',
-      'deleted_at',
-      'profiles(id, name, email)',
-    ].join(','))
-    .in('assignment_id', assignmentIds);
+    const attempts =
+      buildSubmissionAttemptList(
+        rows,
+        revisions
+      );
 
-  if (error) return { data: [], error };
-
-  if (!includeAttempts) {
     return {
-      data: (data || []).map((submission) => ({
-        ...submission,
-        detail_loaded: false,
-      })),
+      data:
+        attempts.map(
+          (submission) => ({
+            ...submission,
+            detail_loaded:
+              submission.detail_loaded === true,
+          })
+        ),
       error: null,
     };
+
+  } catch (error) {
+    return {
+      data: [],
+      error,
+    };
   }
-
-  const submissionIds = (data || [])
-    .map((submission) => submission.id)
-    .filter(Boolean);
-
-  let revisions = [];
-
-  if (submissionIds.length) {
-    const { data: revisionRows, error: revisionError } = await supabase
-      .from('submission_revisions')
-      .select(
-        'submission_id, revision_number, snapshot, change_type, created_at'
-      )
-      .in('submission_id', submissionIds)
-      .in('change_type', ['submitted', 'reviewed'])
-      .order('revision_number', { ascending: true });
-
-    if (revisionError) {
-      return { data: [], error: revisionError };
-    }
-
-    revisions = revisionRows || [];
-  }
-
-  const attempts = buildSubmissionAttemptList(data || [], revisions);
-
-  return {
-    data: attempts.map((submission) => ({
-      ...submission,
-      detail_loaded: submission.detail_loaded === true,
-    })),
-    error: null,
-  };
 }
 
 // Get all submissions for every assignment in a class (teacher) — single
 // round-trip replacement for the old per-assignment N+1 pattern.
+
 app.get('/api/classes/:classId/submissions', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    const ownedClass = await ensureTeacherOwnsClass(req.params.classId, user.id, readClient);
-    if (!ownedClass) return res.status(403).json({ error: 'You can only view submissions for your own classes.' });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    let assignments;
-    let assignError = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT id
-             FROM public.assignments
-            WHERE class_id = $1`,
-          [req.params.classId]
-        );
-
-        assignments = rows;
-      } catch (error) {
-        assignError = error;
-      }
-    } else {
-      const result = await supabase
-        .from('assignments')
-        .select('id')
-        .eq('class_id', req.params.classId);
-
-      assignments = result.data;
-      assignError = result.error;
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
     }
 
-    if (assignError) {
-      return res.status(400).json({ error: assignError.message });
+    const ownedClass =
+      await ensureTeacherOwnsClass(
+        req.params.classId,
+        user.id
+      );
+
+    if (!ownedClass) {
+      return res.status(403).json({
+        error:
+          'You can only view submissions for your own classes.',
+      });
     }
 
-    const assignmentIds = (assignments || [])
-      .map((a) => a.id)
-      .filter(Boolean);
-    if (!assignmentIds.length) return res.json({ submissions: [] });
+    const { rows: assignments } =
+      await db.query(
+        `SELECT id
+           FROM public.assignments
+          WHERE class_id = $1`,
+        [req.params.classId]
+      );
 
-    const { data, error } = await querySubmissionsForAssignments(assignmentIds);
-    if (error) return res.status(400).json({ error: error.message });
+    const assignmentIds =
+      (assignments || [])
+        .map(
+          (assignment) =>
+            assignment.id
+        )
+        .filter(Boolean);
 
-    res.json({ submissions: data });
+    if (!assignmentIds.length) {
+      return res.json({
+        submissions: [],
+      });
+    }
+
+    const {
+      data,
+      error,
+    } =
+      await querySubmissionsForAssignments(
+        assignmentIds
+      );
+
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      submissions: data,
+    });
+
   } catch (error) {
-    console.error('Unexpected class submissions failure:', safeLogError(error));
-    res.status(500).json({ error: 'Could not load submissions right now. Please refresh and try again.' });
+    console.error(
+      'Unexpected class submissions failure:',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not load submissions right now. Please refresh and try again.',
+    });
   }
 });
 
 // Get all submissions across the authenticated teacher's classes in one
 // request. This supports low-cost near-real-time review updates without an
 // N+1 request for every course.
+
 app.get('/api/teacher/submissions', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    let assignmentIds = [];
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
 
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT a.id
            FROM public.assignments a
            INNER JOIN public.classes c
@@ -8766,119 +9817,184 @@ app.get('/api/teacher/submissions', async (req, res) => {
         [user.id]
       );
 
-      assignmentIds = rows
-        .map((entry) => entry.id)
-        .filter(Boolean);
-    } else {
-      const { data: classes, error: classError } = await readClient
-        .from('classes')
-        .select('id')
-        .eq('teacher_id', user.id);
-
-      if (classError) {
-        return res.status(400).json({ error: classError.message });
-      }
-
-      const classIds = (classes || [])
-        .map((entry) => entry.id)
+    const assignmentIds =
+      rows
+        .map(
+          (entry) =>
+            entry.id
+        )
         .filter(Boolean);
 
-      if (!classIds.length) {
-        return res.json({ submissions: [] });
-      }
-
-      const { data: assignments, error: assignmentError } = await readClient
-        .from('assignments')
-        .select('id')
-        .in('class_id', classIds);
-
-      if (assignmentError) {
-        return res.status(400).json({
-          error: assignmentError.message,
-        });
-      }
-
-      assignmentIds = (assignments || [])
-        .map((entry) => entry.id)
-        .filter(Boolean);
+    if (!assignmentIds.length) {
+      return res.json({
+        submissions: [],
+      });
     }
-    if (!assignmentIds.length) return res.json({ submissions: [] });
 
-    // Authorization and assignment scope are established above with the
-    // request-scoped client. Use the trusted server client for the final read
-    // so profile RLS does not erase the nested student identity. Without it,
-    // the polling response contains a valid student_id but profiles: null.
-    const { data, error } = await querySubmissionsForAssignments(
-      assignmentIds,
-      supabase,
-      { includeAttempts: false }
-    );
-    if (error) return res.status(400).json({ error: error.message });
+    const {
+      data,
+      error,
+    } =
+      await querySubmissionsForAssignments(
+        assignmentIds,
+        null,
+        {
+          includeAttempts: false,
+        }
+      );
 
-    res.json({ submissions: data });
+    if (error) {
+      return res.status(400).json({
+        error: error.message,
+      });
+    }
+
+    return res.json({
+      submissions: data,
+    });
+
   } catch (error) {
-    console.error('Unexpected teacher submissions failure:', safeLogError(error));
-    res.status(500).json({ error: 'Could not refresh submissions right now.' });
+    console.error(
+      'Unexpected teacher submissions failure:',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not refresh submissions right now.',
+    });
   }
 });
 
 // Get all submissions for an assignment (teacher)
+
 app.get('/api/assignments/:assignmentId/submissions', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
-    const readClient = getRequestScopedSupabase(req);
-    let ownedAssignment = null;
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
+
+    let ownedAssignment;
+
     try {
-      ownedAssignment = await ensureTeacherOwnsAssignment(req.params.assignmentId, user.id, readClient);
+      ownedAssignment =
+        await ensureTeacherOwnsAssignment(
+          req.params.assignmentId,
+          user.id
+        );
+
     } catch (accessError) {
-      console.error('Could not verify teacher assignment access:', {
-        assignmentRef: safeLogId(req.params.assignmentId),
-        userRef: safeLogId(user.id),
-        reason: safeLogError(accessError),
+      console.error(
+        'Could not verify teacher assignment access:',
+        {
+          assignmentRef:
+            safeLogId(
+              req.params.assignmentId
+            ),
+          userRef:
+            safeLogId(user.id),
+          reason:
+            safeLogError(
+              accessError
+            ),
+        }
+      );
+
+      return res.status(400).json({
+        error:
+          'Could not verify access to this assignment. Please refresh and try again.',
       });
-      return res.status(400).json({ error: 'Could not verify access to this assignment. Please refresh and try again.' });
     }
-    if (!ownedAssignment) return res.status(403).json({ error: 'You can only view submissions for your own assignments.' });
-    // Ownership is verified above. The trusted read is required here because
-    // teachers cannot directly select another user's profile through profile
-    // RLS, even when that user submitted to the teacher's assignment.
-    const { data, error: fetchError } = await querySubmissionsForAssignments(
-      [req.params.assignmentId],
-      supabase
-    );
+
+    if (!ownedAssignment) {
+      return res.status(403).json({
+        error:
+          'You can only view submissions for your own assignments.',
+      });
+    }
+
+    const {
+      data,
+      error: fetchError,
+    } =
+      await querySubmissionsForAssignments(
+        [
+          req.params.assignmentId,
+        ]
+      );
+
     if (fetchError) {
-      console.error('Could not load assignment submissions:', {
-        assignmentRef: safeLogId(req.params.assignmentId),
-        reason: safeLogError(fetchError),
+      console.error(
+        'Could not load assignment submissions:',
+        {
+          assignmentRef:
+            safeLogId(
+              req.params.assignmentId
+            ),
+          reason:
+            safeLogError(
+              fetchError
+            ),
+        }
+      );
+
+      return res.status(400).json({
+        error:
+          'Could not load submissions for this assignment. Please refresh and try again.',
       });
-      return res.status(400).json({ error: 'Could not load submissions for this assignment. Please refresh and try again.' });
     }
-    res.json({ submissions: data });
+
+    return res.json({
+      submissions: data,
+    });
+
   } catch (error) {
-    console.error('Unexpected submissions list failure:', safeLogError(error));
-    res.status(500).json({ error: 'Could not load submissions right now. Please refresh and try again.' });
+    console.error(
+      'Unexpected submissions list failure:',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not load submissions right now. Please refresh and try again.',
+    });
   }
 });
 
 // Get the authenticated student's existing submissions without creating new rows
+
 app.get('/api/student/submissions', async (req, res) => {
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
+    const user =
+      await getUser(req);
 
-    const readClient = getRequestScopedSupabase(req);
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
+    }
 
-    const requestedAssignmentIds = String(req.query.assignmentIds || '')
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
+    const requestedAssignmentIds =
+      String(
+        req.query.assignmentIds || ''
+      )
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean);
 
-    if (USE_POSTGRES_APP_DB) {
-      let assignmentResult;
+    let assignmentResult;
 
-      if (requestedAssignmentIds.length) {
-        assignmentResult = await db.query(
+    if (requestedAssignmentIds.length) {
+      assignmentResult =
+        await db.query(
           `SELECT DISTINCT a.id
              FROM public.assignments a
              INNER JOIN public.class_members cm
@@ -8886,10 +10002,15 @@ app.get('/api/student/submissions', async (req, res) => {
             WHERE cm.student_id = $1
               AND a.status = 'published'
               AND a.id = ANY($2::uuid[])`,
-          [user.id, requestedAssignmentIds]
+          [
+            user.id,
+            requestedAssignmentIds,
+          ]
         );
-      } else {
-        assignmentResult = await db.query(
+
+    } else {
+      assignmentResult =
+        await db.query(
           `SELECT DISTINCT a.id
              FROM public.assignments a
              INNER JOIN public.class_members cm
@@ -8898,18 +10019,29 @@ app.get('/api/student/submissions', async (req, res) => {
               AND a.status = 'published'`,
           [user.id]
         );
-      }
+    }
 
-      const assignmentIds = assignmentResult.rows
-        .map((assignment) => assignment.id)
+    const assignmentIds =
+      assignmentResult.rows
+        .map(
+          (assignment) =>
+            assignment.id
+        )
         .filter(Boolean);
 
-      if (!assignmentIds.length) {
-        return res.json({ submissions: [] });
-      }
+    if (!assignmentIds.length) {
+      return res.json({
+        submissions: [],
+      });
+    }
 
-      if (String(req.query.summary || '') === '1') {
-        const { rows } = await db.query(
+    if (
+      String(
+        req.query.summary || ''
+      ) === '1'
+    ) {
+      const { rows } =
+        await db.query(
           `SELECT
              id,
              assignment_id,
@@ -8921,19 +10053,29 @@ app.get('/api/student/submissions', async (req, res) => {
              version
            FROM public.submissions
            WHERE student_id = $1
-             AND assignment_id = ANY($2::uuid[])`,
-          [user.id, assignmentIds]
+             AND assignment_id =
+               ANY($2::uuid[])`,
+          [
+            user.id,
+            assignmentIds,
+          ]
         );
 
-        return res.json({
-          submissions: rows.map((submission) => ({
-            ...normalizeStudentVisibleSubmission(submission),
-            detail_loaded: false,
-          })),
-        });
-      }
+      return res.json({
+        submissions:
+          rows.map(
+            (submission) => ({
+              ...normalizeStudentVisibleSubmission(
+                submission
+              ),
+              detail_loaded: false,
+            })
+          ),
+      });
+    }
 
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT
            id,
            assignment_id,
@@ -8957,18 +10099,27 @@ app.get('/api/student/submissions', async (req, res) => {
            version
          FROM public.submissions
          WHERE student_id = $1
-           AND assignment_id = ANY($2::uuid[])`,
-        [user.id, assignmentIds]
+           AND assignment_id =
+             ANY($2::uuid[])`,
+        [
+          user.id,
+          assignmentIds,
+        ]
       );
 
-      const submissionIds = rows
-        .map((submission) => submission.id)
+    const submissionIds =
+      rows
+        .map(
+          (submission) =>
+            submission.id
+        )
         .filter(Boolean);
 
-      let revisions = [];
+    let revisions = [];
 
-      if (submissionIds.length) {
-        const revisionResult = await db.query(
+    if (submissionIds.length) {
+      const revisionResult =
+        await db.query(
           `SELECT
              submission_id,
              revision_number,
@@ -8976,179 +10127,44 @@ app.get('/api/student/submissions', async (req, res) => {
              change_type,
              created_at
            FROM public.submission_revisions
-           WHERE submission_id = ANY($1::uuid[])
-             AND change_type = ANY($2::text[])
+           WHERE submission_id =
+             ANY($1::uuid[])
+             AND change_type =
+             ANY($2::text[])
            ORDER BY revision_number ASC`,
           [
             submissionIds,
-            ['submitted', 'reviewed'],
+            [
+              'submitted',
+              'reviewed',
+            ],
           ]
         );
 
-        revisions = revisionResult.rows;
-      }
-
-      const attempts = buildSubmissionAttemptList(rows, revisions);
-
-      return res.json({
-        submissions: attempts.map(normalizeStudentVisibleSubmission),
-      });
+      revisions =
+        revisionResult.rows;
     }
 
-    const { data: memberships, error: membershipError } = await readClient
-      .from('class_members')
-      .select('class_id')
-      .eq('student_id', user.id);
-
-    if (membershipError) {
-      return res.status(400).json({ error: membershipError.message });
-    }
-
-    const classIds = Array.from(
-      new Set(
-        (memberships || [])
-          .map((entry) => entry.class_id)
-          .filter(Boolean)
-      )
-    );
-
-    if (!classIds.length) {
-      return res.json({ submissions: [] });
-    }
-
-    let assignmentQuery = readClient
-      .from('assignments')
-      .select('id')
-      .in('class_id', classIds)
-      .eq('status', 'published');
-
-    if (requestedAssignmentIds.length) {
-      assignmentQuery = assignmentQuery.in('id', requestedAssignmentIds);
-    }
-
-    const {
-      data: assignments,
-      error: assignmentError,
-    } = await assignmentQuery;
-
-    if (assignmentError) {
-      return res.status(400).json({ error: assignmentError.message });
-    }
-
-    const assignmentIds = Array.from(
-      new Set(
-        (assignments || [])
-          .map((assignment) => assignment.id)
-          .filter(Boolean)
-      )
-    );
-
-    if (!assignmentIds.length) {
-      return res.json({ submissions: [] });
-    }
-
-    if (String(req.query.summary || '') === '1') {
-      const { data: summaryRows, error: summaryError } = await readClient
-        .from('submissions')
-        .select([
-          'id',
-          'assignment_id',
-          'student_id',
-          'status',
-          'teacher_review',
-          'submitted_at',
-          'updated_at',
-          'version',
-        ].join(','))
-        .eq('student_id', user.id)
-        .in('assignment_id', assignmentIds);
-
-      if (summaryError) {
-        return res.status(400).json({ error: summaryError.message });
-      }
-
-      return res.json({
-        submissions: (summaryRows || []).map((submission) => ({
-          ...normalizeStudentVisibleSubmission(submission),
-          detail_loaded: false,
-        })),
-      });
-    }
-
-    const { data, error } = await readClient
-      .from('submissions')
-      .select([
-        'id',
-        'assignment_id',
-        'student_id',
-        'status',
-        'draft_text',
-        'final_text',
-        'outline',
-        'chat_history',
-        'feedback_history',
-        'self_assessment',
-        'teacher_review',
-        'chat_started_at',
-        'chat_skipped_at',
-        'chat_expired_at',
-        'chat_elapsed_ms',
-        'started_at',
-        'submitted_at',
-        'created_at',
-        'updated_at',
-        'version',
-      ].join(','))
-      .eq('student_id', user.id)
-      .in('assignment_id', assignmentIds);
-
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    const submissionIds = (data || [])
-      .map((submission) => submission.id)
-      .filter(Boolean);
-
-    let revisions = [];
-
-    if (submissionIds.length) {
-      const {
-        data: revisionRows,
-        error: revisionError,
-      } = await supabase
-        .from('submission_revisions')
-        .select(
-          'submission_id, revision_number, snapshot, change_type, created_at'
-        )
-        .in('submission_id', submissionIds)
-        .in('change_type', ['submitted', 'reviewed'])
-        .order('revision_number', { ascending: true });
-
-      if (revisionError) {
-        return res.status(400).json({
-          error: revisionError.message,
-        });
-      }
-
-      revisions = revisionRows || [];
-    }
-
-    const attempts = buildSubmissionAttemptList(
-      data || [],
-      revisions
-    );
+    const attempts =
+      buildSubmissionAttemptList(
+        rows,
+        revisions
+      );
 
     return res.json({
-      submissions: attempts.map(normalizeStudentVisibleSubmission),
+      submissions:
+        attempts.map(
+          normalizeStudentVisibleSubmission
+        ),
     });
+
   } catch (error) {
     console.error(
       'Unexpected student submissions failure:',
       safeLogError(error)
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       error:
         'Could not load your submissions right now. Please refresh and try again.',
     });
@@ -9156,31 +10172,33 @@ app.get('/api/student/submissions', async (req, res) => {
 });
 
 // Get or create student's own submission
+
 app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
   try {
-    const user = await getUser(req);
+    const user =
+      await getUser(req);
 
     if (!user) {
-      return res.status(401).json({ error: 'Not authenticated' });
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
     }
-
-    const readClient = getRequestScopedSupabase(req);
 
     const accessibleAssignment =
       await ensureStudentCanAccessAssignment(
         req.params.assignmentId,
-        user.id,
-        readClient
+        user.id
       );
 
     if (!accessibleAssignment) {
       return res.status(403).json({
-        error: 'You do not have access to this assignment.',
+        error:
+          'You do not have access to this assignment.',
       });
     }
 
-    if (USE_POSTGRES_APP_DB) {
-      const existingResult = await db.query(
+    const existingResult =
+      await db.query(
         `SELECT *
            FROM public.submissions
           WHERE assignment_id = $1
@@ -9192,22 +10210,26 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
         ]
       );
 
-      if (existingResult.rows[0]) {
-        return res.json({
-          submission: normalizeStudentVisibleSubmission(
+    if (existingResult.rows[0]) {
+      return res.json({
+        submission:
+          normalizeStudentVisibleSubmission(
             existingResult.rows[0]
           ),
-        });
-      }
+      });
+    }
 
-      if (accessibleAssignment.classArchived === true) {
-        return res.status(409).json({
-          error:
-            'This course is archived. Previous work remains available, but new work cannot be started.',
-        });
-      }
+    if (
+      accessibleAssignment.classArchived === true
+    ) {
+      return res.status(409).json({
+        error:
+          'This course is archived. Previous work remains available, but new work cannot be started.',
+      });
+    }
 
-      const insertResult = await db.query(
+    const insertResult =
+      await db.query(
         `INSERT INTO public.submissions
           (
             assignment_id,
@@ -9215,7 +10237,8 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
             started_at
           )
          VALUES ($1, $2, NOW())
-         ON CONFLICT (assignment_id, student_id)
+         ON CONFLICT
+          (assignment_id, student_id)
          DO NOTHING
          RETURNING *`,
         [
@@ -9224,16 +10247,19 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
         ]
       );
 
-      let data = insertResult.rows[0];
+    let data =
+      insertResult.rows[0];
 
-      if (data) {
-        await saveSubmissionRevision(
-          data,
-          user.id,
-          'started'
-        );
-      } else {
-        const raceResult = await db.query(
+    if (data) {
+      await saveSubmissionRevision(
+        data,
+        user.id,
+        'started'
+      );
+
+    } else {
+      const raceResult =
+        await db.query(
           `SELECT *
              FROM public.submissions
             WHERE assignment_id = $1
@@ -9245,82 +10271,31 @@ app.get('/api/assignments/:assignmentId/my-submission', async (req, res) => {
           ]
         );
 
-        data = raceResult.rows[0];
-      }
+      data =
+        raceResult.rows[0];
+    }
 
-      if (!data) {
-        return res.status(500).json({
-          error: 'Could not create your submission.',
-        });
-      }
-
-      return res.json({
-        submission: normalizeStudentVisibleSubmission(data),
+    if (!data) {
+      return res.status(500).json({
+        error:
+          'Could not create your submission.',
       });
     }
 
-    const submissionClient = readClient;
-
-    let { data, error } = await submissionClient
-      .from('submissions')
-      .select('*')
-      .eq('assignment_id', req.params.assignmentId)
-      .eq('student_id', user.id)
-      .single();
-
-    if (error && error.code === 'PGRST116') {
-      if (accessibleAssignment.classArchived === true) {
-        return res.status(409).json({
-          error:
-            'This course is archived. Previous work remains available, but new work cannot be started.',
-        });
-      }
-
-      const {
-        data: newData,
-        error: createError,
-      } = await submissionWriteWithFallback(
-        req,
-        (client) => client
-          .from('submissions')
-          .insert({
-            assignment_id: req.params.assignmentId,
-            student_id: user.id,
-            started_at: new Date().toISOString(),
-          })
-          .select()
-          .single()
-      );
-
-      if (createError) {
-        return res.status(400).json({
-          error: createError.message,
-        });
-      }
-
-      data = newData;
-
-      await saveSubmissionRevision(
-        data,
-        user.id,
-        'started'
-      );
-    } else if (error) {
-      return res
-        .status(isRlsDenial(error) ? 403 : 400)
-        .json({ error: error.message });
-    }
-
     return res.json({
-      submission: normalizeStudentVisibleSubmission(data),
+      submission:
+        normalizeStudentVisibleSubmission(
+          data
+        ),
     });
+
   } catch (error) {
     console.error(
       'Unexpected my-submission failure:',
       safeLogError(error)
     );
 
-    res.status(500).json({
+    return res.status(500).json({
       error:
         'Could not load your submission right now. Please refresh and try again.',
     });
@@ -9352,37 +10327,97 @@ function summarizeSubmissionForDebug(submission = null) {
   };
 }
 
+
 app.get('/api/debug/submission-state', async (req, res) => {
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const profile = await getProfile(user.id);
-    if (!profile) return res.status(409).json({ error: ACCOUNT_SETUP_INCOMPLETE_MESSAGE });
+    const user =
+      await getUser(req);
 
-    const assignmentId = String(req.query.assignmentId || '').trim();
-    if (!assignmentId) return res.status(400).json({ error: 'assignmentId required' });
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
+    }
 
-    const readClient = getRequestScopedSupabase(req);
-    let targetStudentId = String(req.query.studentId || '').trim();
+    const profile =
+      await getProfile(user.id);
+
+    if (!profile) {
+      return res.status(409).json({
+        error:
+          ACCOUNT_SETUP_INCOMPLETE_MESSAGE,
+      });
+    }
+
+    const assignmentId =
+      String(
+        req.query.assignmentId || ''
+      ).trim();
+
+    if (!assignmentId) {
+      return res.status(400).json({
+        error:
+          'assignmentId required',
+      });
+    }
+
+    let targetStudentId =
+      String(
+        req.query.studentId || ''
+      ).trim();
+
     let assignment = null;
 
     if (profile.role === 'student') {
-      targetStudentId = user.id;
-      assignment = await ensureStudentCanAccessAssignment(assignmentId, targetStudentId, readClient);
-      if (!assignment) return res.status(403).json({ error: 'You do not have access to this assignment.' });
-    } else if (profile.role === 'teacher' || profile.role === 'admin') {
-      if (!targetStudentId) return res.status(400).json({ error: 'studentId required for teacher debug' });
-      assignment = await ensureTeacherOwnsAssignment(assignmentId, user.id, readClient);
-      if (!assignment) return res.status(403).json({ error: 'You can only debug submissions for your own assignments.' });
+      targetStudentId =
+        user.id;
+
+      assignment =
+        await ensureStudentCanAccessAssignment(
+          assignmentId,
+          targetStudentId
+        );
+
+      if (!assignment) {
+        return res.status(403).json({
+          error:
+            'You do not have access to this assignment.',
+        });
+      }
+
+    } else if (
+      profile.role === 'teacher' ||
+      profile.role === 'admin'
+    ) {
+      if (!targetStudentId) {
+        return res.status(400).json({
+          error:
+            'studentId required for teacher debug',
+        });
+      }
+
+      assignment =
+        await ensureTeacherOwnsAssignment(
+          assignmentId,
+          user.id
+        );
+
+      if (!assignment) {
+        return res.status(403).json({
+          error:
+            'You can only debug submissions for your own assignments.',
+        });
+      }
+
     } else {
-      return res.status(403).json({ error: 'Unsupported role for debug endpoint.' });
+      return res.status(403).json({
+        error:
+          'Unsupported role for debug endpoint.',
+      });
     }
 
-    let scopedResult;
-    let rawResult;
-
-    if (USE_POSTGRES_APP_DB) {
-      const { rows } = await db.query(
+    const { rows } =
+      await db.query(
         `SELECT *
            FROM public.submissions
           WHERE assignment_id = $1
@@ -9390,69 +10425,59 @@ app.get('/api/debug/submission-state', async (req, res) => {
           LIMIT 1`,
         [
           assignmentId,
-          targetStudentId
+          targetStudentId,
         ]
       );
 
-      const row = rows[0] || null;
+    const row =
+      rows[0] || null;
 
-      scopedResult = {
-        data: row,
-        error: null
-      };
+    return res.json({
+      checkedAt:
+        new Date().toISOString(),
 
-      rawResult = {
-        data: row,
-        error: null
-      };
-    } else {
-      scopedResult = await readClient
-        .from('submissions')
-        .select('*')
-        .eq('assignment_id', assignmentId)
-        .eq('student_id', targetStudentId)
-        .maybeSingle();
-
-      rawResult = await supabase
-        .from('submissions')
-        .select('*')
-        .eq('assignment_id', assignmentId)
-        .eq('student_id', targetStudentId)
-        .maybeSingle();
-    }
-
-    if (scopedResult.error) {
-      return res.status(400).json({
-        error: scopedResult.error.message
-      });
-    }
-
-    if (rawResult.error) {
-      return res.status(400).json({
-        error: rawResult.error.message
-      });
-    }
-
-    res.json({
-      checkedAt: new Date().toISOString(),
       viewer: {
         id: user.id,
         role: profile.role,
       },
+
       assignment: {
         id: assignment.id,
         title: assignment.title,
         status: assignment.status,
-        class_id: assignment.class_id,
+        class_id:
+          assignment.class_id,
       },
+
       targetStudentId,
-      requestScoped: summarizeSubmissionForDebug(scopedResult.data),
-      rawServer: summarizeSubmissionForDebug(rawResult.data),
-      studentVisibleNormalized: summarizeSubmissionForDebug(normalizeStudentVisibleSubmission(rawResult.data)),
+
+      requestScoped:
+        summarizeSubmissionForDebug(
+          row
+        ),
+
+      rawServer:
+        summarizeSubmissionForDebug(
+          row
+        ),
+
+      studentVisibleNormalized:
+        summarizeSubmissionForDebug(
+          normalizeStudentVisibleSubmission(
+            row
+          )
+        ),
     });
+
   } catch (error) {
-    console.error('Debug submission-state failed:', error);
-    res.status(500).json({ error: error.message });
+    console.error(
+      'Debug submission-state failed:',
+      error
+    );
+
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
@@ -9482,12 +10507,34 @@ const POSTGRES_STUDENT_SUBMISSION_COLUMNS = new Set([
   'version',
 ]);
 
+const POSTGRES_STUDENT_SUBMISSION_JSON_COLUMNS = new Set([
+  'idea_responses',
+  'reflections',
+  'outline',
+  'chat_history',
+  'writing_events',
+  'feedback_history',
+  'focus_annotations',
+  'self_assessment',
+  'keystroke_log',
+  'fluency_summary',
+  'teacher_review',
+]);
+
 function buildPostgresStudentSubmissionEntries(payload = {}) {
-  return Object.entries(payload).filter(
-    ([key, value]) =>
-      POSTGRES_STUDENT_SUBMISSION_COLUMNS.has(key) &&
-      value !== undefined
-  );
+  return Object.entries(payload)
+    .filter(
+      ([key, value]) =>
+        POSTGRES_STUDENT_SUBMISSION_COLUMNS.has(key) &&
+        value !== undefined
+    )
+    .map(([key, value]) => [
+      key,
+      POSTGRES_STUDENT_SUBMISSION_JSON_COLUMNS.has(key) &&
+      value !== null
+        ? JSON.stringify(value)
+        : value,
+    ]);
 }
 
 async function getPostgresSubmissionWithProfile(submissionId) {
@@ -9513,39 +10560,73 @@ async function getPostgresSubmissionWithProfile(submissionId) {
 }
 
 // Submit student's own work atomically
+
 app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const accessibleAssignment = await ensureStudentCanModifyAssignment(req.params.assignmentId, user.id, readClient);
-    if (!accessibleAssignment) {
-      return res.status(409).json({
-        error: 'This assignment is unavailable for new work. The course may be archived.',
+
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
       });
     }
-    const idempotencyKey = getIdempotencyKey(req);
-    const replay = await getIdempotentResponse(user.id, 'submit_assignment', idempotencyKey);
-    if (replay?.response_body) {
-      return res.status(replay.response_status || 200).json(replay.response_body);
+
+    const accessibleAssignment =
+      await ensureStudentCanModifyAssignment(
+        req.params.assignmentId,
+        user.id
+      );
+
+    if (!accessibleAssignment) {
+      return res.status(409).json({
+        error:
+          'This assignment is unavailable for new work. The course may be archived.',
+      });
     }
 
-    const payload = sanitizeStudentSubmissionPayload(req.body);
-    const submittedAt = new Date().toISOString();
+    const idempotencyKey =
+      getIdempotencyKey(req);
+
+    const replay =
+      await getIdempotentResponse(
+        user.id,
+        'submit_assignment',
+        idempotencyKey
+      );
+
+    if (replay?.response_body) {
+      return res
+        .status(
+          replay.response_status || 200
+        )
+        .json(
+          replay.response_body
+        );
+    }
+
+    const payload =
+      sanitizeStudentSubmissionPayload(
+        req.body
+      );
+
+    const submittedAt =
+      new Date().toISOString();
+
     let nextPayload = {
       ...payload,
       status: 'submitted',
       submitted_at: submittedAt,
-      teacher_review: createOpenTeacherReview(),
-      updated_at: new Date().toISOString(),
+      teacher_review:
+        createOpenTeacherReview(),
+      updated_at:
+        new Date().toISOString(),
     };
 
     let existing;
-    let existingError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
+    try {
+      const { rows } =
+        await db.query(
           `SELECT
              id,
              version,
@@ -9555,51 +10636,58 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
            WHERE assignment_id = $1
              AND student_id = $2
            LIMIT 1`,
-          [req.params.assignmentId, user.id]
+          [
+            req.params.assignmentId,
+            user.id,
+          ]
         );
 
-        existing = rows[0] || null;
-      } catch (error) {
-        existingError = error;
-      }
-    } else {
-      const submissionClient = readClient;
+      existing =
+        rows[0] || null;
 
-      const result = await submissionClient
-        .from('submissions')
-        .select('id, version, writing_events, keystroke_log')
-        .eq('assignment_id', req.params.assignmentId)
-        .eq('student_id', user.id)
-        .maybeSingle();
-
-      existing = result.data;
-      existingError = result.error;
-    }
-
-    if (existingError) {
-      return res
-        .status(isRlsDenial(existingError) ? 403 : 400)
-        .json({ error: existingError.message });
+    } catch (readError) {
+      return res.status(400).json({
+        error: readError.message,
+      });
     }
 
     if (existing?.id) {
-      nextPayload = preserveProcessHistoryOnSubmit(nextPayload, existing);
-      nextPayload.version = Number(existing.version || 1) + 1;
+      nextPayload =
+        preserveProcessHistoryOnSubmit(
+          nextPayload,
+          existing
+        );
+
+      nextPayload.version =
+        Number(
+          existing.version || 1
+        ) + 1;
+
       let data;
-      let error = null;
 
-      if (USE_POSTGRES_APP_DB) {
-        try {
-          const entries = buildPostgresStudentSubmissionEntries(nextPayload);
+      try {
+        const entries =
+          buildPostgresStudentSubmissionEntries(
+            nextPayload
+          );
 
-          const setSql = entries
-            .map(([key], index) => `${key} = $${index + 1}`)
+        const setSql =
+          entries
+            .map(
+              ([key], index) =>
+                `${key} = $${index + 1}`
+            )
             .join(', ');
 
-          const values = entries.map(([, value]) => value);
-          values.push(existing.id);
+        const values =
+          entries.map(
+            ([, value]) => value
+          );
 
-          const { rows } = await db.query(
+        values.push(existing.id);
+
+        const { rows } =
+          await db.query(
             `UPDATE public.submissions
                 SET ${setSql}
               WHERE id = $${values.length}
@@ -9607,97 +10695,126 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
             values
           );
 
-          if (!rows[0]) {
-            return res.status(404).json({
-              error: 'Submission not found.',
-            });
-          }
-
-          data = await getPostgresSubmissionWithProfile(existing.id);
-        } catch (writeError) {
-          error = writeError;
+        if (!rows[0]) {
+          return res.status(404).json({
+            error:
+              'Submission not found.',
+          });
         }
-      } else {
-        const result = await submissionWriteWithFallback(
-          req,
-          (client) => client
-            .from('submissions')
-            .update(nextPayload)
-            .eq('id', existing.id)
-            .select('*, profiles(id, name)')
-            .single()
-        );
 
-        data = result.data;
-        error = result.error;
+        data =
+          await getPostgresSubmissionWithProfile(
+            existing.id
+          );
+
+      } catch (writeError) {
+        return res.status(400).json({
+          error: writeError.message,
+        });
       }
 
-      if (error) {
-        return res
-          .status(isRlsDenial(error) ? 403 : 400)
-          .json({ error: error.message });
-      }
-      await saveSubmissionRevision(data, user.id, 'submitted');
+      await saveSubmissionRevision(
+        data,
+        user.id,
+        'submitted'
+      );
+
       await enqueueDomainEvent({
-        eventType: 'submission_received',
-        aggregateType: 'submission',
-        aggregateId: data.id,
-        idempotencyKey: `submission-received:${data.id}:${data.version}`,
+        eventType:
+          'submission_received',
+        aggregateType:
+          'submission',
+        aggregateId:
+          data.id,
+        idempotencyKey:
+          `submission-received:${data.id}:${data.version}`,
         payload: {
-          submissionId: data.id,
-          assignmentId: data.assignment_id,
-          studentId: data.student_id,
-          version: data.version,
+          submissionId:
+            data.id,
+          assignmentId:
+            data.assignment_id,
+          studentId:
+            data.student_id,
+          version:
+            data.version,
         },
       });
-      processNotificationOutbox().catch((notifyError) => {
-        console.error('Submission outbox processing failed:', notifyError);
-      });
-      const responseBody = { submission: data };
+
+      processNotificationOutbox()
+        .catch(
+          (notifyError) => {
+            console.error(
+              'Submission outbox processing failed:',
+              notifyError
+            );
+          }
+        );
+
+      const responseBody = {
+        submission: data,
+      };
+
       await saveIdempotentResponse({
-        userId: user.id,
-        operation: 'submit_assignment',
+        userId:
+          user.id,
+        operation:
+          'submit_assignment',
         idempotencyKey,
-        resourceType: 'submission',
-        resourceId: data.id,
-        responseStatus: 200,
+        resourceType:
+          'submission',
+        resourceId:
+          data.id,
+        responseStatus:
+          200,
         responseBody,
       });
-      return res.json(responseBody);
+
+      return res.json(
+        responseBody
+      );
     }
 
     let data;
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const insertPayload = {
-          ...nextPayload,
-          started_at:
-            nextPayload.started_at ||
-            new Date().toISOString(),
-        };
+    try {
+      const insertPayload = {
+        ...nextPayload,
+        started_at:
+          nextPayload.started_at ||
+          new Date().toISOString(),
+      };
 
-        const entries =
-          buildPostgresStudentSubmissionEntries(insertPayload);
+      const entries =
+        buildPostgresStudentSubmissionEntries(
+          insertPayload
+        );
 
-        const columns = [
-          'assignment_id',
-          'student_id',
-          ...entries.map(([key]) => key),
-        ];
+      const columns = [
+        'assignment_id',
+        'student_id',
+        ...entries.map(
+          ([key]) => key
+        ),
+      ];
 
-        const values = [
-          req.params.assignmentId,
-          user.id,
-          ...entries.map(([, value]) => value),
-        ];
+      const values = [
+        req.params.assignmentId,
+        user.id,
+        ...entries.map(
+          ([, value]) => value
+        ),
+      ];
 
-        const placeholders = values
-          .map((_, index) => `$${index + 1}`)
+      const placeholders =
+        values
+          .map(
+            (_, index) =>
+              `$${index + 1}`
+          )
           .join(', ');
 
-        const { rows } = await db.query(
+      const { rows } =
+        await db.query(
           `INSERT INTO public.submissions
             (${columns.join(', ')})
            VALUES (${placeholders})
@@ -9705,148 +10822,210 @@ app.post('/api/assignments/:assignmentId/submit', async (req, res) => {
           values
         );
 
-        data = await getPostgresSubmissionWithProfile(
+      data =
+        await getPostgresSubmissionWithProfile(
           rows[0].id
         );
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result = await submissionWriteWithFallback(
-        req,
-        (client) => client
-          .from('submissions')
-          .insert({
-            assignment_id: req.params.assignmentId,
-            student_id: user.id,
-            started_at:
-              nextPayload.started_at ||
-              new Date().toISOString(),
-            ...nextPayload,
-          })
-          .select('*, profiles(id, name)')
-          .single()
-      );
 
-      data = result.data;
-      error = result.error;
+    } catch (writeError) {
+      return res.status(400).json({
+        error: writeError.message,
+      });
     }
 
-    if (error) {
-      return res
-        .status(isRlsDenial(error) ? 403 : 400)
-        .json({ error: error.message });
-    }
-    await saveSubmissionRevision(data, user.id, 'submitted');
+    await saveSubmissionRevision(
+      data,
+      user.id,
+      'submitted'
+    );
+
     await enqueueDomainEvent({
-      eventType: 'submission_received',
-      aggregateType: 'submission',
-      aggregateId: data.id,
-      idempotencyKey: `submission-received:${data.id}:${data.version}`,
+      eventType:
+        'submission_received',
+      aggregateType:
+        'submission',
+      aggregateId:
+        data.id,
+      idempotencyKey:
+        `submission-received:${data.id}:${data.version}`,
       payload: {
-        submissionId: data.id,
-        assignmentId: data.assignment_id,
-        studentId: data.student_id,
-        version: data.version,
+        submissionId:
+          data.id,
+        assignmentId:
+          data.assignment_id,
+        studentId:
+          data.student_id,
+        version:
+          data.version,
       },
     });
-    processNotificationOutbox().catch((notifyError) => {
-      console.error('Submission outbox processing failed:', notifyError);
-    });
-    const responseBody = { submission: data };
+
+    processNotificationOutbox()
+      .catch(
+        (notifyError) => {
+          console.error(
+            'Submission outbox processing failed:',
+            notifyError
+          );
+        }
+      );
+
+    const responseBody = {
+      submission: data,
+    };
+
     await saveIdempotentResponse({
-      userId: user.id,
-      operation: 'submit_assignment',
+      userId:
+        user.id,
+      operation:
+        'submit_assignment',
       idempotencyKey,
-      resourceType: 'submission',
-      resourceId: data.id,
-      responseStatus: 200,
+      resourceType:
+        'submission',
+      resourceId:
+        data.id,
+      responseStatus:
+        200,
       responseBody,
     });
-    res.json(responseBody);
+
+    return res.json(
+      responseBody
+    );
+
   } catch (error) {
-    console.error('Unexpected submit failure:', errorClassForLog(error));
-    res.status(500).json({ error: 'Could not submit your work right now. Please try again.' });
+    console.error(
+      'Unexpected submit failure:',
+      errorClassForLog(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not submit your work right now. Please try again.',
+    });
   }
 });
 
 // Upsert a submission shell for teacher review/status updates
+
 app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (req, res) => {
   try {
-    const { user, error: teacherError, status } = await requireTeacherProfile(req);
-    if (teacherError) return res.status(status).json({ error: teacherError });
+    const {
+      user,
+      error: teacherError,
+      status,
+    } = await requireTeacherProfile(req);
 
-    const assignmentId = req.params.assignmentId;
-    const studentId = req.params.studentId;
-    const readClient = getRequestScopedSupabase(req);
-    const ownedAssignment = await ensureTeacherOwnsAssignment(assignmentId, user.id, readClient);
-    if (!ownedAssignment) return res.status(403).json({ error: 'You can only review submissions for your own assignments.' });
-    const enrolledStudent = await ensureStudentBelongsToClass(ownedAssignment.class_id, studentId, readClient);
-    if (!enrolledStudent) return res.status(400).json({ error: 'That student is not enrolled in this class.' });
-    const payload = submissionPayloadWithGradedStatus({
-      ...sanitizeTeacherSubmissionPayload(req.body),
-      updated_at: new Date().toISOString(),
-    });
+    if (teacherError) {
+      return res.status(status).json({
+        error: teacherError,
+      });
+    }
 
-    let data;
-    let error = null;
+    const assignmentId =
+      req.params.assignmentId;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const { rows } = await db.query(
-          `SELECT id, status, teacher_review
-             FROM public.submissions
-            WHERE assignment_id = $1
-              AND student_id = $2
-            LIMIT 1`,
-          [assignmentId, studentId]
+    const studentId =
+      req.params.studentId;
+
+    const ownedAssignment =
+      await ensureTeacherOwnsAssignment(
+        assignmentId,
+        user.id
+      );
+
+    if (!ownedAssignment) {
+      return res.status(403).json({
+        error:
+          'You can only review submissions for your own assignments.',
+      });
+    }
+
+    const enrolledStudent =
+      await ensureStudentBelongsToClass(
+        ownedAssignment.class_id,
+        studentId
+      );
+
+    if (!enrolledStudent) {
+      return res.status(400).json({
+        error:
+          'That student is not enrolled in this class.',
+      });
+    }
+
+    const payload =
+      submissionPayloadWithGradedStatus({
+        ...sanitizeTeacherSubmissionPayload(
+          req.body
+        ),
+        updated_at:
+          new Date().toISOString(),
+      });
+
+    let existing;
+
+    try {
+      const { rows } =
+        await db.query(
+          `SELECT
+             id,
+             status,
+             teacher_review
+           FROM public.submissions
+           WHERE assignment_id = $1
+             AND student_id = $2
+           LIMIT 1`,
+          [
+            assignmentId,
+            studentId,
+          ]
         );
 
-        data = rows[0] || null;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const submissionClient = readClient;
+      existing =
+        rows[0] || null;
 
-      const result = await submissionClient
-        .from('submissions')
-        .select('id, status, teacher_review')
-        .eq('assignment_id', assignmentId)
-        .eq('student_id', studentId)
-        .maybeSingle();
-
-      data = result.data;
-      error = result.error;
+    } catch (readError) {
+      return res.status(400).json({
+        error: readError.message,
+      });
     }
 
-    if (error) {
-      return res.status(400).json({ error: error.message });
-    }
-
-    if (data?.id) {
+    if (existing?.id) {
       let updated;
-      let updateError = null;
 
-      if (USE_POSTGRES_APP_DB) {
-        try {
-          const entries =
-            buildPostgresStudentSubmissionEntries(payload);
+      try {
+        const entries =
+          buildPostgresStudentSubmissionEntries(
+            payload
+          );
 
-          if (!entries.length) {
-            return res.status(400).json({
-              error: 'No supported submission changes were provided.',
-            });
-          }
+        if (!entries.length) {
+          return res.status(400).json({
+            error:
+              'No supported submission changes were provided.',
+          });
+        }
 
-          const setSql = entries
-            .map(([key], index) => `${key} = $${index + 1}`)
+        const setSql =
+          entries
+            .map(
+              ([key], index) =>
+                `${key} = $${index + 1}`
+            )
             .join(', ');
 
-          const values = entries.map(([, value]) => value);
-          values.push(data.id);
+        const values =
+          entries.map(
+            ([, value]) => value
+          );
 
-          const { rows } = await db.query(
+        values.push(
+          existing.id
+        );
+
+        const { rows } =
+          await db.query(
             `UPDATE public.submissions
                 SET ${setSql}
               WHERE id = $${values.length}
@@ -9854,74 +11033,79 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
             values
           );
 
-          if (!rows[0]) {
-            return res.status(404).json({
-              error: 'Submission not found.',
-            });
-          }
-
-          updated = await getPostgresSubmissionWithProfile(data.id);
-        } catch (writeError) {
-          updateError = writeError;
+        if (!rows[0]) {
+          return res.status(404).json({
+            error:
+              'Submission not found.',
+          });
         }
-      } else {
-        const result = await submissionWriteWithFallback(
-          req,
-          (client) => client
-            .from('submissions')
-            .update(payload)
-            .eq('id', data.id)
-            .select('*, profiles(id, name)')
-            .single()
-        );
 
-        updated = result.data;
-        updateError = result.error;
-      }
+        updated =
+          await getPostgresSubmissionWithProfile(
+            existing.id
+          );
 
-      if (updateError) {
+      } catch (writeError) {
         return res.status(400).json({
-          error: updateError.message,
+          error:
+            writeError.message,
         });
       }
 
-      await enqueueSubmissionStatusNotifications(data, updated);
+      await enqueueSubmissionStatusNotifications(
+        existing,
+        updated
+      );
 
-      processNotificationOutbox().catch((notifyError) => {
-        console.error(
-          'Student review outbox processing failed:',
-          notifyError
+      processNotificationOutbox()
+        .catch(
+          (notifyError) => {
+            console.error(
+              'Student review outbox processing failed:',
+              notifyError
+            );
+          }
         );
-      });
 
-      return res.json({ submission: updated });
+      return res.json({
+        submission: updated,
+      });
     }
 
     let created;
-    let createError = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const entries =
-          buildPostgresStudentSubmissionEntries(payload);
+    try {
+      const entries =
+        buildPostgresStudentSubmissionEntries(
+          payload
+        );
 
-        const columns = [
-          'assignment_id',
-          'student_id',
-          ...entries.map(([key]) => key),
-        ];
+      const columns = [
+        'assignment_id',
+        'student_id',
+        ...entries.map(
+          ([key]) => key
+        ),
+      ];
 
-        const values = [
-          assignmentId,
-          studentId,
-          ...entries.map(([, value]) => value),
-        ];
+      const values = [
+        assignmentId,
+        studentId,
+        ...entries.map(
+          ([, value]) => value
+        ),
+      ];
 
-        const placeholders = values
-          .map((_, index) => `$${index + 1}`)
+      const placeholders =
+        values
+          .map(
+            (_, index) =>
+              `$${index + 1}`
+          )
           .join(', ');
 
-        const { rows } = await db.query(
+      const { rows } =
+        await db.query(
           `INSERT INTO public.submissions
             (${columns.join(', ')})
            VALUES (${placeholders})
@@ -9929,111 +11113,116 @@ app.put('/api/assignments/:assignmentId/students/:studentId/submission', async (
           values
         );
 
-        created = await getPostgresSubmissionWithProfile(
+      created =
+        await getPostgresSubmissionWithProfile(
           rows[0].id
         );
-      } catch (writeError) {
-        createError = writeError;
-      }
-    } else {
-      const result = await submissionWriteWithFallback(
-        req,
-        (client) => client
-          .from('submissions')
-          .insert({
-            assignment_id: assignmentId,
-            student_id: studentId,
-            started_at: payload.started_at || null,
-            ...payload,
-          })
-          .select('*, profiles(id, name)')
-          .single()
-      );
 
-      created = result.data;
-      createError = result.error;
-    }
-
-    if (createError) {
+    } catch (writeError) {
       return res.status(400).json({
-        error: createError.message,
+        error:
+          writeError.message,
       });
     }
 
-    await enqueueSubmissionStatusNotifications(null, created);
-    processNotificationOutbox().catch((notifyError) => {
-      console.error('Student review outbox processing failed:', notifyError);
+    await enqueueSubmissionStatusNotifications(
+      null,
+      created
+    );
+
+    processNotificationOutbox()
+      .catch(
+        (notifyError) => {
+          console.error(
+            'Student review outbox processing failed:',
+            notifyError
+          );
+        }
+      );
+
+    return res.json({
+      submission: created,
     });
-    res.json({ submission: created });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
 // Load heavy process data only when a student or owning teacher opens one
 // submission. Class/assignment lists deliberately exclude event and chat arrays.
+
 app.get('/api/submissions/:id', async (req, res) => {
   try {
-    const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const existing = await getSubmissionRecord(req.params.id, readClient);
-    if (!existing) return res.status(404).json({ error: 'Submission not found' });
+    const user =
+      await getUser(req);
 
-    if (existing.student_id !== user.id) {
-      const ownedAssignment = await ensureTeacherOwnsAssignment(
-        existing.assignment_id,
-        user.id,
-        readClient
-      );
-      if (!ownedAssignment) {
-        return res.status(403).json({ error: 'You do not have permission to view this submission.' });
-      }
-    }
-
-    let data;
-    let error = null;
-
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        data = await getPostgresSubmissionWithProfile(
-          req.params.id
-        );
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const result = await readClient
-        .from('submissions')
-        .select('*, profiles(id, name)')
-        .eq('id', req.params.id)
-        .maybeSingle();
-
-      data = result.data;
-      error = result.error;
-    }
-
-    if (error) {
-      return res
-        .status(isRlsDenial(error) ? 403 : 400)
-        .json({ error: error.message });
-    }
-
-    if (!data) {
-      return res.status(404).json({
-        error: 'Submission not found'
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
       });
     }
 
-    res.json({
+    const existing =
+      await getSubmissionRecord(
+        req.params.id
+      );
+
+    if (!existing) {
+      return res.status(404).json({
+        error:
+          'Submission not found',
+      });
+    }
+
+    if (
+      existing.student_id !== user.id
+    ) {
+      const ownedAssignment =
+        await ensureTeacherOwnsAssignment(
+          existing.assignment_id,
+          user.id
+        );
+
+      if (!ownedAssignment) {
+        return res.status(403).json({
+          error:
+            'You do not have permission to view this submission.',
+        });
+      }
+    }
+
+    const data =
+      await getPostgresSubmissionWithProfile(
+        req.params.id
+      );
+
+    if (!data) {
+      return res.status(404).json({
+        error:
+          'Submission not found',
+      });
+    }
+
+    return res.json({
       submission: {
         ...data,
-        detail_loaded: true
-      }
+        detail_loaded: true,
+      },
     });
+
   } catch (error) {
-    console.error('Unexpected submission detail failure:', errorClassForLog(error));
-    res.status(500).json({ error: 'Could not load this submission right now. Please try again.' });
+    console.error(
+      'Unexpected submission detail failure:',
+      errorClassForLog(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not load this submission right now. Please try again.',
+    });
   }
 });
 
@@ -10042,18 +11231,41 @@ app.patch('/api/submissions/:id', async (req, res) => {
   try {
     const user = await getUser(req);
     if (!user) return res.status(401).json({ error: 'Not authenticated' });
-    const readClient = getRequestScopedSupabase(req);
-    const submission = await getSubmissionRecord(req.params.id, readClient);
+    const submission =
+      await getSubmissionRecord(
+        req.params.id
+      );
     if (!submission) return res.status(404).json({ error: 'Submission not found' });
     let ownedAssignment = null;
     if (submission.student_id !== user.id) {
-      ownedAssignment = await ensureTeacherOwnsAssignment(submission.assignment_id, user.id, readClient);
+      ownedAssignment =
+        await ensureTeacherOwnsAssignment(
+          submission.assignment_id,
+          user.id
+        );
       if (!ownedAssignment) {
         return res.status(403).json({ error: 'You do not have permission to update this submission.' });
       }
     }
     const expectedUpdatedAt = req.body?.expected_updated_at;
-    if (expectedUpdatedAt && submission.updated_at && expectedUpdatedAt !== submission.updated_at) {
+
+    const expectedUpdatedAtMs = expectedUpdatedAt
+      ? Date.parse(String(expectedUpdatedAt))
+      : NaN;
+
+    const currentUpdatedAtMs = submission.updated_at instanceof Date
+      ? submission.updated_at.getTime()
+      : Date.parse(String(submission.updated_at || ''));
+
+    if (
+      expectedUpdatedAt &&
+      submission.updated_at &&
+      (
+        !Number.isFinite(expectedUpdatedAtMs) ||
+        !Number.isFinite(currentUpdatedAtMs) ||
+        expectedUpdatedAtMs !== currentUpdatedAtMs
+      )
+    ) {
       return res.status(409).json({
         error: 'Submission was modified by someone else. Please refresh and try again.',
         conflict: true,
@@ -10065,7 +11277,6 @@ app.patch('/api/submissions/:id', async (req, res) => {
       const editableAssignment = await ensureStudentCanModifyAssignment(
         submission.assignment_id,
         user.id,
-        readClient
       );
       if (!editableAssignment) {
         return res.status(409).json({
@@ -10075,7 +11286,11 @@ app.patch('/api/submissions/:id', async (req, res) => {
     }
     let payload;
     if (isStudentOwner) {
-      const built = await buildStudentPatchPayload(req.body, submission, readClient);
+      const built =
+        await buildStudentPatchPayload(
+          req.body,
+          submission
+        );
       if (built.conflict) {
         return res.status(409).json({
           error: 'Submission was modified by someone else. Please refresh and try again.',
@@ -10095,40 +11310,49 @@ app.patch('/api/submissions/:id', async (req, res) => {
       });
     }
 
-    const responseSelection = isStudentOwner
-      ? 'id, assignment_id, student_id, status, version, updated_at, submitted_at'
-      : '*, profiles(id, name)';
-
     let data;
     let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const entries =
-          buildPostgresStudentSubmissionEntries(payload);
-
-        if (!entries.length) {
-          return res.status(400).json({
-            error: 'No supported submission changes were provided.',
-          });
-        }
-
-        const setSql = entries
-          .map(([key], index) => `${key} = $${index + 1}`)
-          .join(', ');
-
-        const values = entries.map(([, value]) => value);
-
-        values.push(
-          req.params.id,
-          Number(submission.version || 1)
+    try {
+      const entries =
+        buildPostgresStudentSubmissionEntries(
+          payload
         );
 
-        const idParam = values.length - 1;
-        const versionParam = values.length;
+      if (!entries.length) {
+        return res.status(400).json({
+          error:
+            'No supported submission changes were provided.',
+        });
+      }
 
-        if (isStudentOwner) {
-          const { rows } = await db.query(
+      const setSql =
+        entries
+          .map(
+            ([key], index) =>
+              `${key} = $${index + 1}`
+          )
+          .join(', ');
+
+      const values =
+        entries.map(
+          ([, value]) => value
+        );
+
+      values.push(
+        req.params.id,
+        Number(submission.version || 1)
+      );
+
+      const idParam =
+        values.length - 1;
+
+      const versionParam =
+        values.length;
+
+      if (isStudentOwner) {
+        const { rows } =
+          await db.query(
             `UPDATE public.submissions
                 SET ${setSql}
               WHERE id = $${idParam}
@@ -10144,9 +11368,11 @@ app.patch('/api/submissions/:id', async (req, res) => {
             values
           );
 
-          data = rows[0] || null;
-        } else {
-          const { rows } = await db.query(
+        data = rows[0] || null;
+
+      } else {
+        const { rows } =
+          await db.query(
             `UPDATE public.submissions
                 SET ${setSql}
               WHERE id = $${idParam}
@@ -10155,33 +11381,22 @@ app.patch('/api/submissions/:id', async (req, res) => {
             values
           );
 
-          data = rows[0]
-            ? await getPostgresSubmissionWithProfile(rows[0].id)
+        data =
+          rows[0]
+            ? await getPostgresSubmissionWithProfile(
+                rows[0].id
+              )
             : null;
-        }
-      } catch (writeError) {
-        error = writeError;
       }
-    } else {
-      const result = await submissionWriteWithFallback(
-        req,
-        (client) => client
-          .from('submissions')
-          .update(payload)
-          .eq('id', req.params.id)
-          .eq('version', Number(submission.version || 1))
-          .select(responseSelection)
-          .maybeSingle()
-      );
 
-      data = result.data;
-      error = result.error;
+    } catch (writeError) {
+      error = writeError;
     }
 
     if (error) {
-      return res
-        .status(isRlsDenial(error) ? 403 : 400)
-        .json({ error: error.message });
+      return res.status(400).json({
+        error: error.message,
+      });
     }
 
     if (!data) {
@@ -10272,93 +11487,163 @@ app.post('/api/submissions/:id/process-analysis/recompute', async (req, res) => 
 
 app.patch('/api/submissions/:id/process-label', async (req, res) => {
   try {
-    const context = await getProcessAnalysisContext(req, req.params.id);
-    if (context.error) return res.status(context.status).json({ error: context.error });
-    if (context.viewerProfile.role !== 'teacher' && context.viewerProfile.role !== 'admin') {
-      return res.status(403).json({ error: 'Teacher access required' });
+    const context =
+      await getProcessAnalysisContext(
+        req,
+        req.params.id
+      );
+
+    if (context.error) {
+      return res
+        .status(context.status)
+        .json({
+          error: context.error,
+        });
     }
 
-    const label = String(req.body?.label || '').trim().slice(0, 80);
-    const notes = String(req.body?.notes || '').trim().slice(0, 2000);
-    if (!label) return res.status(400).json({ error: 'label is required' });
+    if (
+      context.viewerProfile.role !== 'teacher' &&
+      context.viewerProfile.role !== 'admin'
+    ) {
+      return res.status(403).json({
+        error:
+          'Teacher access required',
+      });
+    }
 
-    const analysisResult = await computeAndStoreProcessAnalysis(context, { store: true });
-    const { data, error } = await supabase
-      .from('submission_process_labels')
-      .insert({
-        submission_id: context.submission.id,
-        analysis_id: analysisResult.stored?.id || null,
-        reviewer_id: context.user.id,
-        label,
-        notes,
-        excluded_from_training: Boolean(req.body?.excludedFromTraining),
-      })
-      .select()
-      .single();
+    const label =
+      String(
+        req.body?.label || ''
+      )
+        .trim()
+        .slice(0, 80);
 
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({
+    const notes =
+      String(
+        req.body?.notes || ''
+      )
+        .trim()
+        .slice(0, 2000);
+
+    if (!label) {
+      return res.status(400).json({
+        error:
+          'label is required',
+      });
+    }
+
+    const analysisResult =
+      await computeAndStoreProcessAnalysis(
+        context,
+        {
+          store: true,
+        }
+      );
+
+    let data;
+
+    try {
+      const { rows } =
+        await db.query(
+          `INSERT INTO public.submission_process_labels
+          (
+            submission_id,
+            analysis_id,
+            reviewer_id,
+            label,
+            notes,
+            excluded_from_training
+          )
+          VALUES
+          (
+            $1,
+            $2,
+            $3,
+            $4,
+            $5,
+            $6
+          )
+          RETURNING *`,
+          [
+            context.submission.id,
+            analysisResult.stored?.id || null,
+            context.user.id,
+            label,
+            notes,
+            Boolean(
+              req.body?.excludedFromTraining
+            ),
+          ]
+        );
+
+      data =
+        rows[0] || null;
+
+    } catch (writeError) {
+      return res.status(400).json({
+        error:
+          writeError.message,
+      });
+    }
+
+    return res.json({
       label: data,
-      analysis: sanitizeProcessAnalysisForViewer(analysisResult, context.viewerProfile).analysis,
-      storageWarning: analysisResult.storageError || '',
+
+      analysis:
+        sanitizeProcessAnalysisForViewer(
+          analysisResult,
+          context.viewerProfile
+        ).analysis,
+
+      storageWarning:
+        analysisResult.storageError ||
+        '',
     });
+
   } catch (error) {
-    console.error('Process label save failed:', error);
-    res.status(500).json({ error: error.message });
+    console.error(
+      'Process label save failed:',
+      error
+    );
+
+    return res.status(500).json({
+      error: error.message,
+    });
   }
 });
 
-// ── Admin endpoints ──────────────────────────────────────────
-
-async function requireAdmin(req, res) {
-  const user = await getUser(req);
-  if (!user) { res.status(401).json({ error: 'Not authenticated' }); return null; }
-  const profile = await getProfile(user.id);
-  if (profile?.role !== 'admin') { res.status(403).json({ error: 'Admin only' }); return null; }
-  return user;
-}
-
-function isMissingProfileFlagColumn(error) {
-  return Boolean(error?.message && /is_test_account|column .* does not exist/i.test(error.message));
-}
-
-function addDefaultProfileFlags(profile) {
-  if (!profile) return profile;
-  return {
-    ...profile,
-    is_test_account: Boolean(profile.is_test_account),
-  };
-}
-
-function isStudentProfile(profile) {
-  return String(profile?.role || '').trim().toLowerCase() === 'student';
-}
 
 app.get('/api/admin/writing-process/benchmarks', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
     if (!user) return;
 
-    let assignments = [];
-    let submissions = [];
-    let profiles = [];
 
-    if (USE_POSTGRES_APP_DB) {
-      const assignmentResult = await db.query(
-        `SELECT id, language_level, class_id
-           FROM public.assignments`
+    const assignmentResult = await db.query(
+      `SELECT
+         id,
+         language_level,
+         class_id
+       FROM public.assignments`
+    );
+
+    const assignments =
+      assignmentResult.rows;
+
+    const assignmentIds =
+      assignments.map(
+        (assignment) =>
+          assignment.id
       );
 
-      assignments = assignmentResult.rows;
+    if (!assignmentIds.length) {
+      return res.json({
+        byLevel: {},
+      });
+    }
 
-      const assignmentIds =
-        assignments.map((assignment) => assignment.id);
-
-      if (!assignmentIds.length) {
-        return res.json({ byLevel: {} });
-      }
-
-      const submissionResult = await db.query(
+    const submissionResult =
+      await db.query(
         `SELECT
            id,
            assignment_id,
@@ -10372,13 +11657,16 @@ app.get('/api/admin/writing-process/benchmarks', async (req, res) => {
            submitted_at,
            started_at
          FROM public.submissions
-         WHERE assignment_id = ANY($1::uuid[])`,
+         WHERE assignment_id =
+           ANY($1::uuid[])`,
         [assignmentIds]
       );
 
-      submissions = submissionResult.rows;
+    const submissions =
+      submissionResult.rows;
 
-      const profileResult = await db.query(
+    const profileResult =
+      await db.query(
         `SELECT
            id,
            is_test_account,
@@ -10388,91 +11676,8 @@ app.get('/api/admin/writing-process/benchmarks', async (req, res) => {
             OR exclude_from_writing_behavior = TRUE`
       );
 
-      profiles = profileResult.rows;
-    } else {
-      const readClient =
-        getRequestScopedSupabase(req);
-
-      const assignmentResult =
-        await readClient
-          .from('assignments')
-          .select(
-            'id, language_level, class_id'
-          );
-
-      if (assignmentResult.error) {
-        return res.status(400).json({
-          error:
-            assignmentResult.error.message,
-        });
-      }
-
-      assignments =
-        assignmentResult.data || [];
-
-      const assignmentIds =
-        assignments.map(
-          (assignment) =>
-            assignment.id
-        );
-
-      if (!assignmentIds.length) {
-        return res.json({ byLevel: {} });
-      }
-
-      const submissionResult =
-        await readClient
-          .from('submissions')
-          .select(
-            'id, assignment_id, student_id, writing_events, keystroke_log, teacher_review, final_text, draft_text, updated_at, submitted_at, started_at'
-          )
-          .in(
-            'assignment_id',
-            assignmentIds
-          );
-
-      if (submissionResult.error) {
-        return res.status(400).json({
-          error:
-            submissionResult.error.message,
-        });
-      }
-
-      submissions =
-        submissionResult.data || [];
-
-      let profileResult =
-        await supabase
-          .from('profiles')
-          .select(
-            'id, is_test_account, exclude_from_writing_behavior'
-          )
-          .or(
-            'is_test_account.eq.true,exclude_from_writing_behavior.eq.true'
-          );
-
-      if (
-        profileResult.error &&
-        isMissingProfileFlagColumn(
-          profileResult.error
-        )
-      ) {
-        profileResult = {
-          data: [],
-          error: null,
-        };
-      }
-
-      if (profileResult.error) {
-        return res.status(400).json({
-          error:
-            profileResult.error.message,
-        });
-      }
-
-      profiles =
-        profileResult.data || [];
-    }
+    const profiles =
+      profileResult.rows;
 
     const excludedStudentIds =
       new Set(
@@ -10583,153 +11788,64 @@ app.get('/api/admin/teachers', async (req, res) => {
     const user = await requireAdmin(req, res);
     if (!user) return;
 
+
     let data = [];
     let classes = [];
     let assignments = [];
     let members = [];
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const [
-          profileResult,
-          classResult,
-          assignmentResult,
-          memberResult,
-        ] = await Promise.all([
-          db.query(
-            `SELECT
-               id,
-               name,
-               role,
-               created_at,
-               is_test_account
-             FROM public.profiles
-             WHERE role = ANY($1::text[])
-             ORDER BY created_at DESC`,
-            [['teacher', 'admin']]
-          ),
-          db.query(
-            `SELECT
-               id,
-               teacher_id,
-               name
-             FROM public.classes`
-          ),
-          db.query(
-            `SELECT
-               id,
-               class_id,
-               status
-             FROM public.assignments`
-          ),
-          db.query(
-            `SELECT
-               class_id,
-               student_id
-             FROM public.class_members`
-          ),
-        ]);
+    try {
+      const [
+        profileResult,
+        classResult,
+        assignmentResult,
+        memberResult,
+      ] = await Promise.all([
+        db.query(
+          `SELECT
+             id,
+             name,
+             email,
+             role,
+             created_at,
+             is_test_account
+           FROM public.profiles
+           WHERE role = 'teacher'
+           ORDER BY created_at DESC`
+        ),
 
-        data = profileResult.rows;
-        classes = classResult.rows;
-        assignments =
-          assignmentResult.rows;
-        members = memberResult.rows;
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const readClient =
-        getRequestScopedSupabase(req);
+        db.query(
+          `SELECT
+             id,
+             teacher_id,
+             name
+           FROM public.classes`
+        ),
 
-      let profileResult =
-        await readClient
-          .from('profiles')
-          .select(
-            'id, name, role, created_at, is_test_account'
-          )
-          .in(
-            'role',
-            ['teacher', 'admin']
-          )
-          .order(
-            'created_at',
-            { ascending: false }
-          );
+        db.query(
+          `SELECT
+             id,
+             class_id,
+             status
+           FROM public.assignments`
+        ),
 
-      if (
-        profileResult.error &&
-        isMissingProfileFlagColumn(
-          profileResult.error
-        )
-      ) {
-        const retry =
-          await readClient
-            .from('profiles')
-            .select(
-              'id, name, role, created_at'
-            )
-            .in(
-              'role',
-              ['teacher', 'admin']
-            )
-            .order(
-              'created_at',
-              { ascending: false }
-            );
+        db.query(
+          `SELECT
+             class_id,
+             student_id
+           FROM public.class_members`
+        ),
+      ]);
 
-        profileResult.data =
-          (retry.data || [])
-            .map(
-              addDefaultProfileFlags
-            );
+      data = profileResult.rows;
+      classes = classResult.rows;
+      assignments = assignmentResult.rows;
+      members = memberResult.rows;
 
-        profileResult.error =
-          retry.error;
-      }
-
-      if (profileResult.error) {
-        error =
-          profileResult.error;
-      } else {
-        data =
-          profileResult.data || [];
-
-        const [
-          classResult,
-          assignmentResult,
-          memberResult,
-        ] = await Promise.all([
-          readClient
-            .from('classes')
-            .select(
-              'id, teacher_id, name'
-            ),
-          readClient
-            .from('assignments')
-            .select(
-              'id, class_id, status'
-            ),
-          readClient
-            .from('class_members')
-            .select(
-              'class_id, student_id'
-            ),
-        ]);
-
-        classes =
-          classResult.data || [];
-        assignments =
-          assignmentResult.data || [];
-        members =
-          memberResult.data || [];
-      }
-    }
-
-    if (error) {
+    } catch (readError) {
       return res.status(400).json({
-        error: error.message,
+        error: readError.message,
       });
     }
 
@@ -10787,7 +11903,36 @@ app.get('/api/admin/teachers', async (req, res) => {
             studentCount:
               teacherStudents.size,
             classes:
-              teacherClasses,
+              teacherClasses.map((classRow) => {
+                const classAssignments =
+                  assignments.filter(
+                    (assignment) =>
+                      String(assignment.class_id) ===
+                      String(classRow.id)
+                  );
+
+                const classStudentIds =
+                  new Set(
+                    members
+                      .filter(
+                        (member) =>
+                          String(member.class_id) ===
+                          String(classRow.id)
+                      )
+                      .map(
+                        (member) =>
+                          String(member.student_id)
+                      )
+                  );
+
+                return {
+                  ...classRow,
+                  assignmentCount:
+                    classAssignments.length,
+                  studentCount:
+                    classStudentIds.size,
+                };
+              }),
           };
         }
       );
@@ -10802,183 +11947,143 @@ app.get('/api/admin/teachers', async (req, res) => {
 
 app.get('/api/admin/teachers/:teacherId/classes', async (req, res) => {
   try {
-    const user = await requireAdmin(req, res);
+    const user =
+      await requireAdmin(req, res);
+
     if (!user) return;
 
     let classes = [];
-    let error = null;
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const classResult =
-          await db.query(
-            `SELECT *
-               FROM public.classes
-              WHERE teacher_id = $1
-              ORDER BY created_at DESC`,
-            [req.params.teacherId]
+    try {
+      const classResult =
+        await db.query(
+          `SELECT *
+             FROM public.classes
+            WHERE teacher_id = $1
+            ORDER BY created_at DESC`,
+          [req.params.teacherId]
+        );
+
+      classes =
+        classResult.rows;
+
+      const classIds =
+        classes.map(
+          (classRow) =>
+            classRow.id
+        );
+
+      if (classIds.length) {
+        const [
+          memberResult,
+          assignmentCountResult,
+        ] = await Promise.all([
+          db.query(
+            `SELECT
+               cm.class_id,
+               cm.student_id,
+               CASE
+                 WHEN p.id IS NULL THEN NULL
+                 ELSE jsonb_build_object(
+                   'id', p.id,
+                   'name', p.name,
+                   'role', p.role,
+                   'is_test_account',
+                     p.is_test_account
+                 )
+               END AS profiles
+             FROM public.class_members cm
+             LEFT JOIN public.profiles p
+               ON p.id = cm.student_id
+             WHERE cm.class_id =
+               ANY($1::uuid[])`,
+            [classIds]
+          ),
+
+          db.query(
+            `SELECT
+               class_id,
+               COUNT(*)::int AS assignment_count
+             FROM public.assignments
+             WHERE class_id = ANY($1::uuid[])
+             GROUP BY class_id`,
+            [classIds]
+          ),
+        ]);
+
+        const assignmentCountsByClass =
+          new Map(
+            assignmentCountResult.rows.map(
+              (row) => [
+                String(row.class_id),
+                Number(row.assignment_count || 0),
+              ]
+            )
           );
 
-        classes =
-          classResult.rows;
+        const membersByClass =
+          new Map();
 
-        const classIds =
-          classes.map(
-            (classRow) =>
-              classRow.id
-          );
+        for (
+          const member
+          of memberResult.rows
+        ) {
+          const key =
+            String(member.class_id);
 
-        if (classIds.length) {
-          const memberResult =
-            await db.query(
-              `SELECT
-                 cm.class_id,
-                 cm.student_id,
-                 CASE
-                   WHEN p.id IS NULL THEN NULL
-                   ELSE jsonb_build_object(
-                     'id', p.id,
-                     'name', p.name,
-                     'role', p.role,
-                     'is_test_account',
-                       p.is_test_account
-                   )
-                 END AS profiles
-               FROM public.class_members cm
-               LEFT JOIN public.profiles p
-                 ON p.id = cm.student_id
-               WHERE cm.class_id = ANY($1::uuid[])`,
-              [classIds]
-            );
-
-          const membersByClass =
-            new Map();
-
-          for (
-            const member
-            of memberResult.rows
+          if (
+            !membersByClass.has(key)
           ) {
-            const key =
-              String(
-                member.class_id
-              );
-
-            if (
-              !membersByClass.has(key)
-            ) {
-              membersByClass.set(
-                key,
-                []
-              );
-            }
-
-            membersByClass
-              .get(key)
-              .push({
-                student_id:
-                  member.student_id,
-                profiles:
-                  member.profiles,
-              });
+            membersByClass.set(
+              key,
+              []
+            );
           }
 
-          classes =
-            classes.map(
-              (classRow) => ({
-                ...classRow,
-                class_members:
-                  membersByClass.get(
-                    String(
-                      classRow.id
-                    )
-                  ) || [],
-              })
-            );
+          membersByClass
+            .get(key)
+            .push({
+              student_id:
+                member.student_id,
+              profiles:
+                member.profiles,
+            });
         }
-      } catch (readError) {
-        error = readError;
-      }
-    } else {
-      const readClient =
-        getRequestScopedSupabase(req);
-
-      let result =
-        await readClient
-          .from('classes')
-          .select(
-            '*, class_members(student_id, profiles(id, name, role, is_test_account))'
-          )
-          .eq(
-            'teacher_id',
-            req.params.teacherId
-          )
-          .order(
-            'created_at',
-            { ascending: false }
-          );
-
-      if (
-        result.error &&
-        isMissingProfileFlagColumn(
-          result.error
-        )
-      ) {
-        const retry =
-          await readClient
-            .from('classes')
-            .select(
-              '*, class_members(student_id, profiles(id, name, role))'
-            )
-            .eq(
-              'teacher_id',
-              req.params.teacherId
-            )
-            .order(
-              'created_at',
-              { ascending: false }
-            );
 
         classes =
-          (
-            Array.isArray(retry.data)
-              ? retry.data
-              : []
-          ).map(
-            (classRow) => ({
-              ...classRow,
-              class_members:
-                (
-                  Array.isArray(
-                    classRow.class_members
-                  )
-                    ? classRow.class_members
-                    : []
-                ).map(
-                  (member) => ({
-                    ...member,
-                    profiles:
-                      addDefaultProfileFlags(
-                        member.profiles
-                      ),
-                  })
-                ),
-            })
+          classes.map(
+            (classRow) => {
+              const classMembers =
+                membersByClass.get(
+                  String(classRow.id)
+                ) || [];
+
+              const studentMembers =
+                classMembers.filter(
+                  (member) =>
+                    isStudentProfile(
+                      member.profiles
+                    )
+                );
+
+              return {
+                ...classRow,
+                class_members: studentMembers,
+                assignmentCount:
+                  assignmentCountsByClass.get(
+                    String(classRow.id)
+                  ) || 0,
+                studentCount:
+                  studentMembers.length,
+              };
+            }
           );
-
-        error =
-          retry.error;
-      } else {
-        classes =
-          result.data || [];
-
-        error =
-          result.error;
       }
-    }
 
-    if (error) {
+    } catch (readError) {
       return res.status(400).json({
-        error: error.message,
+        error:
+          readError.message,
       });
     }
 
@@ -11006,23 +12111,29 @@ app.get('/api/admin/teachers/:teacherId/classes', async (req, res) => {
         })
       );
 
-    res.json({ classes });
+    return res.json({
+      classes,
+    });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
 
+
 app.get('/api/admin/classes/:classId/detail', async (req, res) => {
   try {
-    const user = await requireAdmin(req, res);
+    const user =
+      await requireAdmin(req, res);
+
     if (!user) return;
 
     let assignments = [];
     let members = [];
 
-    if (USE_POSTGRES_APP_DB) {
+    try {
       const [
         assignmentResult,
         memberResult,
@@ -11034,6 +12145,7 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
             ORDER BY created_at DESC`,
           [req.params.classId]
         ),
+
         db.query(
           `SELECT
              cm.student_id,
@@ -11069,143 +12181,11 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
           .filter(
             isStudentProfile
           );
-    } else {
-      const readClient =
-        getRequestScopedSupabase(req);
 
-      const assignPromise =
-        readClient
-          .from('assignments')
-          .select('*')
-          .eq(
-            'class_id',
-            req.params.classId
-          )
-          .order(
-            'created_at',
-            { ascending: false }
-          );
-
-      let memberPromise =
-        readClient
-          .from('class_members')
-          .select(
-            'student_id, profiles(id, name, role, is_test_account)'
-          )
-          .eq(
-            'class_id',
-            req.params.classId
-          );
-
-      let [
-        assignData,
-        memberData,
-      ] = await Promise.all([
-        assignPromise,
-        memberPromise,
-      ]);
-
-      if (
-        memberData.error &&
-        isMissingProfileFlagColumn(
-          memberData.error
-        )
-      ) {
-        memberData =
-          await readClient
-            .from('class_members')
-            .select(
-              'student_id, profiles(id, name, role)'
-            )
-            .eq(
-              'class_id',
-              req.params.classId
-            );
-
-        memberData.data =
-          (
-            Array.isArray(
-              memberData.data
-            )
-              ? memberData.data
-              : []
-          ).map(
-            (member) => ({
-              ...member,
-              profiles:
-                addDefaultProfileFlags(
-                  member.profiles
-                ),
-            })
-          );
-      }
-
-      if (assignData.error) {
-        return res.status(400).json({
-          error:
-            assignData.error.message,
-        });
-      }
-
-      if (memberData.error) {
-        return res.status(400).json({
-          error:
-            memberData.error.message,
-        });
-      }
-
-      assignments =
-        assignData.data || [];
-
-      members =
-        (memberData.data || [])
-          .map(
-            (member) =>
-              member.profiles
-          )
-          .filter(
-            isStudentProfile
-          );
-
-      if (members.length) {
-        const {
-          data: consentFlags,
-        } = await supabase
-          .from('profiles')
-          .select(
-            'id, exclude_from_writing_behavior'
-          )
-          .in(
-            'id',
-            members.map(
-              (member) =>
-                member.id
-            )
-          );
-
-        const consentById =
-          new Map(
-            (consentFlags || []).map(
-              (row) => [
-                row.id,
-                Boolean(
-                  row.exclude_from_writing_behavior
-                ),
-              ]
-            )
-          );
-
-        members =
-          members.map(
-            (member) => ({
-              ...member,
-              exclude_from_writing_behavior:
-                consentById.get(
-                  member.id
-                ) || false,
-            })
-          );
-      }
+    } catch (readError) {
+      return res.status(400).json({
+        error: readError.message,
+      });
     }
 
     const assignmentIds =
@@ -11217,16 +12197,12 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
     let submissions = [];
 
     if (assignmentIds.length) {
-      const readClient =
-        getRequestScopedSupabase(req);
-
       const {
         data: submissionRows,
         error: submissionError,
       } =
         await querySubmissionsForAssignments(
-          assignmentIds,
-          readClient
+          assignmentIds
         );
 
       if (submissionError) {
@@ -11240,27 +12216,32 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
         submissionRows || [];
     }
 
-    res.json({
+    return res.json({
       assignments,
       members,
       submissions,
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
 
+
 app.patch('/api/admin/students/:studentId/flags', async (req, res) => {
   try {
-    const user = await requireAdmin(req, res);
+    const user =
+      await requireAdmin(req, res);
+
     if (!user) return;
 
     const updates = {};
 
     if (
-      req.body?.isTestAccount !== undefined
+      req.body?.isTestAccount !==
+      undefined
     ) {
       updates.is_test_account =
         Boolean(
@@ -11287,101 +12268,60 @@ app.patch('/api/admin/students/:studentId/flags', async (req, res) => {
       });
     }
 
-    let data;
-    let error = null;
+    const allowedColumns =
+      new Set([
+        'is_test_account',
+        'exclude_from_writing_behavior',
+      ]);
 
-    if (USE_POSTGRES_APP_DB) {
-      try {
-        const allowedColumns =
-          new Set([
-            'is_test_account',
-            'exclude_from_writing_behavior',
-          ]);
-
-        const entries =
-          Object.entries(updates)
-            .filter(
-              ([key]) =>
-                allowedColumns.has(key)
-            );
-
-        const values =
-          entries.map(
-            ([, value]) =>
-              value
-          );
-
-        const setParts =
-          entries.map(
-            ([key], index) =>
-              `${key} = $${index + 1}`
-          );
-
-        values.push(
-          req.params.studentId
+    const entries =
+      Object.entries(updates)
+        .filter(
+          ([key]) =>
+            allowedColumns.has(key)
         );
 
-        const { rows } =
-          await db.query(
-            `UPDATE public.profiles
-                SET ${setParts.join(', ')}
-              WHERE id = $${values.length}
-                AND role = 'student'
-            RETURNING
-              id,
-              name,
-              role,
-              is_test_account,
-              exclude_from_writing_behavior`,
-            values
-          );
+    const values =
+      entries.map(
+        ([, value]) =>
+          value
+      );
 
-        data =
-          rows[0] || null;
-      } catch (writeError) {
-        error = writeError;
-      }
-    } else {
-      const result =
-        await supabase
-          .from('profiles')
-          .update(updates)
-          .eq(
-            'id',
-            req.params.studentId
-          )
-          .eq(
-            'role',
-            'student'
-          )
-          .select(
-            'id, name, role, is_test_account, exclude_from_writing_behavior'
-          )
-          .maybeSingle();
+    const setParts =
+      entries.map(
+        ([key], index) =>
+          `${key} = $${index + 1}`
+      );
+
+    values.push(
+      req.params.studentId
+    );
+
+    let data;
+
+    try {
+      const { rows } =
+        await db.query(
+          `UPDATE public.profiles
+              SET ${setParts.join(', ')}
+            WHERE id = $${values.length}
+              AND role = 'student'
+          RETURNING
+            id,
+            name,
+            role,
+            is_test_account,
+            exclude_from_writing_behavior`,
+          values
+        );
 
       data =
-        result.data;
+        rows[0] || null;
 
-      error =
-        result.error;
-    }
-
-    if (error) {
-      if (
-        !USE_POSTGRES_APP_DB &&
-        isMissingProfileFlagColumn(error)
-      ) {
-        return res.status(400).json({
-          error:
-            'Admin test-account flags are not active yet. Apply the latest profile admin flags migration, then try again.',
-          needsMigration: true,
-          migration:
-            '20260507_profile_admin_flags.sql',
-        });
-      }
-
+    } catch (writeError) {
       return res.status(400).json({
-        error: error.message,
+        error:
+          writeError.message,
       });
     }
 
@@ -11392,64 +12332,110 @@ app.patch('/api/admin/students/:studentId/flags', async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       profile: data,
     });
+
   } catch (error) {
-    res.status(500).json({
+    return res.status(500).json({
       error: error.message,
     });
   }
 });
 
-// ── Research exports & withdrawal (IRB pilot) ────────────────
-// The research surveys are a deliberately separate, unlinkable channel.
-// Never build any join between survey codes and app accounts.
 
-function csvEscape(value) {
-  if (value === null || value === undefined) return '';
-  const text = typeof value === 'object' ? JSON.stringify(value) : String(value);
-  if (/[",\n\r]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
-  return text;
-}
 
-function rowsToCsv(rows) {
-  if (!rows.length) return '';
-  const columns = Object.keys(rows[0]);
-  const lines = [columns.join(',')];
-  for (const row of rows) {
-    lines.push(columns.map((column) => csvEscape(row[column])).join(','));
-  }
-  return `${lines.join('\n')}\n`;
-}
+const RESEARCH_EXPORT_VIEWS = new Set([
+  'v_research_process_metrics',
+  'v_research_reflections',
+]);
 
-// Streams one of the v_research_* views as a CSV download. The views already
-// exclude test accounts, consent-excluded students, and analytics-excluded
-// analyses, and key rows by the stable salted pseudonym (never name/email/id).
-async function sendResearchViewCsv(res, viewName, filename) {
-  if (USE_POSTGRES_APP_DB) {
-    return res.status(503).json({
-      error:
-        'Research exports are temporarily unavailable while the research views are being migrated.',
-    });
+function escapeResearchCsvValue(value) {
+  if (value === null || value === undefined) {
+    return '';
   }
 
-  const { data, error } = await supabase
-    .from(viewName)
-    .select('*')
-    .order('class_name', { ascending: true })
-    .order('submitted_at', { ascending: true });
-  if (error) return res.status(400).json({ error: error.message });
-  const rows = data || [];
-  if (rows.some((row) => !row.student_pseudonym)) {
-    return res.status(500).json({
-      error: 'Research pseudonym salt is missing (research_config.pseudonym_salt). Export aborted so identities are never exposed.',
-    });
+  let normalized = value;
+
+  if (value instanceof Date) {
+    normalized = value.toISOString();
+  } else if (typeof value === 'object') {
+    normalized = JSON.stringify(value);
   }
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.send(rowsToCsv(rows));
+
+  return `"${String(normalized).replace(/"/g, '""')}"`;
 }
+
+async function sendResearchViewCsv(
+  res,
+  viewName,
+  filename
+) {
+  if (!RESEARCH_EXPORT_VIEWS.has(viewName)) {
+    throw new Error(
+      'Unsupported research export view.'
+    );
+  }
+
+  const result = await db.query(
+    `SELECT * FROM public.${viewName}`
+  );
+
+  const rows = result.rows || [];
+
+  const headers =
+    Array.isArray(result.fields) &&
+    result.fields.length > 0
+      ? result.fields.map(
+          (field) => field.name
+        )
+      : Object.keys(rows[0] || {});
+
+  const csvLines = [];
+
+  if (headers.length > 0) {
+    csvLines.push(
+      headers
+        .map(escapeResearchCsvValue)
+        .join(',')
+    );
+
+    for (const row of rows) {
+      csvLines.push(
+        headers
+          .map((header) =>
+            escapeResearchCsvValue(
+              row[header]
+            )
+          )
+          .join(',')
+      );
+    }
+  }
+
+  res.setHeader(
+    'Content-Type',
+    'text/csv; charset=utf-8'
+  );
+
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="${filename}"`
+  );
+
+  res.setHeader(
+    'Cache-Control',
+    'private, no-store'
+  );
+
+  return res
+    .status(200)
+    .send(
+      '\uFEFF' +
+      csvLines.join('\r\n')
+    );
+}
+
 
 app.get('/api/admin/research/process-metrics.csv', async (req, res) => {
   try {
@@ -11475,241 +12461,473 @@ app.get('/api/admin/research/reflections.csv', async (req, res) => {
 // process analyses, and class memberships while the data is still identifiable,
 // deliberately bypassing the research archive. Logs only the fact, date, and
 // row counts — never which student or which admin.
-app.delete('/api/admin/research/students/:studentId/data', async (req, res) => {
-  try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
-        error:
-          'Research withdrawal deletion is temporarily unavailable while its archive tables are being migrated.',
+app.delete(
+  '/api/admin/research/students/:studentId/data',
+  async (req, res) => {
+    let client = null;
+
+    try {
+      const user =
+        await requireAdmin(req, res);
+
+      if (!user) {
+        return;
+      }
+
+      const studentId =
+        req.params.studentId;
+
+      client =
+        await db.pool.connect();
+
+      await client.query('BEGIN');
+
+      const profileResult =
+        await client.query(
+          `SELECT
+             id,
+             name,
+             role
+           FROM public.profiles
+           WHERE id = $1
+           LIMIT 1
+           FOR UPDATE`,
+          [studentId]
+        );
+
+      const profile =
+        profileResult.rows[0];
+
+      if (
+        !profile ||
+        profile.role !== 'student'
+      ) {
+        await client.query('ROLLBACK');
+
+        return res.status(404).json({
+          error:
+            'Student profile not found.',
+        });
+      }
+
+      if (
+        /^P1-S\d/i.test(
+          String(
+            profile.name || ''
+          ).trim()
+        )
+      ) {
+        await client.query('ROLLBACK');
+
+        return res.status(400).json({
+          error:
+            'P1-S accounts are the retained pseudonymized Phase 1 dataset and must not be deleted.',
+        });
+      }
+
+      const [
+        submissionsCountResult,
+        analysesCountResult,
+        membershipsCountResult,
+      ] =
+        await Promise.all([
+          client.query(
+            `SELECT COUNT(*)::int AS count
+               FROM public.submissions
+              WHERE student_id = $1`,
+            [studentId]
+          ),
+
+          client.query(
+            `SELECT COUNT(*)::int AS count
+               FROM public.submission_process_analyses
+              WHERE student_id = $1`,
+            [studentId]
+          ),
+
+          client.query(
+            `SELECT COUNT(*)::int AS count
+               FROM public.class_members
+              WHERE student_id = $1`,
+            [studentId]
+          ),
+        ]);
+
+      const counts = {
+        submissions_deleted:
+          submissionsCountResult
+            .rows[0]?.count || 0,
+
+        analyses_deleted:
+          analysesCountResult
+            .rows[0]?.count || 0,
+
+        memberships_deleted:
+          membershipsCountResult
+            .rows[0]?.count || 0,
+      };
+
+      // Intentionally bypass archive:
+      // this is a research-consent withdrawal.
+      //
+      // submission_process_analyses linked to
+      // submissions are removed by CASCADE.
+      await client.query(
+        `DELETE FROM public.submissions
+          WHERE student_id = $1`,
+        [studentId]
+      );
+
+      // Catch any analysis whose submission
+      // had already disappeared previously.
+      await client.query(
+        `DELETE FROM public.submission_process_analyses
+          WHERE student_id = $1`,
+        [studentId]
+      );
+
+      await client.query(
+        `DELETE FROM public.class_members
+          WHERE student_id = $1`,
+        [studentId]
+      );
+
+      await client.query(
+        `INSERT INTO public.research_deletion_log
+          (
+            submissions_deleted,
+            analyses_deleted,
+            memberships_deleted
+          )
+         VALUES ($1, $2, $3)`,
+        [
+          counts.submissions_deleted,
+          counts.analyses_deleted,
+          counts.memberships_deleted,
+        ]
+      );
+
+      await client.query('COMMIT');
+
+      return res.json({
+        ok: true,
+        deleted: counts,
       });
+
+    } catch (error) {
+      if (client) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {}
+      }
+
+      console.error(
+        '[POSTGRES RESEARCH WITHDRAWAL]',
+        safeLogError(error)
+      );
+
+      return res.status(500).json({
+        error:
+          'Research withdrawal deletion failed.',
+      });
+
+    } finally {
+      if (client) {
+        client.release();
+      }
     }
-
-    const studentId = req.params.studentId;
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('id, name, role')
-      .eq('id', studentId)
-      .maybeSingle();
-    if (profileError) return res.status(400).json({ error: profileError.message });
-    if (profile?.role !== 'student') {
-      return res.status(404).json({ error: 'Student profile not found.' });
-    }
-    if (/^P1-S\d/i.test(String(profile.name || '').trim())) {
-      return res.status(400).json({ error: 'P1-S accounts are the retained pseudonymized Phase 1 dataset and must not be deleted.' });
-    }
-
-    const [subsResult, analysesResult, membershipsResult] = await Promise.all([
-      supabase.from('submissions').select('id').eq('student_id', studentId),
-      supabase.from('submission_process_analyses').select('id').eq('student_id', studentId),
-      supabase.from('class_members').select('id').eq('student_id', studentId),
-    ]);
-    const countError = subsResult.error || analysesResult.error || membershipsResult.error;
-    if (countError) return res.status(400).json({ error: countError.message });
-
-    // Deleting submissions cascades to analyses and labels; the explicit
-    // analyses delete catches any row whose submission was already gone.
-    const submissionDelete = await supabase.from('submissions').delete().eq('student_id', studentId);
-    if (submissionDelete.error) return res.status(400).json({ error: submissionDelete.error.message });
-    const analysisDelete = await supabase.from('submission_process_analyses').delete().eq('student_id', studentId);
-    if (analysisDelete.error) return res.status(400).json({ error: analysisDelete.error.message });
-    const membershipDelete = await supabase.from('class_members').delete().eq('student_id', studentId);
-    if (membershipDelete.error) return res.status(400).json({ error: membershipDelete.error.message });
-
-    const counts = {
-      submissions_deleted: (subsResult.data || []).length,
-      analyses_deleted: (analysesResult.data || []).length,
-      memberships_deleted: (membershipsResult.data || []).length,
-    };
-    const { error: logError } = await supabase.from('research_deletion_log').insert(counts);
-    if (logError) console.error('Research deletion log write failed:', logError.message);
-    res.json({ ok: true, deleted: counts });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
-});
+);
 
 // ── Assignment types (shared org-wide list, admin-managed) ───
 
-function isMissingAssignmentTypesTable(error) {
-  const msg = String(error?.message || '');
-  return /assignment_types/.test(msg) && /(does not exist|schema cache|could not find|relation)/i.test(msg);
-}
-
 async function listAssignmentTypes() {
-  if (USE_POSTGRES_APP_DB) {
-    return [];
-  }
+  const { rows } = await db.query(
+    `SELECT
+       id,
+       value
+     FROM public.assignment_types
+     ORDER BY value ASC`
+  );
 
-  const { data } = await supabase
-    .from('assignment_types')
-    .select('id, value')
-    .order('value', { ascending: true });
-  return data || [];
+  return rows;
 }
 
-// Any authenticated user can read the shared list (teachers need it to build
-// assignments). Returns an empty list rather than erroring if the migration
-// has not been applied yet, so the built-in types still work.
+// Any authenticated user can read the shared list.
+// Built-in types are merged with this list on the client.
 app.get('/api/assignment-types', async (req, res) => {
   try {
     const user = await getUser(req);
-    if (!user) return res.status(401).json({ error: 'Not authenticated' });
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.json({ types: [] });
+    if (!user) {
+      return res.status(401).json({
+        error: 'Not authenticated',
+      });
     }
 
-    const { data, error } = await supabase
-      .from('assignment_types')
-      .select('id, value')
-      .order('value', { ascending: true });
-    if (error) {
-      if (isMissingAssignmentTypesTable(error)) return res.json({ types: [] });
-      return res.status(400).json({ error: error.message });
-    }
-    res.json({ types: data || [] });
+    const types = await listAssignmentTypes();
+
+    return res.json({
+      types,
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES ASSIGNMENT TYPES LIST]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error: 'Could not load assignment types.',
+    });
   }
 });
 
 app.post('/api/admin/assignment-types', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
-    if (!user) return;
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
+    if (!user) {
+      return;
+    }
+
+    const value = String(
+      req.body?.value || ''
+    )
+      .trim()
+      .toLowerCase()
+      .slice(0, 40);
+
+    if (value.length < 2) {
+      return res.status(400).json({
         error:
-          'Custom assignment types are temporarily unavailable while their PostgreSQL table is being migrated.',
+          'Enter an assignment type of at least 2 characters.',
       });
     }
-    const value = String(req.body?.value || '').trim().toLowerCase().slice(0, 40);
-    if (value.length < 2) {
-      return res.status(400).json({ error: 'Enter an assignment type of at least 2 characters.' });
-    }
+
     if (BASE_ASSIGNMENT_TYPES.includes(value)) {
-      return res.status(400).json({ error: `"${value}" is already a built-in assignment type.` });
+      return res.status(400).json({
+        error:
+          `"${value}" is already a built-in assignment type.`,
+      });
     }
-    const { error } = await supabase
-      .from('assignment_types')
-      .upsert({ value, created_by: user.id }, { onConflict: 'value', ignoreDuplicates: true });
-    if (error) {
-      if (isMissingAssignmentTypesTable(error)) {
-        return res.status(400).json({
-          error: 'Assignment types are not set up yet. Apply the 20260603_assignment_types migration, then try again.',
-          needsMigration: true,
-          migration: '20260603_assignment_types.sql',
-        });
-      }
-      return res.status(400).json({ error: error.message });
-    }
-    res.json({ types: await listAssignmentTypes() });
+
+    await db.query(
+      `INSERT INTO public.assignment_types
+        (
+          value,
+          created_by
+        )
+       VALUES ($1, $2)
+       ON CONFLICT (value)
+       DO NOTHING`,
+      [
+        value,
+        user.id,
+      ]
+    );
+
+    return res.json({
+      types:
+        await listAssignmentTypes(),
+    });
+
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error(
+      '[POSTGRES ASSIGNMENT TYPE CREATE]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not save assignment type.',
+    });
   }
 });
 
 app.delete('/api/admin/assignment-types/:id', async (req, res) => {
   try {
     const user = await requireAdmin(req, res);
-    if (!user) return;
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
-        error:
-          'Custom assignment types are temporarily unavailable while their PostgreSQL table is being migrated.',
-      });
-    }
-    const { error } = await supabase
-      .from('assignment_types')
-      .delete()
-      .eq('id', req.params.id);
-    if (error) return res.status(400).json({ error: error.message });
-    res.json({ types: await listAssignmentTypes() });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/api/admin/process-analytics/recompute-stale', async (req, res) => {
-  try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
-
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
-        error:
-          'Process analytics are temporarily unavailable while their PostgreSQL tables are being migrated.',
-        needsMigration: true,
-      });
+    if (!user) {
+      return;
     }
 
-    const result = await recomputeStaleProcessAnalyses({
-      limit: req.body?.limit || req.query?.limit || 50,
+    await db.query(
+      `DELETE FROM public.assignment_types
+       WHERE id = $1`,
+      [req.params.id]
+    );
+
+    return res.json({
+      types:
+        await listAssignmentTypes(),
     });
-    res.json({ result });
+
   } catch (error) {
-    const message = error.message || String(error);
-    res.status(500).json({
-      error: message,
-      needsMigration: /submission_process_analyses/i.test(message),
+    console.error(
+      '[POSTGRES ASSIGNMENT TYPE DELETE]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not delete assignment type.',
     });
   }
 });
 
-app.get('/api/admin/process-analytics', async (req, res) => {
-  try {
-    const user = await requireAdmin(req, res);
-    if (!user) return;
+app.post(
+  '/api/admin/process-analytics/recompute-stale',
+  async (req, res) => {
+    try {
+      const user =
+        await requireAdmin(req, res);
 
-    if (USE_POSTGRES_APP_DB) {
-      return res.status(503).json({
-        error:
-          'Process analytics are temporarily unavailable while their PostgreSQL tables are being migrated.',
-        needsMigration: true,
+      if (!user) {
+        return;
+      }
+
+      const result =
+        await recomputeStaleProcessAnalyses({
+          limit:
+            req.body?.limit ||
+            req.query?.limit ||
+            50,
+        });
+
+      return res.json({
+        result,
+      });
+
+    } catch (error) {
+      const message =
+        error.message ||
+        String(error);
+
+      return res.status(500).json({
+        error: message,
+        needsMigration:
+          /submission_process_analyses/i
+            .test(message),
       });
     }
-
-    const { data: analyses, error } = await supabase
-      .from('submission_process_analyses')
-      .select('id, submission_id, assignment_id, class_id, student_id, analysis_version, process_status, excluded_from_analytics, exclusion_sources, calculated_at');
-    if (error) {
-      return res.status(400).json({
-        error: error.message,
-        needsMigration: /submission_process_analyses/i.test(error.message || ''),
-      });
-    }
-
-    const rows = analyses || [];
-    const summary = {
-      totalAnalyses: rows.length,
-      includedAnalyses: rows.filter((row) => !row.excluded_from_analytics).length,
-      excludedAnalyses: rows.filter((row) => row.excluded_from_analytics).length,
-      versions: {},
-      statuses: {},
-      exclusionSources: {},
-      cohortSampleSize: rows.filter((row) => !row.excluded_from_analytics).length,
-    };
-
-    rows.forEach((row) => {
-      const version = row.analysis_version || 'unknown';
-      const status = row.process_status || 'unknown';
-      summary.versions[version] = (summary.versions[version] || 0) + 1;
-      summary.statuses[status] = (summary.statuses[status] || 0) + 1;
-      (Array.isArray(row.exclusion_sources) ? row.exclusion_sources : []).forEach((source) => {
-        summary.exclusionSources[source] = (summary.exclusionSources[source] || 0) + 1;
-      });
-    });
-
-    res.json({ summary, analyses: rows });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
   }
-});
+);
+
+
+app.get(
+  '/api/admin/process-analytics',
+  async (req, res) => {
+    try {
+      const user =
+        await requireAdmin(req, res);
+
+      if (!user) {
+        return;
+      }
+
+      const { rows } =
+        await db.query(
+          `SELECT
+             id,
+             submission_id,
+             assignment_id,
+             class_id,
+             student_id,
+             analysis_version,
+             process_status,
+             excluded_from_analytics,
+             exclusion_sources,
+             calculated_at
+           FROM public.submission_process_analyses
+           ORDER BY calculated_at DESC`
+        );
+
+      const summary = {
+        totalAnalyses:
+          rows.length,
+
+        includedAnalyses:
+          rows.filter(
+            (row) =>
+              !row.excluded_from_analytics
+          ).length,
+
+        excludedAnalyses:
+          rows.filter(
+            (row) =>
+              row.excluded_from_analytics
+          ).length,
+
+        versions: {},
+        statuses: {},
+        exclusionSources: {},
+
+        cohortSampleSize:
+          rows.filter(
+            (row) =>
+              !row.excluded_from_analytics
+          ).length,
+      };
+
+      rows.forEach((row) => {
+        const version =
+          row.analysis_version ||
+          'unknown';
+
+        const status =
+          row.process_status ||
+          'unknown';
+
+        summary.versions[version] =
+          (
+            summary.versions[version] ||
+            0
+          ) + 1;
+
+        summary.statuses[status] =
+          (
+            summary.statuses[status] ||
+            0
+          ) + 1;
+
+        (
+          Array.isArray(
+            row.exclusion_sources
+          )
+            ? row.exclusion_sources
+            : []
+        ).forEach((source) => {
+          summary.exclusionSources[source] =
+            (
+              summary
+                .exclusionSources[source] ||
+              0
+            ) + 1;
+        });
+      });
+
+      return res.json({
+        summary,
+        analyses: rows,
+      });
+
+    } catch (error) {
+      const message =
+        error.message ||
+        String(error);
+
+      return res.status(500).json({
+        error: message,
+        needsMigration:
+          /submission_process_analyses/i
+            .test(message),
+      });
+    }
+  }
+);
 
 // ── Teacher AI submission review endpoint ─────────────────────────────
 

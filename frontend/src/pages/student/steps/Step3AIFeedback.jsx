@@ -1093,14 +1093,31 @@ function InlineFeedbackEditor({
   function handleIssueOpen(event) {
     const mark = event.target.closest("mark[data-feedback-issue-id]");
     if (!mark) return;
+
     const issue = safeArray(issues).find(
       (item, index) =>
         String(item?.id || `issue-${index}`) === mark.dataset.feedbackIssueId
     );
-    if (issue) {
-      setHoveredFeedback(null);
-      onSelectIssue(issue);
-    }
+
+    if (!issue) return;
+
+    const rect = mark.getBoundingClientRect();
+    const width = Math.min(320, Math.max(240, window.innerWidth - 32));
+
+    setHoveredFeedback({
+      issue,
+      number: mark.dataset.feedbackNumber,
+      width,
+      left: Math.max(
+        16,
+        Math.min(rect.left, window.innerWidth - width - 16)
+      ),
+      top: Math.min(
+        window.innerHeight - 140,
+        rect.bottom + 8
+      ),
+      sticky: true,
+    });
   }
 
   function handleFeedbackHover(event) {
@@ -1116,12 +1133,23 @@ function InlineFeedbackEditor({
     if (!issue) return;
     const rect = mark.getBoundingClientRect();
     const width = Math.min(320, Math.max(240, window.innerWidth - 32));
-    setHoveredFeedback({
-      issue,
-      number: mark.dataset.feedbackNumber,
-      width,
-      left: Math.max(16, Math.min(rect.left, window.innerWidth - width - 16)),
-      top: Math.min(window.innerHeight - 120, rect.bottom + 8),
+    setHoveredFeedback((current) => {
+      if (current?.sticky) return current;
+
+      return {
+        issue,
+        number: mark.dataset.feedbackNumber,
+        width,
+        left: Math.max(
+          16,
+          Math.min(rect.left, window.innerWidth - width - 16)
+        ),
+        top: Math.min(
+          window.innerHeight - 120,
+          rect.bottom + 8
+        ),
+        sticky: false,
+      };
     });
   }
 
@@ -1139,29 +1167,50 @@ function InlineFeedbackEditor({
       onInput={handleInput}
       onClick={handleIssueOpen}
       onMouseOver={handleFeedbackHover}
-      onMouseLeave={() => setHoveredFeedback(null)}
+      onMouseLeave={() =>
+        setHoveredFeedback((current) =>
+          current?.sticky ? current : null
+        )
+      }
       onKeyDown={(event) => {
         if ((event.key === "Enter" || event.key === " ") && event.target.matches("mark[data-feedback-issue-id]")) {
           event.preventDefault();
           handleIssueOpen(event);
         }
       }}
-      className="min-h-[360px] flex-1 scroll-smooth overflow-y-auto overscroll-contain whitespace-pre-wrap bg-[#F8FAFC] px-6 py-6 text-[15px] leading-8 text-slate-800 outline-none transition-all [scrollbar-color:rgb(148_163_184)_transparent] [scrollbar-gutter:stable] [scrollbar-width:thin] empty:before:pointer-events-none empty:before:text-slate-400 empty:before:content-[attr(data-placeholder)] focus:bg-white"
+      className="min-h-0 flex-1 scroll-smooth scroll-py-12 overflow-y-auto overscroll-contain whitespace-pre-wrap bg-[#F8FAFC] px-6 py-6 pb-12 text-[15px] leading-8 text-slate-800 outline-none transition-all [scrollbar-color:rgb(148_163_184)_transparent] [scrollbar-gutter:stable] [scrollbar-width:thin] empty:before:pointer-events-none empty:before:text-slate-400 empty:before:content-[attr(data-placeholder)] focus:bg-white"
     />
     {hoveredFeedback &&
         createPortal(
           <div
             role="tooltip"
-            className="pointer-events-none fixed z-[2147483647] rounded-xl border border-amber-200 bg-white px-3 py-2.5 shadow-xl shadow-slate-950/10"
+            className={`fixed z-[2147483647] rounded-xl border border-amber-200 bg-white px-3 py-2.5 shadow-xl shadow-slate-950/10 ${
+              hoveredFeedback.sticky
+                ? "pointer-events-auto"
+                : "pointer-events-none"
+            }`}
             style={{
               left: `${hoveredFeedback.left}px`,
               top: `${hoveredFeedback.top}px`,
               width: `${hoveredFeedback.width}px`,
             }}
           >
-            <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
-              Feedback note {hoveredFeedback.number}
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
+                Feedback note {hoveredFeedback.number}
+              </p>
+
+              {hoveredFeedback.sticky && (
+                <button
+                  type="button"
+                  onClick={() => setHoveredFeedback(null)}
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close feedback note"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
             <p className="mt-1 text-[11px] leading-5 text-slate-700">
               {hoveredFeedback.issue.problem}
             </p>
@@ -1602,7 +1651,7 @@ export default function Step3AIFeedback() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 pb-1">
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="shrink-0 border-b border-slate-100 px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -1702,29 +1751,6 @@ export default function Step3AIFeedback() {
           onChange={handleFinalTextChange}
           onSelectIssue={handleSelectIssue}
         />
-
-        {selectedIssueId && (
-          <div className="shrink-0 border-t border-amber-200 bg-amber-50 px-5 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-amber-700">
-                  Feedback on this highlight
-                </p>
-                <p className="mt-1 text-xs leading-relaxed text-amber-950">
-                  {issues.find((issue) => String(issue?.id || "") === selectedIssueId)?.problem}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedIssueId("")}
-                aria-label="Close inline feedback"
-                className="rounded-lg p-1 text-amber-700 hover:bg-amber-100"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        )}
 
         {generalIssues.length > 0 && (
           <div className="shrink-0 border-t border-slate-100 bg-white px-5 py-3">

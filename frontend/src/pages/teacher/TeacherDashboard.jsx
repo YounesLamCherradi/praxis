@@ -464,7 +464,7 @@ export default function TeacherDashboard() {
         enrollments: [...unrelatedLocalEnrollments, ...backendEnrollments],
       });
     } catch (error) {
-      console.error("Could not refresh course enrollments from Supabase:", error);
+      console.error("Could not refresh course enrollments:", error);
       setEnrollments(localEnrollments);
     }
   }
@@ -1432,7 +1432,7 @@ export default function TeacherDashboard() {
     setIsRemoveCourseConfirmOpen(false);
     closeCourseManager();
     } catch (error) {
-      console.error("Failed to remove course from Supabase:", error);
+      console.error("Failed to remove course from the database:", error);
       setManagerError(
         error?.message ||
           "The course could not be removed. Nothing was changed; please try again."

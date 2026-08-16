@@ -175,7 +175,7 @@ export default function ForgotPasswordDialog({ open, onClose }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 backdrop-blur-sm p-4">
       <div className="w-full max-w-md rounded-3xl bg-white border border-slate-200 shadow-2xl p-6">
-        <h3 className="text-xl font-serif font-black text-slate-950">Reset password</h3>
+        <h3 className="text-xl font-bold text-slate-950">Reset password</h3>
         <p className="text-xs text-blue-700 mt-1">Use your email verification code to set a new password.</p>
 
         {error && (
@@ -195,11 +195,14 @@ export default function ForgotPasswordDialog({ open, onClose }) {
         {step === "request" && (
           <form onSubmit={handleRequestCode} className="mt-5 space-y-4">
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wide text-slate-600 font-bold">Campus email</label>
+              <label htmlFor="reset-email" className="block text-sm font-semibold text-slate-700">Campus email</label>
               <div className="mt-1.5 relative">
                 <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id="reset-email"
                   type="email"
+                  name="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -223,11 +226,14 @@ export default function ForgotPasswordDialog({ open, onClose }) {
         {step === "reset" && (
           <form onSubmit={handleResetPassword} className="mt-5 space-y-4">
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wide text-slate-600 font-bold">Verification code</label>
+              <label htmlFor="reset-code" className="block text-sm font-semibold text-slate-700">Verification code</label>
               <div className="mt-1.5 relative">
                 <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
+                  id="reset-code"
                   type="text"
+                  name="one-time-code"
+                  autoComplete="one-time-code"
                   inputMode="numeric"
                   maxLength={6}
                   value={code}
@@ -240,9 +246,12 @@ export default function ForgotPasswordDialog({ open, onClose }) {
             </div>
 
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wide text-slate-600 font-bold">New password</label>
+              <label htmlFor="reset-password" className="block text-sm font-semibold text-slate-700">New password</label>
               <input
+                id="reset-password"
                 type="password"
+                name="new-password"
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -271,9 +280,12 @@ export default function ForgotPasswordDialog({ open, onClose }) {
             </div>
 
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wide text-slate-600 font-bold">Confirm new password</label>
+              <label htmlFor="reset-password-confirmation" className="block text-sm font-semibold text-slate-700">Confirm new password</label>
               <input
+                id="reset-password-confirmation"
                 type="password"
+                name="new-password-confirmation"
+                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
@@ -286,7 +298,7 @@ export default function ForgotPasswordDialog({ open, onClose }) {
                 type="button"
                 onClick={handleResend}
                 disabled={loading || waitSeconds > 0}
-                className="font-bold text-blue-700 disabled:text-slate-400"
+                className="inline-flex min-h-11 items-center font-bold text-blue-700 disabled:text-slate-400"
               >
                 {waitSeconds > 0 ? `Resend in ${waitSeconds}s` : "Resend code"}
               </button>
@@ -318,7 +330,7 @@ export default function ForgotPasswordDialog({ open, onClose }) {
         <button
           type="button"
           onClick={closeAndReset}
-          className="mt-4 w-full text-xs text-slate-500 hover:text-slate-700"
+          className="mt-4 min-h-11 w-full text-xs text-slate-500 hover:text-slate-700"
         >
           Cancel
         </button>

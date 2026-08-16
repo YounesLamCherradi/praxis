@@ -1265,11 +1265,11 @@ export function TeacherWorkspaceProvider({ children }) {
             if (active) setRubrics(rows.map(normalizeRubricSchema));
           })
           .catch((error) => {
-            console.error("Could not synchronize reusable rubrics with Supabase:", error);
+            console.error("Could not synchronize reusable rubrics with the database:", error);
           });
       } catch (error) {
-        // Keep the local workspace usable when Supabase is temporarily unavailable.
-        console.error("Could not synchronize courses with Supabase:", error);
+        // Keep the local workspace usable when the backend is temporarily unavailable.
+        console.error("Could not synchronize courses with the database:", error);
       } finally {
         if (active) setIsWorkspaceLoading(false);
       }
@@ -1283,7 +1283,7 @@ export function TeacherWorkspaceProvider({ children }) {
 
   /*
    * The application authenticates through the server's secure session cookie,
-   * so the browser cannot safely subscribe to Supabase tables directly.
+   * so the browser does not access database tables directly.
    * Refresh the compact, teacher-scoped submission feed while the workspace is
    * visible. One consolidated request avoids the previous per-course N+1 load.
    */

@@ -1,5 +1,4 @@
 const MAX_BUG_REPORT_ATTACHMENT_BYTES = 3 * 1024 * 1024;
-const BUG_REPORT_BUCKET = 'bug-report-attachments';
 const ALLOWED_BUG_REPORT_MIME_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -80,7 +79,6 @@ function decodeBugReportAttachment(attachment) {
 }
 
 module.exports = {
-  BUG_REPORT_BUCKET,
   MAX_BUG_REPORT_ATTACHMENT_BYTES,
   decodeBugReportAttachment,
 };

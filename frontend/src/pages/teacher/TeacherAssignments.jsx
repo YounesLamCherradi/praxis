@@ -21,6 +21,32 @@ import {
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
+const ASSIGNMENTS_PER_PAGE = 8;
+
+function getPaginationItems(currentPage, totalPages) {
+  if (totalPages <= 7) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
+  const pages = new Set([
+    1,
+    totalPages,
+    currentPage - 1,
+    currentPage,
+    currentPage + 1,
+  ]);
+  const orderedPages = [...pages]
+    .filter((page) => page >= 1 && page <= totalPages)
+    .sort((a, b) => a - b);
+
+  return orderedPages.flatMap((page, index) => {
+    const previousPage = orderedPages[index - 1];
+    return previousPage && page - previousPage > 1
+      ? [`ellipsis-${previousPage}-${page}`, page]
+      : [page];
+  });
+}
+
 const CreateAssignmentModal = lazy(
   () => import("../../components/teacher/CreateAssignmentModal")
 );
@@ -45,19 +71,20 @@ function WorkspaceLoading() {
 // --- Normalize Status and Submissions Helpers ---
 
 function normalizeAssignmentStatus(assignment) {
-  const value = String(
+  const rawValue =
     assignment?.status ||
       assignment?.publicationStatus ||
       assignment?.state ||
-      ""
-  ).toLowerCase();
+      "";
+  const value = String(rawValue).toLowerCase();
 
-  if (
-    value === "published" ||
-    value === "active" ||
-    assignment?.isPublished === true ||
-    assignment?.published === true
-  ) {
+  if (value) {
+    return value === "published" || value === "active"
+      ? "Published"
+      : "Draft";
+  }
+
+  if (assignment?.isPublished === true || assignment?.published === true) {
     return "Published";
   }
   return "Draft";
@@ -332,11 +359,21 @@ export default function TeacherAssignments({
   const [assignmentSearch, setAssignmentSearch] = useState("");
   const [assignmentStatusFilter, setAssignmentStatusFilter] = useState("All");
   const [assignmentGradingFilter, setAssignmentGradingFilter] = useState("All");
+  const [assignmentPage, setAssignmentPage] = useState(1);
   const [statusChangeAssignmentId, setStatusChangeAssignmentId] = useState("");
   const [statusChangeMessage, setStatusChangeMessage] = useState("");
   const [assignmentPendingDelete, setAssignmentPendingDelete] = useState(null);
   const [isDeletingAssignment, setIsDeletingAssignment] = useState(false);
   const appliedWorkspaceRequestRef = useRef(0);
+  const reviewReturnClassIdRef = useRef("");
+
+  function closeStudentProgress() {
+    setSelectedAssignmentId("");
+    setSubmissionStatusFilter("All");
+    setSelectedAssignment(null);
+    setSubmissionFilterAssignment(null);
+    setSelectedClassId(reviewReturnClassIdRef.current);
+  }
 
   async function confirmAssignmentDelete() {
     if (!assignmentPendingDelete?.id || isDeletingAssignment) return;
@@ -602,6 +639,7 @@ export default function TeacherAssignments({
 
     if (!relatedClass) return;
 
+    reviewReturnClassIdRef.current = selectedClassId;
     setSelectedClassId(String(relatedClass.id));
     setSelectedAssignmentId(String(firstPendingAssignment.id));
     setSubmissionStatusFilter("Pending");
@@ -619,6 +657,7 @@ export default function TeacherAssignments({
       <Suspense fallback={<WorkspaceLoading />}>
         <CreateAssignmentModal
           classes={classes}
+          assignments={assignments}
           defaultClassId={
             selectedClassId ||
             workspaceRequest?.courseId ||
@@ -653,6 +692,7 @@ export default function TeacherAssignments({
       <Suspense fallback={<WorkspaceLoading />}>
         <CreateAssignmentModal
           classes={classes}
+          assignments={assignments}
           editingAssignment={selectedAssignment}
           onCreate={addAssignment}
           onUpdate={async (updatedAssignment) => {
@@ -668,6 +708,7 @@ export default function TeacherAssignments({
             );
             setSelectedAssignmentId("");
             setSubmissionStatusFilter("All");
+            return savedAssignment;
           }}
           onClose={() => {
             setSelectedAssignment(null);
@@ -779,22 +820,37 @@ export default function TeacherAssignments({
     }
     return true;
   });
+  const assignmentPageCount = Math.max(
+    1,
+    Math.ceil(filteredAssignments.length / ASSIGNMENTS_PER_PAGE)
+  );
+  const visibleAssignmentPage = Math.min(assignmentPage, assignmentPageCount);
+  const assignmentPageStart =
+    (visibleAssignmentPage - 1) * ASSIGNMENTS_PER_PAGE;
+  const paginatedAssignments = filteredAssignments.slice(
+    assignmentPageStart,
+    assignmentPageStart + ASSIGNMENTS_PER_PAGE
+  );
+  const paginationItems = getPaginationItems(
+    visibleAssignmentPage,
+    assignmentPageCount
+  );
 
   return (
     <>
-      <div className="space-y-6">
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+      <div className="space-y-4">
+        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="mb-2 inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">
+              <div className="mb-1 inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">
                 <Layers className="h-3 w-3" />
                 Assignments
               </div>
               <h2 className="text-xl font-bold text-slate-950">
                 Your assignments
               </h2>
-              <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-500">
-                Choose an assignment to see student progress and review submissions.
+              <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-slate-500">
+                Select any assignment row to view student progress and review submissions.
               </p>
             </div>
 
@@ -832,21 +888,25 @@ export default function TeacherAssignments({
             </div>
           </div>
 
-          {activeClasses.length > 1 ? (
-            <label className="space-y-1.5">
-              <span className="text-[10px] font-bold text-slate-400">
-                Course
-              </span>
+          <div className={`mt-3 grid grid-cols-1 gap-2 border-t border-slate-100 pt-3 ${
+            activeClasses.length > 1
+              ? "md:grid-cols-2 xl:grid-cols-[280px_minmax(240px,1fr)_160px_180px]"
+              : "md:grid-cols-[minmax(240px,1fr)_160px_180px]"
+          }`}>
+            {activeClasses.length > 1 && (
+              <label>
+                <span className="sr-only">Course</span>
               <select
                 value={selectedClassId}
                 onChange={(e) => {
                   setSelectedClassId(e.target.value);
+                  setAssignmentPage(1);
                   setSelectedAssignmentId("");
                   setSubmissionStatusFilter("All");
                   setSelectedAssignment(null);
                   setSubmissionFilterAssignment(null);
                 }}
-                className="mt-1.5 w-full max-w-md rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-xs font-bold text-slate-800 transition-all focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
               >
                 <option value="">All courses</option>
                 {activeClasses.map((cls) => (
@@ -855,22 +915,18 @@ export default function TeacherAssignments({
                   </option>
                 ))}
               </select>
-            </label>
-          ) : selectedClass ? (
-            <div className="mt-5 inline-flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-xs font-bold text-blue-700">
-              <BookOpen className="h-4 w-4" />
-              {selectedClass.name}
-            </div>
-          ) : null}
-
-          <div className="mt-5 grid grid-cols-1 gap-3 border-t border-slate-100 pt-5 md:grid-cols-[minmax(220px,1fr)_180px_190px]">
+              </label>
+            )}
             <label className="relative">
               <span className="sr-only">Search assignments</span>
               <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 type="search"
                 value={assignmentSearch}
-                onChange={(event) => setAssignmentSearch(event.target.value)}
+                onChange={(event) => {
+                  setAssignmentSearch(event.target.value);
+                  setAssignmentPage(1);
+                }}
                 placeholder="Search assignments..."
                 className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-xs text-slate-800 outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
               />
@@ -878,7 +934,10 @@ export default function TeacherAssignments({
 
             <select
               value={assignmentStatusFilter}
-              onChange={(event) => setAssignmentStatusFilter(event.target.value)}
+              onChange={(event) => {
+                setAssignmentStatusFilter(event.target.value);
+                setAssignmentPage(1);
+              }}
               aria-label="Filter by publication status"
               className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
             >
@@ -889,7 +948,10 @@ export default function TeacherAssignments({
 
             <select
               value={assignmentGradingFilter}
-              onChange={(event) => setAssignmentGradingFilter(event.target.value)}
+              onChange={(event) => {
+                setAssignmentGradingFilter(event.target.value);
+                setAssignmentPage(1);
+              }}
               aria-label="Filter by grading progress"
               className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
             >
@@ -899,6 +961,13 @@ export default function TeacherAssignments({
               <option value="No submissions">No submissions</option>
             </select>
           </div>
+
+          {activeClasses.length === 1 && selectedClass && (
+            <p className="mt-2 flex items-center gap-1.5 text-[10px] font-semibold text-slate-500">
+              <BookOpen className="h-3.5 w-3.5 text-blue-500" />
+              Showing {selectedClass.name}
+            </p>
+          )}
         </section>
 
         {statusChangeMessage && (
@@ -937,7 +1006,7 @@ export default function TeacherAssignments({
               </div>
             ) : (
               <div className="space-y-2">
-                {filteredAssignments.map((assignment) => {
+                {paginatedAssignments.map((assignment) => {
                   const assignmentStatus = normalizeAssignmentStatus(assignment);
                   const isDraft = assignmentStatus !== "Published";
                   const lockDraftActions =
@@ -960,6 +1029,10 @@ export default function TeacherAssignments({
                   );
 
                   const openReview = () => {
+                    reviewReturnClassIdRef.current = selectedClassId;
+                    if (relatedClass) {
+                      setSelectedClassId(String(relatedClass.id));
+                    }
                     setSelectedAssignmentId(String(assignment.id));
                     setSubmissionStatusFilter("All");
                     setSelectedAssignment(assignment);
@@ -978,13 +1051,13 @@ export default function TeacherAssignments({
                           openReview();
                         }
                       }}
-                      className="group flex cursor-pointer flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 xl:flex-row xl:items-center"
+                      className="group flex cursor-pointer flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 xl:flex-row xl:items-center"
                       aria-label={`Open ${assignment.title || "assignment"} student progress`}
                     >
                       <div className="flex min-w-0 items-start justify-between gap-4 xl:w-[32%]">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-base font-bold text-slate-900">
+                            <h3 className="truncate text-sm font-bold text-slate-900">
                               {assignment.title || "Untitled Assignment"}
                             </h3>
                             <span
@@ -995,7 +1068,7 @@ export default function TeacherAssignments({
                               {assignmentStatus}
                             </span>
                           </div>
-                          <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
+                          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
                             <Calendar className="h-3.5 w-3.5 text-slate-400" />
                             Due {getDueDateLabel(assignment)}
                           </p>
@@ -1006,7 +1079,7 @@ export default function TeacherAssignments({
                           )}
                         </div>
                         <div
-                          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white"
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white"
                           title="View student progress"
                           aria-label="View student progress"
                         >
@@ -1020,8 +1093,32 @@ export default function TeacherAssignments({
                         <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
                       </div>
 
-                      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-100 pt-3 xl:w-[270px] xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0">
+                      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-2 xl:w-[410px] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
                         <div className="flex flex-wrap gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              handleToggleAssignmentStatus(assignment);
+                            }}
+                            disabled={
+                              lockDraftActions ||
+                              statusChangeAssignmentId === String(assignment.id)
+                            }
+                            className="rounded-lg border border-blue-600 bg-blue-600 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-sm transition-colors hover:border-blue-700 hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
+                          >
+                            {assignmentStatus === "Published" ? "Unpublish" : "Publish"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openReview();
+                            }}
+                            className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                          >
+                            Review Submissions
+                          </button>
                           <button
                             type="button"
                             onClick={(event) => {
@@ -1049,17 +1146,6 @@ export default function TeacherAssignments({
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation();
-                              handleToggleAssignmentStatus(assignment);
-                            }}
-                            disabled={lockDraftActions || Boolean(statusChangeAssignmentId)}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-                          >
-                            {assignmentStatus === "Published" ? "Unpublish" : "Publish"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
                               setAssignmentPendingDelete(assignment);
                             }}
                             className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-600 transition-colors hover:bg-red-100"
@@ -1071,6 +1157,84 @@ export default function TeacherAssignments({
                     </article>
                   );
                 })}
+
+                {assignmentPageCount > 1 && (
+                  <nav
+                    aria-label="Assignment pages"
+                    className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <p className="text-xs font-medium text-slate-500">
+                      Showing{" "}
+                      <span className="font-bold text-slate-700">
+                        {assignmentPageStart + 1}–
+                        {Math.min(
+                          assignmentPageStart + ASSIGNMENTS_PER_PAGE,
+                          filteredAssignments.length
+                        )}
+                      </span>{" "}
+                      of{" "}
+                      <span className="font-bold text-slate-700">
+                        {filteredAssignments.length}
+                      </span>{" "}
+                      assignments
+                    </p>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={visibleAssignmentPage === 1}
+                        onClick={() =>
+                          setAssignmentPage((page) => Math.max(1, page - 1))
+                        }
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:bg-white disabled:hover:text-slate-600"
+                      >
+                        Previous
+                      </button>
+
+                      {paginationItems.map((item) =>
+                        typeof item === "number" ? (
+                          <button
+                            key={item}
+                            type="button"
+                            aria-label={`Go to assignment page ${item}`}
+                            aria-current={
+                              item === visibleAssignmentPage ? "page" : undefined
+                            }
+                            onClick={() => setAssignmentPage(item)}
+                            className={`h-8 min-w-8 rounded-lg px-2 text-xs font-bold transition-colors ${
+                              item === visibleAssignmentPage
+                                ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
+                                : "border border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                            }`}
+                          >
+                            {item}
+                          </button>
+                        ) : (
+                          <span
+                            key={item}
+                            aria-hidden="true"
+                            className="px-1 text-xs font-bold text-slate-400"
+                          >
+                            …
+                          </span>
+                        )
+                      )}
+
+                      <button
+                        type="button"
+                        disabled={visibleAssignmentPage === assignmentPageCount}
+                        onClick={() =>
+                          setAssignmentPage((page) =>
+                            Math.min(assignmentPageCount, page + 1)
+                          )
+                        }
+                        className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-200 disabled:hover:bg-white disabled:hover:text-slate-600"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </nav>
+                )}
               </div>
             )}
         </section>
@@ -1141,16 +1305,9 @@ export default function TeacherAssignments({
       {activeAssignment &&
         createPortal(
           <div className="fixed inset-0 z-[2147483646] flex items-center justify-center overflow-y-auto p-3 sm:p-5">
-            <button
-              type="button"
-              aria-label="Close student progress"
+            <div
+              aria-hidden="true"
               className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
-              onClick={() => {
-                setSelectedAssignmentId("");
-                setSubmissionStatusFilter("All");
-                setSelectedAssignment(null);
-                setSubmissionFilterAssignment(null);
-              }}
             />
 
             <div className="relative z-10 my-4 flex max-h-[94vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F8FAFC] shadow-2xl">
@@ -1166,12 +1323,7 @@ export default function TeacherAssignments({
 
                 <button
                   type="button"
-                  onClick={() => {
-                    setSelectedAssignmentId("");
-                    setSubmissionStatusFilter("All");
-                    setSelectedAssignment(null);
-                    setSubmissionFilterAssignment(null);
-                  }}
+                  onClick={closeStudentProgress}
                   className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
                 >
                   <ArrowLeft className="h-4 w-4" />
@@ -1238,11 +1390,11 @@ function AssignmentCount({ label, value, tone = "slate" }) {
 
   return (
     <div
-      className={`flex min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-2 ${
+      className={`flex min-h-8 items-center gap-1.5 rounded-lg border px-2.5 py-1.5 ${
         tones[tone] || tones.slate
       }`}
     >
-      <p className="text-sm font-black leading-none">{value}</p>
+      <p className="text-xs font-black leading-none">{value}</p>
       <p className="text-[9px] font-bold leading-tight text-slate-500">
         {label}
       </p>

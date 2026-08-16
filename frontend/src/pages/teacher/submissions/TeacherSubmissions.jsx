@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
-  CheckCircle2,
   CheckSquare,
   Printer,
   ClipboardList,
@@ -15,7 +14,6 @@ import {
   BarChart3,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Eye,
   FileText,
   Filter,
@@ -25,7 +23,6 @@ import {
   Search,
   Users,
   X,
-  XCircle,
   ChevronDown,
 } from "lucide-react";
 import { getSubmissionDetails } from "../../../services/teacherApi";
@@ -155,25 +152,21 @@ const QUICK_STATUS_CONTROLS = [
   {
     label: "Submitted",
     value: "Submitted",
-    icon: CheckCircle2,
     requireText: true,
   },
   {
     label: "Late",
     value: "Late",
-    icon: Clock,
     requireText: true,
   },
   {
     label: "Missing",
     value: "Missing",
-    icon: XCircle,
     requireText: false,
   },
   {
     label: "Reopen",
     value: "Reopened",
-    icon: RotateCcw,
     requireText: true,
   },
 ];
@@ -202,75 +195,45 @@ function CompactStatusActions({
   const isCurrentAttempt =
     submission?.isCurrent !== false;
 
-  const activeStyles = {
-    Submitted:
-      "border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm",
-    Late:
-      "border-amber-300 bg-amber-50 text-amber-800 shadow-sm",
-    Missing:
-      "border-red-300 bg-red-50 text-red-800 shadow-sm",
-    Reopened:
-      "border-blue-300 bg-blue-50 text-blue-800 shadow-sm",
-  };
+  const isControlDisabled = (control) =>
+    !isCurrentAttempt ||
+    (control.value === "Missing"
+      ? hasRealSubmission
+      : control.value === "Reopened"
+      ? !hasRealSubmission ||
+        !["Submitted", "Late", "Graded"].includes(currentStatus)
+      : !hasRealSubmission);
 
   return (
-    <div className="grid h-10 shrink-0 grid-cols-4 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
-      {QUICK_STATUS_CONTROLS.map((control) => {
-        const Icon = control.icon;
-        const isActive = currentStatus === control.value;
-
-        const isDisabled =
-          !isCurrentAttempt ||
-          (control.value === "Missing"
-            ? hasRealSubmission
-            : control.value === "Reopened"
-            ? !hasRealSubmission ||
-              !["Submitted", "Late", "Graded"].includes(
-                currentStatus
-              )
-            : !hasRealSubmission);
-
-        return (
-          <button
+    <div className="relative shrink-0">
+      <label htmlFor="submission-status-action" className="sr-only">
+        Submission status
+      </label>
+      <select
+        id="submission-status-action"
+        value={currentStatus}
+        disabled={!isCurrentAttempt}
+        onChange={(event) => {
+          const nextStatus = event.target.value;
+          if (nextStatus !== currentStatus) onChangeStatus(nextStatus);
+        }}
+        className={`h-10 min-w-[138px] appearance-none rounded-xl border py-0 pl-3 pr-8 text-[11px] font-bold outline-none transition-colors focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 ${getStatusStyles(currentStatus)}`}
+        title={isCurrentAttempt ? "Change submission status" : "Previous attempts are read-only"}
+      >
+        {!QUICK_STATUS_CONTROLS.some((control) => control.value === currentStatus) && (
+          <option value={currentStatus}>{currentStatus}</option>
+        )}
+        {QUICK_STATUS_CONTROLS.map((control) => (
+          <option
             key={control.value}
-            type="button"
-            disabled={isDisabled}
-            aria-pressed={isActive}
-            onClick={() => {
-              if (!isDisabled && !isActive) {
-                onChangeStatus(control.value);
-              }
-            }}
-            className={`inline-flex h-8 w-[72px] items-center justify-center gap-1 whitespace-nowrap rounded-lg border px-2 text-[10px] font-bold leading-none transition-colors ${
-              isActive
-                ? activeStyles[control.value]
-                : "border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-white hover:text-slate-900"
-            } ${
-              isDisabled
-                ? "cursor-not-allowed opacity-30"
-                : isActive
-                ? "cursor-default"
-                : "cursor-pointer"
-            }`}
-            title={
-              isActive
-                ? `${control.label} is the current status`
-                : isDisabled
-                ? !isCurrentAttempt
-                  ? "Previous attempts are read-only. Change the current attempt instead."
-                  : control.value === "Missing"
-                  ? "Missing is only available when no submitted text exists"
-                  : control.value === "Reopened"
-                  ? "Reopen is available for the current submitted, late, or graded attempt"
-                  : `${control.label} requires an actual student submission with text`
-                : `Mark submission as ${control.label}`
-            }
+            value={control.value}
+            disabled={isControlDisabled(control)}
           >
-            <Icon className="h-3.5 w-3.5 shrink-0" />
-            <span>{control.label}</span>
-          </button>
-        );
-      })}
+            {control.label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
     </div>
   );
 }
@@ -2027,129 +1990,6 @@ function buildFallbackGradeSheetData({
   };
 }
 
-function getReviewRubricSummary(submission, assignment) {
-  const rubric =
-    submission?.rubricSchema ||
-    assignment?.rubricSchema ||
-    submission?.rubric ||
-    assignment?.rubric ||
-    null;
-
-  const criteria = safeArray(
-    rubric?.criteria ||
-      submission?.rubricCriteria ||
-      assignment?.rubricCriteria
-  );
-
-  const total =
-    Number(
-      rubric?.totalPoints ||
-        rubric?.maxPoints ||
-        submission?.rubricTotal ||
-        assignment?.rubricTotal ||
-        0
-    ) ||
-    criteria.reduce(
-      (sum, criterion) =>
-        sum +
-        Number(
-          criterion?.points ??
-            criterion?.maxPoints ??
-            criterion?.weight ??
-            0
-        ),
-      0
-    );
-
-  const scores = submission?.rubricScores || {};
-
-  const gradedCount = criteria.filter((criterion) => {
-    const entry = scores?.[criterion.id];
-
-    if (entry && typeof entry === "object") {
-      return (
-        entry.score !== "" &&
-        entry.score !== null &&
-        entry.score !== undefined
-      );
-    }
-
-    return entry !== "" && entry !== null && entry !== undefined;
-  }).length;
-
-  const calculatedScore = criteria.reduce((sum, criterion) => {
-    const entry = scores?.[criterion.id];
-
-    const value =
-      entry && typeof entry === "object"
-        ? entry.score
-        : entry;
-
-    return sum + Number(value || 0);
-  }, 0);
-
-  const savedScore =
-    submission?.score !== null &&
-    submission?.score !== undefined &&
-    submission?.score !== ""
-      ? Number(submission.score)
-      : null;
-
-  return {
-    total,
-    criteriaCount: criteria.length,
-    gradedCount,
-    score:
-      gradedCount > 0
-        ? calculatedScore
-        : savedScore,
-  };
-}
-
-function getSelfGradeSummary(submission, rubricTotal) {
-  const rawScore =
-    submission?.selfRubricTotal ??
-    submission?.selfGradeScore ??
-    submission?.selfAssessment?.score ??
-    submission?.selfRubricAssessment?.score ??
-    null;
-
-  if (rawScore === null || rawScore === undefined || rawScore === "") {
-    return null;
-  }
-
-  const score = Number(rawScore);
-
-  const max =
-    Number(
-      submission?.selfRubricMax ??
-        submission?.selfGradeMax ??
-        submission?.selfAssessment?.maxScore ??
-        rubricTotal ??
-        0
-    ) || 0;
-
-  const explicitPercentage =
-    submission?.selfRubricPercentage ??
-    submission?.selfGradePercentage ??
-    submission?.selfAssessment?.percentage;
-
-  const percentage =
-    explicitPercentage !== null &&
-    explicitPercentage !== undefined &&
-    explicitPercentage !== ""
-      ? Math.round(Number(explicitPercentage))
-      : max > 0
-      ? Math.round((score / max) * 100)
-      : null;
-
-  return {
-    score,
-    max,
-    percentage,
-  };
-}
-
 function ReviewModalOverlay({
   isOpen,
   onClose,
@@ -2165,16 +2005,17 @@ function ReviewModalOverlay({
   onPrevious,
   onNext,
   onSaveReview,
+  onToggleWritingAnalyticsExclusion,
   submissionForReview,
 }) {
   const submissionDetailsRef = useRef(null);
   const [gradeSheetOpen, setGradeSheetOpen] = useState(false);
   const [gradeSheetData, setGradeSheetData] = useState(null);
-  const [reviewStatusMessage, setReviewStatusMessage] = useState("");
 
-  useEffect(() => {
-    setReviewStatusMessage("");
-  }, [selectedSubmission?.id, selectedAttemptId]);
+  function closeReviewWorkspace() {
+    submissionDetailsRef.current?.flushDraft?.();
+    onClose();
+  }
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -2193,15 +2034,6 @@ function ReviewModalOverlay({
   if (!isOpen || !selectedItem) return null;
 
   const submissionText = getSubmissionText(selectedSubmission);
-  const rubricSummary = getReviewRubricSummary(
-    selectedSubmission,
-    selectedAssignment
-  );
-  const selfGradeSummary = getSelfGradeSummary(
-    selectedSubmission,
-    rubricSummary.total
-  );
-
   const selectedSubmissionStatus = normalizeStatus(
     selectedSubmission?.status
   );
@@ -2215,12 +2047,10 @@ function ReviewModalOverlay({
   return createPortal(
     <div
       className="fixed inset-0 z-[2147483647] flex h-screen w-screen items-center justify-center overflow-hidden bg-slate-950/40 p-4 backdrop-blur-md sm:p-5"
-      onClick={onClose}
     >
 
       <div
         className="relative z-10 flex h-[94vh] w-[min(96vw,1700px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-[#FBF9F6] shadow-2xl animate-fade-in-up"
-        onClick={(event) => event.stopPropagation()}
       >
         
         {/* TOP COMPACT PROFILE LINE HEADER */}
@@ -2232,11 +2062,11 @@ function ReviewModalOverlay({
                 <h3 className="font-serif text-base font-bold text-slate-900 truncate">
                   {selectedItem.studentName}
                 </h3>
-                <span className={`inline-flex min-w-[76px] items-center justify-center rounded-md border px-2 py-0.5 text-[10px] font-mono font-bold uppercase leading-none ${getStatusStyles(selectedSubmissionStatus)}`}>
+                <span className={`inline-flex min-w-[76px] items-center justify-center rounded-md border px-2 py-0.5 text-[10px] font-semibold leading-none ${getStatusStyles(selectedSubmissionStatus)}`}>
                   {selectedSubmissionStatus}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-mono mt-0.5 truncate">
+              <p className="mt-0.5 truncate text-xs text-slate-500">
                 {selectedItem.studentEmail}
               </p>
             </div>
@@ -2260,111 +2090,10 @@ function ReviewModalOverlay({
               <ChevronDown className="w-4 h-4 text-slate-500 absolute right-2.5 pointer-events-none" />
             </div>
 
-            <div className="h-6 w-[1px] bg-slate-200 hidden lg:block" />
-
-            {/* Assignment- and attempt-specific score summaries */}
-            <div className="flex flex-wrap items-center gap-3 text-xs">
-              <div className="flex items-center gap-1.5">
-                <span className="font-mono text-[9px] font-bold uppercase text-slate-400">
-                  Self-grade:
-                </span>
-
-                {selfGradeSummary ? (
-                  <span className="font-mono font-bold text-slate-800">
-                    {selfGradeSummary.score} / {selfGradeSummary.max || " - "}
-                    {selfGradeSummary.percentage !== null && (
-                      <span className="ml-1 font-sans text-[11px] font-normal text-slate-500">
-                        ({selfGradeSummary.percentage}%)
-                      </span>
-                    )}
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-bold text-slate-400">
-                    Not available
-                  </span>
-                )}
-              </div>
-
-              <div className="h-4 w-px bg-slate-200" />
-
-              <div className="flex items-center gap-1.5">
-                <span className="font-mono text-[9px] font-bold uppercase text-slate-400">
-                  Rubric review:
-                </span>
-
-                {rubricSummary.score !== null &&
-                rubricSummary.score !== undefined ? (
-                  <span className="font-mono font-bold text-indigo-600">
-                    {rubricSummary.score} / {rubricSummary.total || " - "}
-                    <span className="ml-1 font-sans text-[11px] font-normal text-slate-500">
-                      ({rubricSummary.gradedCount}/
-                      {rubricSummary.criteriaCount} graded)
-                    </span>
-                  </span>
-                ) : (
-                  <span className="text-[11px] font-bold text-slate-400">
-                    Not graded
-                    {rubricSummary.criteriaCount > 0 && (
-                      <span className="ml-1 font-normal">
-                        (0/{rubricSummary.criteriaCount})
-                      </span>
-                    )}
-                  </span>
-                )}
-              </div>
-            </div>
           </div>
 
           {/* Quick Right Side Window Actions & Page Turning Carousel */}
           <div className="flex flex-wrap items-center justify-end gap-2">
-            {reviewStatusMessage && (
-              <div
-                role="status"
-                aria-live="polite"
-                className={`hidden max-w-[260px] items-center gap-2 rounded-xl border px-3 py-2 text-[10px] font-semibold leading-4 lg:flex ${
-                  /successfully|saved/i.test(reviewStatusMessage)
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                    : /could not|failed|error/i.test(reviewStatusMessage)
-                    ? "border-red-200 bg-red-50 text-red-800"
-                    : "border-amber-200 bg-amber-50 text-amber-800"
-                }`}
-                title={reviewStatusMessage}
-              >
-                <CheckSquare className="h-3.5 w-3.5 shrink-0" />
-                <span className="line-clamp-2">{reviewStatusMessage}</span>
-              </div>
-            )}
-
-            <button
-              type="button"
-              disabled={
-                !selectedSubmission ||
-                !submissionText ||
-                isReopenedAttempt ||
-                isPreviousAttempt
-              }
-              onClick={() =>
-                submissionDetailsRef.current?.saveReview()
-              }
-              className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-blue-600 px-3.5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
-              title={
-                isPreviousAttempt
-                  ? "Previous attempts are read-only"
-                  : isReopenedAttempt
-                  ? "The student must resubmit this reopened attempt before a new review can be saved"
-                  : "Submit the completed grade and feedback to the student"
-              }
-            >
-              <CheckSquare className="h-4 w-4" />
-              <span>
-                {isPreviousAttempt
-                  ? "Previous Attempt"
-                  : isReopenedAttempt
-                  ? "Awaiting Resubmission"
-                  : "Submit Grade"}
-              </span>
-            </button>
-
             <button
               type="button"
               disabled={!selectedSubmission}
@@ -2426,7 +2155,7 @@ function ReviewModalOverlay({
 
             <button
               type="button"
-              onClick={onClose}
+              onClick={closeReviewWorkspace}
               className="inline-flex items-center justify-center w-8 h-8 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
               title="Close Workspace"
             >
@@ -2436,9 +2165,9 @@ function ReviewModalOverlay({
         </div>
 
         {/* Main Content Pane Viewport area */}
-        <div className="flex-1 min-h-0 overflow-y-auto p-3 sm:p-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 pt-0 sm:px-4 sm:pb-4 sm:pt-0">
           <div className="block md:hidden bg-white border border-slate-200 p-2.5 rounded-xl mb-3">
-            <p className="text-[10px] font-mono font-bold uppercase text-slate-400 mb-1.5">Quick Status</p>
+            <p className="mb-1.5 text-xs font-semibold text-slate-500">Quick status</p>
             <CompactStatusActions
                 selectedItem={selectedItem}
                 selectedSubmission={selectedSubmission}
@@ -2490,9 +2219,9 @@ function ReviewModalOverlay({
             <SubmissionDetails
               ref={submissionDetailsRef}
               submission={submissionForReview}
-              onBack={onClose}
+              onBack={closeReviewWorkspace}
               onSaveReview={onSaveReview}
-              onStatusMessageChange={setReviewStatusMessage}
+              onToggleWritingAnalyticsExclusion={onToggleWritingAnalyticsExclusion}
               readOnly={isPreviousAttempt}
             />
           )}
@@ -2806,24 +2535,34 @@ export default function TeacherSubmissions({
     getSubmissionDetails(selectedSubmission.id)
       .then((details) => {
         if (!active) return;
-        const hydrated = {
-          ...selectedSubmission,
-          ...details,
+        const attachWorkspaceDetails = (attempt) => ({
+          ...attempt,
           assignment: selectedSubmission.assignment,
           assignmentDetails: selectedSubmission.assignmentDetails,
           assignmentTitle: selectedSubmission.assignmentTitle,
           classId: selectedSubmission.classId,
           classCode: selectedSubmission.classCode,
           className: selectedSubmission.className,
-          isCurrent: selectedSubmission.isCurrent,
-        };
+        });
+        const hydratedAttempts = (Array.isArray(details.attempts)
+          ? details.attempts
+          : [details]
+        ).map(attachWorkspaceDetails);
+        const hydrated = hydratedAttempts.find(
+          (attempt) => String(attempt.id) === String(selectedSubmission.id)
+        ) || hydratedAttempts.find((attempt) => attempt.isCurrent === true) || attachWorkspaceDetails(details);
         setReviewSubmissionSnapshot(hydrated);
         if (typeof setSubmissions === "function") {
-          setSubmissions((current) =>
-            current.map((item) =>
-              String(item.id) === String(hydrated.id) ? hydrated : item
-            )
+          const sourceSubmissionId = String(
+            selectedSubmission.sourceSubmissionId || selectedSubmission.id
           );
+          setSubmissions((current) => [
+            ...current.filter((item) =>
+              String(item.id) !== sourceSubmissionId &&
+              String(item.sourceSubmissionId || "") !== sourceSubmissionId
+            ),
+            ...hydratedAttempts,
+          ]);
         }
       })
       .catch((error) => {
@@ -3097,6 +2836,35 @@ export default function TeacherSubmissions({
     return true;
   }
 
+  async function handleToggleWritingAnalyticsExclusion() {
+    const sourceSubmission = activeReviewSubmission || selectedSubmission;
+    if (!sourceSubmission) return false;
+
+    const existingReview =
+      sourceSubmission.teacherReview || sourceSubmission.teacher_review || {};
+    const nextExcluded = !Boolean(existingReview.writingBehaviourExcluded);
+    const now = new Date().toISOString();
+    const nextReview = {
+      ...existingReview,
+      writingBehaviourExcluded: nextExcluded,
+      writingBehaviourExcludedAt: nextExcluded ? now : null,
+      writingBehaviourExclusionReason: nextExcluded
+        ? "Teacher excluded this submission from the grading workspace."
+        : "",
+    };
+    const updatedSubmission = {
+      ...sourceSubmission,
+      teacherReview: nextReview,
+      teacher_review: nextReview,
+      updatedAt: now,
+    };
+
+    await updateSubmissionReview(sourceSubmission.id, updatedSubmission);
+    setReviewSubmissionSnapshot(updatedSubmission);
+    setRefreshKey((current) => current + 1);
+    return nextExcluded;
+  }
+
   const submissionForReview = useMemo(() => {
     const sourceSubmission =
       activeReviewSubmission || selectedSubmission;
@@ -3324,6 +3092,7 @@ export default function TeacherSubmissions({
         onPrevious={() => selectedIndex > 0 && openStudentReview(roster[selectedIndex - 1])}
         onNext={() => selectedIndex < roster.length - 1 && openStudentReview(roster[selectedIndex + 1])}
         onSaveReview={handleSaveReview}
+        onToggleWritingAnalyticsExclusion={handleToggleWritingAnalyticsExclusion}
         submissionForReview={submissionForReview}
       />
     </div>

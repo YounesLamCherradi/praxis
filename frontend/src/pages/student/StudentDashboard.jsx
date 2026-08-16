@@ -1233,7 +1233,7 @@ export default function StudentDashboard() {
             }
           : joined.class;
       } catch (apiError) {
-        // Courses created before the Supabase migration remain joinable on the
+        // Courses created before the current database migration remain joinable on the
         // same browser until the instructor next opens their dashboard.
         if (!localMatchedCourse || apiError?.status !== 404) {
           throw apiError;

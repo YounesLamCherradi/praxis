@@ -266,8 +266,8 @@ export default function Signup({ accountRole = "student" }) {
               Back to Login
             </span>
 
-            <span className="text-[9px] font-mono text-slate-500 mt-0.5 uppercase tracking-wider">
-              praxis website
+            <span className="mt-0.5 text-[11px] font-medium text-slate-500">
+              Praxis website
             </span>
           </div>
         </button>
@@ -290,12 +290,12 @@ export default function Signup({ accountRole = "student" }) {
                 <span className="text-slate-900">raxis</span>
               </span>
 
-              <span className="text-[10px] font-mono font-bold uppercase tracking-widest text-blue-700 bg-blue-50 border border-blue-100 px-2.5 py-1 rounded-lg">
+              <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                 AUI Writing Platform
               </span>
             </div>
 
-            <h1 className="font-serif text-5xl xl:text-6xl font-black tracking-tight leading-[0.98] text-slate-950">
+            <h1 className="text-5xl font-extrabold leading-[1.05] tracking-tight text-slate-950 xl:text-6xl">
               {isInstructorSignup
                 ? "Create your instructor workspace."
                 : "Create your student writing workspace."}
@@ -341,7 +341,7 @@ export default function Signup({ accountRole = "student" }) {
                   />
                 </div>
 
-                <h2 className="text-2xl font-serif font-black text-slate-950">
+                <h2 className="text-2xl font-bold text-slate-950">
                   {codeRequested
                     ? "Verify your email"
                     : isInstructorSignup
@@ -349,15 +349,17 @@ export default function Signup({ accountRole = "student" }) {
                     : "Student registration"}
                 </h2>
 
-                <p className="text-xs font-mono uppercase text-blue-700 font-bold tracking-wider mt-1">
+                <p className="mx-auto mt-1 max-w-xs text-sm leading-5 text-slate-500">
                   {codeRequested
                     ? "Enter the code to finish registration"
-                    : "Join the AUI platform · email code required"}
+                    : isInstructorSignup
+                    ? "Use your authorized AUI email to create your teaching workspace."
+                    : "Use your AUI email to get started. We’ll send you a verification code."}
                 </p>
               </div>
 
               {error && (
-                <div className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-medium">
+                <div role="alert" className="mb-5 p-3.5 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-medium">
                   <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <span>{error}</span>
                 </div>
@@ -374,8 +376,8 @@ export default function Signup({ accountRole = "student" }) {
                 {!codeRequested && (
                   <>
                 <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                    Full Name
+                  <label htmlFor="signup-name" className="block text-sm font-semibold text-slate-700">
+                    Full name
                   </label>
 
                   <div className="mt-1.5 relative rounded-xl shadow-sm">
@@ -384,7 +386,10 @@ export default function Signup({ accountRole = "student" }) {
                     </div>
 
                     <input
+                      id="signup-name"
                       type="text"
+                      name="name"
+                      autoComplete="name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="Kenza Alami"
@@ -395,8 +400,8 @@ export default function Signup({ accountRole = "student" }) {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                    Campus Email Address <span className="ml-1 text-[10px] normal-case font-medium text-slate-500">(AUI accounts only)</span>
+                  <label htmlFor="signup-email" className="block text-sm font-semibold text-slate-700">
+                    Campus email address <span className="ml-1 text-xs font-medium text-slate-500">(AUI accounts only)</span>
                   </label>
 
                   <div className="mt-1.5 flex gap-2">
@@ -406,7 +411,10 @@ export default function Signup({ accountRole = "student" }) {
                     </div>
 
                     <input
+                      id="signup-email"
                       type="email"
+                      name="email"
+                      autoComplete="email"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="username@aui.ma"
@@ -439,7 +447,7 @@ export default function Signup({ accountRole = "student" }) {
                       </div>
                     </div>
 
-                    <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
+                    <label htmlFor="signup-code" className="block text-sm font-semibold text-slate-700">
                       Verification code
                     </label>
 
@@ -449,7 +457,9 @@ export default function Signup({ accountRole = "student" }) {
                       </div>
 
                       <input
+                        id="signup-code"
                         type="text"
+                        name="one-time-code"
                         value={otpCode}
                         onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
                         placeholder="000000"
@@ -471,7 +481,7 @@ export default function Signup({ accountRole = "student" }) {
                           setResendAt(0);
                           window.sessionStorage.removeItem(SIGNUP_CODE_PENDING_KEY);
                         }}
-                        className="font-bold text-slate-600 hover:text-blue-700"
+                        className="inline-flex min-h-11 items-center font-bold text-slate-600 hover:text-blue-700"
                       >
                         Change account details
                       </button>
@@ -479,7 +489,7 @@ export default function Signup({ accountRole = "student" }) {
                         type="button"
                         onClick={handleRequestCode}
                         disabled={codeLoading || waitSeconds > 0}
-                        className="font-bold text-blue-700 disabled:text-slate-400"
+                        className="inline-flex min-h-11 items-center font-bold text-blue-700 disabled:text-slate-400"
                       >
                         {codeLoading ? "Sending…" : waitSeconds > 0 ? `Resend in ${waitSeconds}s` : "Resend code"}
                       </button>
@@ -489,8 +499,8 @@ export default function Signup({ accountRole = "student" }) {
 
                 {!codeRequested && (
                   <div>
-                  <label className="block text-xs font-mono font-bold text-slate-600 uppercase tracking-wide">
-                    Create Password
+                  <label htmlFor="signup-password" className="block text-sm font-semibold text-slate-700">
+                    Create password
                   </label>
 
                   <div className="mt-1.5 relative rounded-xl shadow-sm">
@@ -499,7 +509,10 @@ export default function Signup({ accountRole = "student" }) {
                     </div>
 
                     <input
+                      id="signup-password"
                       type="password"
+                      name="new-password"
+                      autoComplete="new-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
@@ -531,24 +544,6 @@ export default function Signup({ accountRole = "student" }) {
                   </div>
                 )}
 
-                {!codeRequested && (
-                  <div className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-                  <div className="flex items-center gap-2 text-sm font-bold text-blue-900">
-                    {isInstructorSignup ? (
-                      <GraduationCap className="h-4 w-4" />
-                    ) : (
-                      <User className="h-4 w-4" />
-                    )}
-                    {isInstructorSignup ? "Instructor account" : "Student account"}
-                  </div>
-                  <p className="mt-1 text-xs text-blue-700">
-                    {isInstructorSignup
-                      ? "This page creates instructor accounts only."
-                      : "This page creates student accounts only."}
-                  </p>
-                  </div>
-                )}
-
                 <button
                   type="submit"
                   disabled={loading}
@@ -575,29 +570,37 @@ export default function Signup({ accountRole = "student" }) {
                   onClick={() =>
                     navigate(inviteCode ? `/login?invite=${encodeURIComponent(inviteCode)}` : "/login")
                   }
-                  className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
+                  className="inline-flex min-h-11 items-center font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none px-1 align-middle"
                 >
                   Sign in
                 </button>
               </div>
 
-              {!inviteCode && (
-                <div className="mt-3 text-center text-xs text-slate-500">
-                  {isInstructorSignup ? "Are you a student?" : "Are you an instructor?"}{" "}
+              {!inviteCode && !codeRequested && (
+                <div className="mt-2 flex items-center justify-center gap-1.5 text-xs text-slate-500">
+                  {isInstructorSignup ? (
+                    <User className="h-3.5 w-3.5 text-slate-400" />
+                  ) : (
+                    <GraduationCap className="h-3.5 w-3.5 text-slate-400" />
+                  )}
+                  <span>{isInstructorSignup ? "AUI student?" : "AUI instructor?"}</span>
                   <button
                     type="button"
-                    onClick={() => navigate(isInstructorSignup ? "/signup" : "/instructor-signup")}
-                    className="font-bold text-blue-700 hover:text-blue-800 ml-1 cursor-pointer bg-transparent border-none p-0 align-baseline"
+                    onClick={() =>
+                      navigate(isInstructorSignup ? "/signup" : "/instructor-signup")
+                    }
+                    className="group inline-flex min-h-9 items-center gap-1 font-bold text-blue-700 transition-colors hover:text-blue-800"
                   >
-                    {isInstructorSignup ? "Create a student account" : "Go to instructor registration"}
+                    {isInstructorSignup
+                      ? "Create a student account"
+                      : "Create an instructor account"}
+                    <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
                   </button>
                 </div>
               )}
+
             </div>
 
-            <div className="mt-5 text-center text-[10px] font-mono text-slate-400 uppercase tracking-wider">
-              Praxis · AUI Writing Platform · Secure Registration
-            </div>
           </div>
         </div>
       </div>
