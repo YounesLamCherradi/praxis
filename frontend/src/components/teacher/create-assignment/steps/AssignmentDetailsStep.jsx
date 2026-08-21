@@ -20,7 +20,7 @@ const ASSIGNMENT_TYPES = [
   "Argument",
   "Narrative",
   "Compare and Contrast",
-  "Process Paragraph",
+  "Process",
   "Reflection",
   "Summary",
   "Analysis",

@@ -115,3 +115,113 @@
 .text-slate-400 {
   color: #718096 !important;
 }
+
+
+/* Student workflow short-laptop optimization
+   Prevent the Coach conversation from being compressed on laptop-height
+   viewports while preserving the existing spacious large-screen layout. */
+@media (min-width: 1024px) and (max-height: 820px) {
+  .student-assignment-shell {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 660px !important;
+    padding: 0.75rem !important;
+  }
+
+  .student-workflow-header {
+    margin-bottom: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+    gap: 0.5rem !important;
+  }
+
+  .student-assignment-brief {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+
+  .student-assignment-step {
+    min-height: 420px !important;
+  }
+
+  .student-coach-panel {
+    min-height: 420px !important;
+  }
+
+  .student-coach-panel > header {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+
+  .student-coach-panel > footer {
+    padding: 0.625rem !important;
+  }
+}
+
+
+/* Student whole-assignment short-screen optimization
+   Keep every student assignment stage usable on shorter laptops/MacBooks
+   at normal browser zoom. Large screens keep the existing layout. */
+@media (min-width: 1024px) and (max-height: 820px) {
+
+  /* Let the workflow grow vertically instead of crushing the active step. */
+  .student-assignment-shell {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 760px !important;
+  }
+
+  /* Shared protection for Coach, Draft, Feedback, Reflection and Submit. */
+  .student-assignment-step {
+    min-height: 540px !important;
+    overflow: visible !important;
+  }
+
+  .student-assignment-step > * {
+    min-height: 540px;
+  }
+
+  /* Compact surrounding UI slightly on short screens. */
+  .student-workflow-header {
+    margin-bottom: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    gap: 0.5rem !important;
+  }
+
+  .student-assignment-brief {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+
+  /* Step 1: Coach */
+  .student-coach-panel {
+    min-height: 520px !important;
+  }
+
+  /* Step 2: Draft */
+  .student-draft-step {
+    min-height: 540px !important;
+  }
+
+  .student-draft-toolbar {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+
+  .student-draft-workspace {
+    min-height: 420px !important;
+  }
+
+  /* Step 3: AI Feedback / revision */
+  .student-feedback-step {
+    min-height: 540px !important;
+  }
+
+  .student-feedback-editor-shell {
+    min-height: 430px !important;
+  }
+
+  .student-feedback-footer {
+    padding-top: 0.625rem !important;
+    padding-bottom: 0.625rem !important;
+  }
+}

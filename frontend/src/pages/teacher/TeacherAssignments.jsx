@@ -354,6 +354,7 @@ export default function TeacherAssignments({
   } = useTeacherWorkspace();
 
   const [selectedClassId, setSelectedClassId] = useState("");
+  const [pendingCreateCourseId, setPendingCreateCourseId] = useState("");
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissionStatusFilter, setSubmissionStatusFilter] = useState("All");
   const [assignmentSearch, setAssignmentSearch] = useState("");
@@ -541,6 +542,8 @@ export default function TeacherAssignments({
     const mode = workspaceRequest.mode || "browse";
 
     if (mode === "create") {
+      setPendingCreateCourseId("");
+
       const requestedClass = activeClasses.find(
         (cls) => String(cls.id) === String(workspaceRequest.courseId)
       );
@@ -650,6 +653,192 @@ export default function TeacherAssignments({
 
   if (isWorkspaceLoading) {
     return <WorkspaceLoading />;
+  }
+
+  const isNewUnappliedCreateRequest =
+    workspaceRequest?.requestId &&
+    appliedWorkspaceRequestRef.current !== workspaceRequest.requestId;
+
+  const needsCourseSelectionForCreate =
+    view === "create" &&
+    activeClasses.length > 1 &&
+    !workspaceRequest?.courseId &&
+    (isNewUnappliedCreateRequest || !selectedClassId);
+
+  if (needsCourseSelectionForCreate) {
+    const pendingCourse =
+      activeClasses.find(
+        (courseItem) =>
+          String(courseItem.id) ===
+          String(pendingCreateCourseId)
+      ) || null;
+
+    function cancelCourseSelection() {
+      setPendingCreateCourseId("");
+      setSelectedClassId("");
+      setSelectedAssignmentId("");
+      setSubmissionStatusFilter("All");
+      setSelectedAssignment(null);
+      setSubmissionFilterAssignment(null);
+      setView("list");
+    }
+
+    function continueWithSelectedCourse() {
+      if (!pendingCourse) return;
+
+      setSelectedClassId(String(pendingCourse.id));
+      setSelectedAssignmentId("");
+      setSubmissionStatusFilter("All");
+      setSelectedAssignment(null);
+      setSubmissionFilterAssignment(null);
+    }
+
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="course-picker-title"
+      >
+        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-2xl">
+
+          <div className="flex shrink-0 items-start justify-between gap-5 px-6 py-5 sm:px-8">
+            <div>
+              <h2
+                id="course-picker-title"
+                className="font-serif text-xl font-black text-slate-950"
+              >
+                Create Assignment
+              </h2>
+
+              <p className="mt-1 text-sm text-slate-500">
+                Choose the course first, then choose how you would
+                like to create the assignment.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={cancelCourseSelection}
+              aria-label="Close"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="border-t border-slate-200 px-6 py-6 sm:px-8">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+              Course
+            </p>
+
+            <h3 className="mt-1 font-serif text-2xl font-black text-slate-950">
+              Which course is this assignment for?
+            </h3>
+
+            <p className="mt-2 text-sm text-slate-500">
+              Select one course to continue.
+            </p>
+          </div>
+
+          <div className="px-6 pb-7 sm:px-8">
+            <label className="block">
+              <span className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                Select course
+              </span>
+
+              <div className="relative">
+                <select
+                  value={pendingCreateCourseId}
+                  onChange={(event) =>
+                    setPendingCreateCourseId(event.target.value)
+                  }
+                  className="w-full cursor-pointer appearance-none rounded-xl border border-slate-300 bg-white px-4 py-3.5 pr-11 text-sm font-semibold text-slate-900 outline-none transition-all hover:border-blue-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                >
+                  <option value="">
+                    Choose a course
+                  </option>
+
+                  {activeClasses.map((courseItem) => (
+                    <option
+                      key={courseItem.id}
+                      value={String(courseItem.id)}
+                    >
+                      {[
+                        courseItem.code,
+                        courseItem.name,
+                        courseItem.semester,
+                      ]
+                        .filter(Boolean)
+                        .join(" — ")}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </div>
+              </div>
+
+              {pendingCourse && (
+                <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                    Selected course
+                  </p>
+
+                  <p className="mt-1 text-sm font-bold text-slate-950">
+                    {pendingCourse.name || "Unnamed course"}
+                  </p>
+
+                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                    {pendingCourse.code && (
+                      <span>{pendingCourse.code}</span>
+                    )}
+
+                    {pendingCourse.semester && (
+                      <span>· {pendingCourse.semester}</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </label>
+          </div>
+
+          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-6 py-4 sm:px-8">
+            <button
+              type="button"
+              onClick={cancelCourseSelection}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              disabled={!pendingCourse}
+              onClick={continueWithSelectedCourse}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+            >
+              Continue
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+
+        </div>
+      </div>,
+      document.body
+    );
   }
 
   if (view === "create") {
@@ -1338,6 +1527,9 @@ export default function TeacherAssignments({
                       activeCourse={activeReviewClass}
                       activeAssignment={activeAssignment}
                       requestedStatusFilter={submissionStatusFilter}
+                      requestedSubmissionId={
+                        workspaceRequest?.submissionId || null
+                      }
                     />
                   </Suspense>
                 </div>

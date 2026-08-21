@@ -2348,12 +2348,26 @@ async function notifyTeacherAboutStudentSubmission({
       'your class'
     );
 
+  const submittedAtRaw =
+    submission.submitted_at ||
+    submission.submittedAt ||
+    new Date().toISOString();
+
+  const submittedAtDate =
+    new Date(submittedAtRaw);
+
   const submittedAt =
-    formatDeadline(
-      submission.submitted_at ||
-      submission.submittedAt ||
-      new Date().toISOString()
-    );
+    Number.isNaN(submittedAtDate.getTime())
+      ? ''
+      : new Intl.DateTimeFormat('en-US', {
+          timeZone: 'Africa/Casablanca',
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        }).format(submittedAtDate);
 
   const submittedLine =
     submittedAt
@@ -2364,6 +2378,20 @@ async function notifyTeacherAboutStudentSubmission({
     submittedAt
       ? `Submitted: ${submittedAt}\n`
       : '';
+
+  const submissionReviewUrl =
+    'https://praxiswrite.com/teacher?tab=assignments' +
+    `${classRow.id
+      ? `&course=${encodeURIComponent(String(classRow.id))}`
+      : ''}` +
+    `&assignment=${encodeURIComponent(String(assignment.id))}` +
+    '&review=submissions&status=Pending' +
+    `${submission.id
+      ? `&submission=${encodeURIComponent(String(submission.id))}`
+      : ''}`;
+
+  const safeSubmissionReviewUrl =
+    escapeHtmlEmail(submissionReviewUrl);
 
   await sendDurableEmail({
     to:
@@ -2379,6 +2407,15 @@ async function notifyTeacherAboutStudentSubmission({
         <p><strong>Class:</strong> ${safeClassName}</p>
         <p><strong>Assignment:</strong> ${safeTitle}</p>
         ${submittedLine}
+
+        <p style="margin-top:24px;">
+          <a
+            href="${safeSubmissionReviewUrl}"
+            style="display:inline-block;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:8px;"
+          >
+            Open submission in Praxis
+          </a>
+        </p>
       </div>
     `,
 
@@ -2387,7 +2424,8 @@ async function notifyTeacherAboutStudentSubmission({
       `Student: ${studentName}\n` +
       `Class: ${classRow.name || 'your class'}\n` +
       `Assignment: ${assignment.title || 'Assignment'}\n` +
-      textSubmittedLine,
+      textSubmittedLine +
+      `Open submission: ${submissionReviewUrl}\n`,
 
     idempotencyKey:
       makeIdempotencyKey([
@@ -9788,6 +9826,299 @@ app.get('/api/classes/:classId/submissions', async (req, res) => {
     });
   }
 });
+
+// ── Teacher reusable annotation codes ─────────────────────────────
+//
+// Custom annotation codes belong to the authenticated instructor account.
+// They are stored in PostgreSQL, so they persist across assignments,
+// sessions, browsers, and devices.
+
+const BUILTIN_ANNOTATION_CODE_SET = new Set([
+  'CS',
+  'RO',
+  'FR',
+  'P',
+  'VT',
+  'WF',
+  'AGR',
+  'SP',
+  'WW',
+  'GOOD',
+  'NOTE',
+]);
+
+let teacherAnnotationCodesTableReadyPromise = null;
+
+async function ensureTeacherAnnotationCodesTable() {
+  if (!teacherAnnotationCodesTableReadyPromise) {
+    teacherAnnotationCodesTableReadyPromise = db.query(
+      `CREATE TABLE IF NOT EXISTS public.teacher_annotation_codes (
+         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+         teacher_id uuid NOT NULL
+           REFERENCES public.profiles(id)
+           ON DELETE CASCADE,
+         code text NOT NULL,
+         name text NOT NULL,
+         explanation text NOT NULL DEFAULT '',
+         created_at timestamptz NOT NULL
+           DEFAULT timezone('utc', now()),
+         updated_at timestamptz NOT NULL
+           DEFAULT timezone('utc', now()),
+         CONSTRAINT teacher_annotation_codes_teacher_code_unique
+           UNIQUE (teacher_id, code),
+         CONSTRAINT teacher_annotation_codes_code_format
+           CHECK (
+             code = upper(code)
+             AND code ~ '^[A-Z0-9]{1,8}$'
+           )
+       )`
+    ).catch((error) => {
+      teacherAnnotationCodesTableReadyPromise = null;
+      throw error;
+    });
+  }
+
+  return teacherAnnotationCodesTableReadyPromise;
+}
+
+function normalizeTeacherAnnotationCode(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 8);
+}
+
+function serializeTeacherAnnotationCode(row = {}) {
+  const name = String(row.name || '').trim();
+  const explanation =
+    String(row.explanation || '').trim();
+
+  return {
+    id: row.id,
+    code: row.code,
+    name,
+    explanation,
+
+    // Existing annotation logic expects "label".
+    // Keep the short name visible in the toolbar while storing enough
+    // context for the annotation itself.
+    label:
+      explanation
+        ? `${name}: ${explanation}`
+        : name,
+
+    type: 'custom',
+    createdAt: row.created_at || null,
+    updatedAt: row.updated_at || null,
+  };
+}
+
+app.get('/api/teacher/annotation-codes', async (req, res) => {
+  try {
+    const {
+      user,
+      error,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json({ error });
+    }
+
+    await ensureTeacherAnnotationCodesTable();
+
+    const { rows } = await db.query(
+      `SELECT
+         id,
+         code,
+         name,
+         explanation,
+         created_at,
+         updated_at
+       FROM public.teacher_annotation_codes
+       WHERE teacher_id = $1
+       ORDER BY created_at ASC, code ASC`,
+      [user.id]
+    );
+
+    return res.json({
+      codes: rows.map(serializeTeacherAnnotationCode),
+    });
+  } catch (error) {
+    console.error(
+      'Could not load teacher annotation codes:',
+      error
+    );
+
+    return res.status(500).json({
+      error: 'Could not load annotation codes.',
+    });
+  }
+});
+
+app.post('/api/teacher/annotation-codes', async (req, res) => {
+  try {
+    const {
+      user,
+      error,
+      status,
+    } = await requireTeacherProfile(req);
+
+    if (error) {
+      return res.status(status).json({ error });
+    }
+
+    const code =
+      normalizeTeacherAnnotationCode(
+        req.body?.code
+      );
+
+    const name =
+      String(req.body?.name || '')
+        .trim()
+        .slice(0, 80);
+
+    const explanation =
+      String(req.body?.explanation || '')
+        .trim()
+        .slice(0, 500);
+
+    if (!code) {
+      return res.status(400).json({
+        error:
+          'Enter a code using letters or numbers.',
+      });
+    }
+
+    if (!name) {
+      return res.status(400).json({
+        error:
+          'Enter a short name for this annotation code.',
+      });
+    }
+
+    if (BUILTIN_ANNOTATION_CODE_SET.has(code)) {
+      return res.status(409).json({
+        error:
+          `${code} is already a built-in Praxis annotation code.`,
+      });
+    }
+
+    await ensureTeacherAnnotationCodesTable();
+
+    const { rows } = await db.query(
+      `INSERT INTO public.teacher_annotation_codes
+         (
+           teacher_id,
+           code,
+           name,
+           explanation
+         )
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (teacher_id, code)
+       DO UPDATE SET
+         name = EXCLUDED.name,
+         explanation = EXCLUDED.explanation,
+         updated_at = timezone('utc', now())
+       RETURNING
+         id,
+         code,
+         name,
+         explanation,
+         created_at,
+         updated_at`,
+      [
+        user.id,
+        code,
+        name,
+        explanation,
+      ]
+    );
+
+    return res.status(201).json({
+      code:
+        serializeTeacherAnnotationCode(
+          rows[0]
+        ),
+    });
+  } catch (error) {
+    console.error(
+      'Could not save teacher annotation code:',
+      error
+    );
+
+    return res.status(500).json({
+      error: 'Could not save annotation code.',
+    });
+  }
+});
+
+app.delete(
+  '/api/teacher/annotation-codes/:code',
+  async (req, res) => {
+    try {
+      const {
+        user,
+        error,
+        status,
+      } = await requireTeacherProfile(req);
+
+      if (error) {
+        return res.status(status).json({ error });
+      }
+
+      const code =
+        normalizeTeacherAnnotationCode(
+          req.params.code
+        );
+
+      if (!code) {
+        return res.status(400).json({
+          error: 'Invalid annotation code.',
+        });
+      }
+
+      if (BUILTIN_ANNOTATION_CODE_SET.has(code)) {
+        return res.status(400).json({
+          error:
+            'Built-in Praxis annotation codes cannot be removed.',
+        });
+      }
+
+      await ensureTeacherAnnotationCodesTable();
+
+      const result = await db.query(
+        `DELETE
+           FROM public.teacher_annotation_codes
+          WHERE teacher_id = $1
+            AND code = $2
+        RETURNING id`,
+        [user.id, code]
+      );
+
+      if (result.rowCount === 0) {
+        return res.status(404).json({
+          error: 'Annotation code not found.',
+        });
+      }
+
+      return res.json({
+        success: true,
+        code,
+      });
+    } catch (error) {
+      console.error(
+        'Could not remove teacher annotation code:',
+        error
+      );
+
+      return res.status(500).json({
+        error: 'Could not remove annotation code.',
+      });
+    }
+  }
+);
 
 // Get all submissions across the authenticated teacher's classes in one
 // request. This supports low-cost near-real-time review updates without an

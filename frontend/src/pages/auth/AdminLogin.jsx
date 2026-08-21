@@ -14,6 +14,7 @@ import {
 const ADMIN_EMAIL = "admin@aui.ma";
 
 export default function AdminLogin() {
+  const [showAdminLoginPassword, setShowAdminLoginPassword] = useState(false);
   const navigate = useNavigate();
   const { signIn } = useAuth();
 
@@ -144,14 +145,40 @@ export default function AdminLogin() {
                     <Lock className="h-4 w-4" />
                   </div>
 
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter admin password"
-                    required
-                    className="block w-full rounded-xl border border-slate-300 bg-white py-3 pr-4 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showAdminLoginPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Enter admin password"
+                      required
+                      className="block w-full rounded-xl border border-slate-300 bg-white py-3 pr-11 pl-10 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      data-password-toggle="showAdminLoginPassword"
+                      onClick={() => setShowAdminLoginPassword((current) => !current)}
+                      aria-label={showAdminLoginPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showAdminLoginPassword}
+                      title={showAdminLoginPassword ? "Hide password" : "Show password"}
+                      className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="h-4 w-4"
+                        aria-hidden="true"
+                      >
+                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                        <circle cx="12" cy="12" r="2.5" />
+                        {showAdminLoginPassword && <path d="M4 4l16 16" />}
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
 

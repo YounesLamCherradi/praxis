@@ -1650,7 +1650,9 @@ export default function CreateAssignmentModal({
           );
         }) ||
         selectedCourse ||
-        selectableClasses[0] ||
+        (selectableClasses.length === 1
+          ? selectableClasses[0]
+          : null) ||
         null;
 
       if (generatedCourse) {
@@ -2153,14 +2155,24 @@ export default function CreateAssignmentModal({
               <ReviewStep
               creationMode={creationMode}
               title={title}
+              setTitle={setTitle}
               description={description}
+              setDescription={setDescription}
               course={course}
+              setCourse={setCourse}
               classes={selectableClasses}
               dueDate={dueDate}
+              setDueDate={setDueDate}
               minWords={minWords}
+              setMinWords={setMinWords}
               maxWords={maxWords}
-              assignmentType={resolvedAssignmentType || assignmentType}
+              setMaxWords={setMaxWords}
+              assignmentType={assignmentType}
+              setAssignmentType={setAssignmentType}
+              assignmentTypeCustom={assignmentTypeCustom}
+              setAssignmentTypeCustom={setAssignmentTypeCustom}
               studentLevel={studentLevel}
+              setStudentLevel={setStudentLevel}
               feedbackChecks={feedbackChecks}
               ideaRequestLimit={ideaRequestLimit}
               allowAI={allowAI}

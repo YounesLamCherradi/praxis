@@ -11,6 +11,10 @@ import {
 } from "lucide-react";
 
 import CompactRubricPreview from "../rubric/CompactRubricPreview";
+import {
+  ASSIGNMENT_TYPES,
+  STUDENT_LEVELS,
+} from "../constants";
 
 function safeArray(value) {
   return Array.isArray(value) ? value : [];
@@ -105,16 +109,18 @@ function formatRequestLimit(value) {
   return `${numeric} request${numeric === 1 ? "" : "s"}`;
 }
 
-function SummaryRow({ label, value }) {
+function SummaryRow({ label, value, children }) {
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5">
-      <span className="font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-slate-400">
+    <div className="flex min-h-[54px] items-center justify-between gap-4 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5">
+      <span className="shrink-0 text-xs font-semibold text-slate-600">
         {label}
       </span>
 
-      <span className="max-w-[65%] text-right text-[11px] font-bold leading-snug text-slate-800">
-        {value}
-      </span>
+      {children || (
+        <span className="max-w-[68%] text-right text-sm font-semibold leading-snug text-slate-800">
+          {value}
+        </span>
+      )}
     </div>
   );
 }
@@ -150,14 +156,24 @@ function getRubricSourceLabel(
 export default function ReviewStep({
   creationMode,
   title,
+  setTitle,
   description,
+  setDescription,
   course,
+  setCourse,
   classes = [],
   dueDate,
+  setDueDate,
   minWords,
+  setMinWords,
   maxWords,
+  setMaxWords,
   assignmentType,
+  setAssignmentType,
+  assignmentTypeCustom,
+  setAssignmentTypeCustom,
   studentLevel,
+  setStudentLevel,
   feedbackChecks,
   allowAI,
   coachTimeLimitMinutes,
@@ -233,7 +249,7 @@ export default function ReviewStep({
           </h4>
         </div>
 
-        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
           <SummaryRow
             label="Mode"
             value={
@@ -243,35 +259,138 @@ export default function ReviewStep({
             }
           />
 
-          <SummaryRow
-            label="Title"
-            value={title || "Untitled assignment"}
-          />
+          <SummaryRow label="Title">
+            <input
+              type="text"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="w-full max-w-[70%] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none transition-all focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            />
+          </SummaryRow>
 
-          <SummaryRow
-            label="Course"
-            value={courseLabel}
-          />
+          <SummaryRow label="Course">
+            <select
+              value={course || ""}
+              onChange={(event) => setCourse(event.target.value)}
+              className="w-full max-w-[70%] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            >
+              <option value="">Select course</option>
 
-          <SummaryRow
-            label="Due date"
-            value={formatDueDate(dueDate)}
-          />
+              {classes.map((item) => {
+                const value =
+                  item?.code ||
+                  item?.name ||
+                  item?.id ||
+                  "";
 
-          <SummaryRow
-            label="Type"
-            value={assignmentType || "Not specified"}
-          />
+                const label =
+                  item?.code && item?.name
+                    ? `${item.code} - ${item.name}`
+                    : item?.name ||
+                      item?.code ||
+                      "Unnamed course";
 
-          <SummaryRow
-            label="Level"
-            value={studentLevel || "Not specified"}
-          />
+                return (
+                  <option
+                    key={String(item?.id || value)}
+                    value={value}
+                  >
+                    {label}
+                  </option>
+                );
+              })}
+            </select>
+          </SummaryRow>
 
-          <SummaryRow
-            label="Word count"
-            value={`${Number(minWords || 0)}–${Number(maxWords || 0)} words`}
-          />
+          <SummaryRow label="Due date">
+            <input
+              type="datetime-local"
+              value={dueDate || ""}
+              onChange={(event) => setDueDate(event.target.value)}
+              className="w-full max-w-[70%] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            />
+          </SummaryRow>
+
+          <SummaryRow label="Type">
+            <div className="flex w-full max-w-[70%] gap-2">
+              <select
+                value={assignmentType || ""}
+                onChange={(event) => {
+                  const nextType = event.target.value;
+                  setAssignmentType(nextType);
+
+                  if (nextType !== "Other") {
+                    setAssignmentTypeCustom("");
+                  }
+                }}
+                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              >
+                {ASSIGNMENT_TYPES.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+
+              {assignmentType === "Other" && (
+                <input
+                  type="text"
+                  value={assignmentTypeCustom || ""}
+                  onChange={(event) =>
+                    setAssignmentTypeCustom(event.target.value)
+                  }
+                  placeholder="Custom type"
+                  className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+                />
+              )}
+            </div>
+          </SummaryRow>
+
+          <SummaryRow label="Level">
+            <select
+              value={studentLevel || ""}
+              onChange={(event) =>
+                setStudentLevel(event.target.value)
+              }
+              className="w-full max-w-[70%] rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            >
+              {STUDENT_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {level}
+                </option>
+              ))}
+            </select>
+          </SummaryRow>
+
+          <SummaryRow label="Word count">
+            <div className="flex max-w-[70%] items-center gap-2">
+              <input
+                type="number"
+                min="1"
+                value={minWords}
+                onChange={(event) =>
+                  setMinWords(Number(event.target.value || 0))
+                }
+                aria-label="Minimum words"
+                className="w-24 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              />
+
+              <span className="text-sm text-slate-400">
+                to
+              </span>
+
+              <input
+                type="number"
+                min={Math.max(1, Number(minWords || 1))}
+                value={maxWords}
+                onChange={(event) =>
+                  setMaxWords(Number(event.target.value || 0))
+                }
+                aria-label="Maximum words"
+                className="w-24 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              />
+            </div>
+          </SummaryRow>
 
           <SummaryRow
             label="Rubric"
@@ -289,7 +408,7 @@ export default function ReviewStep({
         </div>
 
         <div className="mt-3 border-t border-slate-100 pt-2">
-          <p className="mb-2 font-mono text-[8px] font-bold uppercase tracking-[0.1em] text-slate-400">
+          <p className="mb-2 text-xs font-semibold text-slate-600">
             Student support
           </p>
 
@@ -386,10 +505,14 @@ export default function ReviewStep({
           </h4>
         </div>
 
-        <div className="mt-4 rounded-xl border border-slate-200 bg-[#F8FAFC] p-4">
-          <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">
-            {description || "No student instructions provided."}
-          </p>
+        <div className="mt-4">
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={9}
+            placeholder="Enter the instructions students will see."
+            className="w-full resize-y rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3 text-sm leading-7 text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+          />
         </div>
       </section>
     </div>

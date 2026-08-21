@@ -29,7 +29,7 @@ export function buildCourseInvitePath(courseOrCode) {
   return code ? `/join?code=${encodeURIComponent(code)}` : "";
 }
 
-const DEFAULT_INVITE_ORIGIN = "https://praxisproject.netlify.app";
+const DEFAULT_INVITE_ORIGIN = "https://praxiswrite.com";
 
 export function buildCourseInviteUrl(courseOrCode, origin = DEFAULT_INVITE_ORIGIN) {
   const path = buildCourseInvitePath(courseOrCode);

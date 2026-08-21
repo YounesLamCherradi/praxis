@@ -7,6 +7,8 @@ const RESET_CODE_PENDING_KEY = "praxis-password-reset-code-pending-v1";
 const RESET_CODE_COOLDOWN_MS = RESEND_SECONDS * 1000;
 
 export default function ForgotPasswordDialog({ open, onClose }) {
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [showResetConfirmPassword, setShowResetConfirmPassword] = useState(false);
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
@@ -247,16 +249,42 @@ export default function ForgotPasswordDialog({ open, onClose }) {
 
             <div>
               <label htmlFor="reset-password" className="block text-sm font-semibold text-slate-700">New password</label>
-              <input
-                id="reset-password"
-                type="password"
-                name="new-password"
-                autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="mt-1.5 w-full px-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-              />
+              <div className="relative mt-1.5">
+                <input
+                  id="reset-password"
+                  type={showResetPassword ? "text" : "password"}
+                  name="new-password"
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  className="w-full pl-4 pr-11 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                />
+                <button
+                  type="button"
+                  data-password-toggle="showResetPassword"
+                  onClick={() => setShowResetPassword((current) => !current)}
+                  aria-label={showResetPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showResetPassword}
+                  title={showResetPassword ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                    {showResetPassword && <path d="M4 4l16 16" />}
+                  </svg>
+                </button>
+              </div>
               {password.length > 0 && (
                 <div className="mt-2 space-y-1.5">
                   {passwordRules.map((rule) => {
@@ -281,16 +309,42 @@ export default function ForgotPasswordDialog({ open, onClose }) {
 
             <div>
               <label htmlFor="reset-password-confirmation" className="block text-sm font-semibold text-slate-700">Confirm new password</label>
-              <input
-                id="reset-password-confirmation"
-                type="password"
-                name="new-password-confirmation"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                className="mt-1.5 w-full px-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-              />
+              <div className="relative mt-1.5">
+                <input
+                  id="reset-password-confirmation"
+                  type={showResetConfirmPassword ? "text" : "password"}
+                  name="new-password-confirmation"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                  className="w-full pl-4 pr-11 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                />
+                <button
+                  type="button"
+                  data-password-toggle="showResetConfirmPassword"
+                  onClick={() => setShowResetConfirmPassword((current) => !current)}
+                  aria-label={showResetConfirmPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showResetConfirmPassword}
+                  title={showResetConfirmPassword ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-4 w-4"
+                    aria-hidden="true"
+                  >
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                    <circle cx="12" cy="12" r="2.5" />
+                    {showResetConfirmPassword && <path d="M4 4l16 16" />}
+                  </svg>
+                </button>
+              </div>
             </div>
 
             <div className="flex items-center justify-between text-xs text-slate-500">

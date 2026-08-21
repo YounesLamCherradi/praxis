@@ -39,6 +39,7 @@ import {
 
 import { useTeacherWorkspace } from "../../../hooks/useTeacherWorkspace";
 import { runAiJob } from "../../../services/aiJobs";
+import { requestJson } from "../../../services/auth.js";
 import { buildReplayTimeline } from "../../../utils/replayTimeline";
 
 const ANNOTATION_CODES = [
@@ -54,6 +55,44 @@ const ANNOTATION_CODES = [
   { code: "GOOD", label: "Good", type: "positive" },
   { code: "NOTE", label: "Note", type: "note" },
 ];
+
+function normalizeTeacherAnnotationCode(item = {}) {
+  const code = String(item.code || "")
+    .trim()
+    .toUpperCase();
+
+  if (!code) return null;
+
+  const name = String(
+    item.name ||
+    item.label ||
+    code
+  ).trim();
+
+  const explanation = String(
+    item.explanation ||
+    item.description ||
+    ""
+  ).trim();
+
+  return {
+    id: item.id || null,
+    code,
+    name,
+    label: name || code,
+    explanation,
+    type: "custom",
+    custom: true,
+    createdAt:
+      item.createdAt ||
+      item.created_at ||
+      null,
+    updatedAt:
+      item.updatedAt ||
+      item.updated_at ||
+      null,
+  };
+}
 
 const REVIEW_TABS = [
   { id: "feedback", label: "Feedback", icon: MessageSquare },
@@ -1188,6 +1227,21 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
   const [annotationComment, setAnnotationComment] = useState("");
   const [annotationMessage, setAnnotationMessage] = useState("");
 
+  const [
+    customAnnotationCodes,
+    setCustomAnnotationCodes,
+  ] = useState([]);
+
+  const [
+    annotationCodesLoading,
+    setAnnotationCodesLoading,
+  ] = useState(false);
+
+  const [
+    annotationCodesError,
+    setAnnotationCodesError,
+  ] = useState("");
+
   
   const [reviewMode, setReviewMode] = useState("grading");
 
@@ -1198,6 +1252,228 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
   const [aiFeedbackApplied, setAiFeedbackApplied] = useState(false);
 
   const studentTextRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      !authenticatedInstructor?.id &&
+      !authenticatedInstructor?.email
+    ) {
+      setCustomAnnotationCodes([]);
+      setAnnotationCodesLoading(false);
+      setAnnotationCodesError("");
+      return undefined;
+    }
+
+    setAnnotationCodesLoading(true);
+    setAnnotationCodesError("");
+
+    requestJson(
+      "/api/teacher/annotation-codes",
+      {},
+      {
+        errorPrefix:
+          "Could not load annotation codes",
+      }
+    )
+      .then((data) => {
+        if (cancelled) return;
+
+        const rows =
+          Array.isArray(data)
+            ? data
+            : Array.isArray(data?.codes)
+            ? data.codes
+            : Array.isArray(
+                data?.annotationCodes
+              )
+            ? data.annotationCodes
+            : Array.isArray(
+                data?.annotation_codes
+              )
+            ? data.annotation_codes
+            : Array.isArray(
+                data?.customCodes
+              )
+            ? data.customCodes
+            : Array.isArray(data?.items)
+            ? data.items
+            : [];
+
+        const normalized = rows
+          .map(
+            normalizeTeacherAnnotationCode
+          )
+          .filter(Boolean)
+          .sort((a, b) =>
+            a.code.localeCompare(b.code)
+          );
+
+        setCustomAnnotationCodes(
+          normalized
+        );
+      })
+      .catch((error) => {
+        if (cancelled) return;
+
+        setAnnotationCodesError(
+          error?.message ||
+            "Could not load annotation codes."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAnnotationCodesLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    authenticatedInstructor?.email,
+    authenticatedInstructor?.id,
+  ]);
+
+  async function createCustomAnnotationCode({
+    code,
+    name,
+    explanation,
+  }) {
+    if (readOnly) {
+      throw new Error(
+        "Previous attempts are read-only."
+      );
+    }
+
+    const payload = {
+      code: String(code || "")
+        .trim()
+        .toUpperCase(),
+      name: String(name || "").trim(),
+      explanation: String(
+        explanation || ""
+      ).trim(),
+    };
+
+    setAnnotationCodesError("");
+
+    try {
+      const data = await requestJson(
+        "/api/teacher/annotation-codes",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+          body: JSON.stringify(payload),
+        },
+        {
+          errorPrefix:
+            "Could not create annotation code",
+        }
+      );
+
+      const returned =
+        data?.annotationCode ||
+        data?.annotation_code ||
+        data?.item ||
+        (
+          data?.code &&
+          typeof data.code === "object"
+            ? data.code
+            : null
+        );
+
+      const saved =
+        normalizeTeacherAnnotationCode({
+          ...payload,
+          ...(returned || {}),
+        });
+
+      if (!saved) {
+        throw new Error(
+          "The annotation code was saved but returned invalid data."
+        );
+      }
+
+      setCustomAnnotationCodes(
+        (current) => {
+          const next = current.filter(
+            (item) =>
+              item.code !== saved.code
+          );
+
+          next.push(saved);
+
+          return next.sort((a, b) =>
+            a.code.localeCompare(b.code)
+          );
+        }
+      );
+
+      return saved;
+    } catch (error) {
+      setAnnotationCodesError(
+        error?.message ||
+          "Could not create annotation code."
+      );
+
+      throw error;
+    }
+  }
+
+  async function deleteCustomAnnotationCode(
+    code
+  ) {
+    if (readOnly) {
+      throw new Error(
+        "Previous attempts are read-only."
+      );
+    }
+
+    const normalizedCode = String(
+      code || ""
+    )
+      .trim()
+      .toUpperCase();
+
+    if (!normalizedCode) return;
+
+    setAnnotationCodesError("");
+
+    try {
+      await requestJson(
+        `/api/teacher/annotation-codes/${encodeURIComponent(
+          normalizedCode
+        )}`,
+        {
+          method: "DELETE",
+        },
+        {
+          errorPrefix:
+            "Could not delete annotation code",
+        }
+      );
+
+      setCustomAnnotationCodes(
+        (current) =>
+          current.filter(
+            (item) =>
+              item.code !== normalizedCode
+          )
+      );
+    } catch (error) {
+      setAnnotationCodesError(
+        error?.message ||
+          "Could not delete annotation code."
+      );
+
+      throw error;
+    }
+  }
 
   const gradingDraftKey = useMemo(() => {
     if (!submission?.id) return "";
@@ -1629,7 +1905,7 @@ These are instructor-only review signals and are not automatic grades.`;
   }
 
   function captureSelectedText() {
-    if (reviewMode !== "grading") return;
+    if (readOnly || reviewMode !== "grading") return;
 
     const container = studentTextRef.current;
     if (!container) return;
@@ -1700,7 +1976,10 @@ These are instructor-only review signals and are not automatic grades.`;
       selectedText: cleanSelectedText,
       rangeStart: Number(rangeStart),
       rangeEnd: Number(rangeEnd),
-      comment: cleanComment || codeItem.label,
+      comment:
+        cleanComment ||
+        codeItem.explanation ||
+        codeItem.label,
       type: codeItem.type,
       code: codeItem.code,
       label: codeItem.label,
@@ -2423,21 +2702,35 @@ These are instructor-only review signals and are not automatic grades.`;
           ) : (
             <div className="space-y-3">
               <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-                <StudentTextReviewPanel
-                  studentTextRef={studentTextRef}
-                  captureSelectedText={captureSelectedText}
-                  submission={submission}
-                  wordCount={wordCount}
-                  annotationMessage={annotationMessage}
-                  submissionText={submissionText}
-                  annotations={annotations}
-                  deleteAnnotation={deleteAnnotation}
-                  selectedText={selectedText}
-                  annotationComment={annotationComment}
-                  setAnnotationComment={setAnnotationComment}
-                  addAnnotation={addAnnotation}
-                  clearSelectionState={clearSelectionState}
-                />
+                <fieldset
+                  disabled={readOnly}
+                  className={`m-0 min-w-0 border-0 p-0 ${
+                    readOnly
+                      ? "[&_button]:cursor-not-allowed [&_button]:opacity-50 [&_textarea]:cursor-not-allowed [&_textarea]:bg-slate-100"
+                      : ""
+                  }`}
+                >
+                  <StudentTextReviewPanel
+                    studentTextRef={studentTextRef}
+                    captureSelectedText={captureSelectedText}
+                    submission={submission}
+                    wordCount={wordCount}
+                    annotationMessage={annotationMessage}
+                    submissionText={submissionText}
+                    annotations={annotations}
+                    deleteAnnotation={deleteAnnotation}
+                    selectedText={selectedText}
+                    annotationComment={annotationComment}
+                    setAnnotationComment={setAnnotationComment}
+                    addAnnotation={addAnnotation}
+                    customAnnotationCodes={customAnnotationCodes}
+                    annotationCodesLoading={annotationCodesLoading}
+                    annotationCodesError={annotationCodesError}
+                    createCustomAnnotationCode={createCustomAnnotationCode}
+                    deleteCustomAnnotationCode={deleteCustomAnnotationCode}
+                    clearSelectionState={clearSelectionState}
+                  />
+                </fieldset>
 
                 <div className="min-w-0">
                   <section className="min-w-0 rounded-2xl border border-blue-200 bg-white shadow-sm">
@@ -2451,64 +2744,82 @@ These are instructor-only review signals and are not automatic grades.`;
                       </div>
                     </div>
                     <div className="bg-[#F8FAFC] p-2.5">
-                      {currentRubric ? (
-                        <RubricScorePanel
-                          rubric={currentRubric}
-                          rubricCriteria={rubricCriteria}
-                          rubricScores={rubricScores}
-                          rubricScoreTotal={rubricScoreTotal}
-                          rubricTotal={rubricTotal}
-                          gradedCriteriaCount={gradedCriteriaCount}
-                          selectBand={selectBand}
-                          adjustCriterionScore={adjustCriterionScore}
-                          updateCriterionScore={updateCriterionScore}
-                          aiSuggestion={aiSuggestion}
-                          applyAiRubricScores={applyAiRubricScores}
-                        />
-                      ) : (
-                        <ManualScorePanel
-                          manualScore={manualScore}
-                          setManualScore={setManualScore}
-                          aiSuggestion={aiSuggestion}
-                          applyAiRubricScores={applyAiRubricScores}
-                        />
-                      )}
+                      <fieldset
+                        disabled={readOnly}
+                        className={`m-0 min-w-0 border-0 p-0 ${
+                          readOnly
+                            ? "[&_button]:cursor-not-allowed [&_button]:opacity-60 [&_input]:cursor-not-allowed [&_input]:opacity-70"
+                            : ""
+                        }`}
+                      >
+                        {currentRubric ? (
+                          <RubricScorePanel
+                            rubric={currentRubric}
+                            rubricCriteria={rubricCriteria}
+                            rubricScores={rubricScores}
+                            rubricScoreTotal={rubricScoreTotal}
+                            rubricTotal={rubricTotal}
+                            gradedCriteriaCount={gradedCriteriaCount}
+                            selectBand={selectBand}
+                            adjustCriterionScore={adjustCriterionScore}
+                            updateCriterionScore={updateCriterionScore}
+                            aiSuggestion={aiSuggestion}
+                            applyAiRubricScores={applyAiRubricScores}
+                          />
+                        ) : (
+                          <ManualScorePanel
+                            manualScore={manualScore}
+                            setManualScore={setManualScore}
+                            aiSuggestion={aiSuggestion}
+                            applyAiRubricScores={applyAiRubricScores}
+                          />
+                        )}
+                      </fieldset>
                     </div>
                   </section>
 
                 </div>
               </div>
 
-              <CombinedFeedbackWorkspace
-                feedback={feedback}
-                setFeedback={setFeedback}
-                saveMessage={saveMessage}
-                aiReviewLoading={aiReviewLoading}
-                aiReviewError={aiReviewError}
-                aiSuggestion={aiSuggestion}
-                onRunAiCheck={handleAiCheck}
-                applyAiRubricScores={applyAiRubricScores}
-                applyAiFeedback={applyAiFeedback}
-                rubricTotal={rubricTotal}
-                assignedScore={finalDisplayedScore}
-                scoreTotal={currentRubric ? rubricTotal : 100}
-                supportsOverride={Boolean(currentRubric)}
-                finalOverrideEnabled={finalOverrideEnabled}
-                setFinalOverrideEnabled={setFinalOverrideEnabled}
-                finalOverride={finalOverride}
-                setFinalOverride={setFinalOverride}
-                onSubmitGrade={handleSave}
-                submitDisabled={
-                  gradeSavePending ||
-                  readOnly ||
-                  String(submission?.status || "").toLowerCase() === "reopened"
-                }
-                isGradeUpdate={
-                  String(submission?.status || "").toLowerCase() === "graded" ||
-                  Boolean(submission?.reviewedAt)
-                }
-                submitPending={gradeSavePending}
-              />
+              <fieldset
+                disabled={readOnly}
+                className={`m-0 min-w-0 border-0 p-0 ${
+                  readOnly
+                    ? "[&_button]:cursor-not-allowed [&_button]:opacity-50 [&_textarea]:cursor-not-allowed [&_textarea]:bg-slate-100"
+                    : ""
+                }`}
+              >
+                <CombinedFeedbackWorkspace
+                  feedback={feedback}
+                  setFeedback={setFeedback}
+                  saveMessage={saveMessage}
+                  aiReviewLoading={aiReviewLoading}
+                  aiReviewError={aiReviewError}
+                  aiSuggestion={aiSuggestion}
+                  onRunAiCheck={handleAiCheck}
+                  applyAiRubricScores={applyAiRubricScores}
+                  applyAiFeedback={applyAiFeedback}
+                  rubricTotal={rubricTotal}
+                  assignedScore={finalDisplayedScore}
+                  scoreTotal={currentRubric ? rubricTotal : 100}
+                  supportsOverride={Boolean(currentRubric)}
+                  finalOverrideEnabled={finalOverrideEnabled}
+                  setFinalOverrideEnabled={setFinalOverrideEnabled}
+                  finalOverride={finalOverride}
+                  setFinalOverride={setFinalOverride}
+                  onSubmitGrade={handleSave}
+                  submitDisabled={
+                    gradeSavePending ||
+                    readOnly ||
+                    String(submission?.status || "").toLowerCase() === "reopened"
+                  }
+                  isGradeUpdate={
+                    String(submission?.status || "").toLowerCase() === "graded" ||
+                    Boolean(submission?.reviewedAt)
+                  }
+                  submitPending={gradeSavePending}
+                />
+              </fieldset>
             </div>
           )}
       </div>
@@ -2530,6 +2841,11 @@ function StudentTextReviewPanel({
   annotationComment,
   setAnnotationComment,
   addAnnotation,
+  customAnnotationCodes,
+  annotationCodesLoading,
+  annotationCodesError,
+  createCustomAnnotationCode,
+  deleteCustomAnnotationCode,
   clearSelectionState,
 }) {
   return (
@@ -2561,6 +2877,11 @@ function StudentTextReviewPanel({
           annotationComment={annotationComment}
           setAnnotationComment={setAnnotationComment}
           addAnnotation={addAnnotation}
+          customAnnotationCodes={customAnnotationCodes}
+          annotationCodesLoading={annotationCodesLoading}
+          annotationCodesError={annotationCodesError}
+          onCreateAnnotationCode={createCustomAnnotationCode}
+          onDeleteAnnotationCode={deleteCustomAnnotationCode}
           onClose={clearSelectionState}
         />
       </div>
@@ -6492,6 +6813,11 @@ function InlineAnnotationToolbar({
   annotationComment,
   setAnnotationComment,
   addAnnotation,
+  customAnnotationCodes = [],
+  annotationCodesLoading = false,
+  annotationCodesError = "",
+  onCreateAnnotationCode,
+  onDeleteAnnotationCode,
   onClose,
 }) {
   const [showNoteInput, setShowNoteInput] = useState(false);
@@ -6503,9 +6829,34 @@ function InlineAnnotationToolbar({
       type: "note",
     };
 
-  const markCodes = ANNOTATION_CODES.filter(
-    (item) => item.code !== "NOTE"
-  );
+  const builtinAnnotationCodeSet =
+    new Set(
+      ANNOTATION_CODES.map(
+        (item) => item.code
+      )
+    );
+
+  const reusableAnnotationCodes =
+    customAnnotationCodes
+      .filter(
+        (item) =>
+          item?.code &&
+          !builtinAnnotationCodeSet.has(
+            item.code
+          )
+      )
+      .sort((a, b) =>
+        String(a.code).localeCompare(
+          String(b.code)
+        )
+      );
+
+  const markCodes = [
+    ...ANNOTATION_CODES.filter(
+      (item) => item.code !== "NOTE"
+    ),
+    ...reusableAnnotationCodes,
+  ];
 
   function handleAddNote() {
     if (!annotationComment.trim()) {
@@ -6571,6 +6922,16 @@ function InlineAnnotationToolbar({
         </button>
       </div>
 
+      <AnnotationCodeManager
+        customAnnotationCodes={
+          reusableAnnotationCodes
+        }
+        loading={annotationCodesLoading}
+        apiError={annotationCodesError}
+        onCreate={onCreateAnnotationCode}
+        onDelete={onDeleteAnnotationCode}
+      />
+
       {showNoteInput && (
         <div className="mt-2 space-y-1.5 rounded-lg border border-sky-100 bg-sky-50/60 p-2">
           <textarea
@@ -6605,6 +6966,356 @@ function InlineAnnotationToolbar({
               Add note
             </button>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function AnnotationCodeManager({
+  customAnnotationCodes = [],
+  loading = false,
+  apiError = "",
+  onCreate,
+  onDelete,
+}) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("");
+  const [explanation, setExplanation] =
+    useState("");
+
+  const [localError, setLocalError] =
+    useState("");
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [deletingCode, setDeletingCode] =
+    useState("");
+
+  const builtinCodes = new Set(
+    ANNOTATION_CODES.map(
+      (item) => item.code
+    )
+  );
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+
+    const normalizedCode = code
+      .trim()
+      .toUpperCase();
+
+    const normalizedName = name.trim();
+
+    setLocalError("");
+
+    if (
+      !/^[A-Z0-9]{1,8}$/.test(
+        normalizedCode
+      )
+    ) {
+      setLocalError(
+        "Code must contain 1–8 letters or numbers."
+      );
+      return;
+    }
+
+    if (!normalizedName) {
+      setLocalError(
+        "Add a short name for this code."
+      );
+      return;
+    }
+
+    if (
+      builtinCodes.has(normalizedCode)
+    ) {
+      setLocalError(
+        `${normalizedCode} is already a built-in Praxis code.`
+      );
+      return;
+    }
+
+    if (
+      customAnnotationCodes.some(
+        (item) =>
+          item.code === normalizedCode
+      )
+    ) {
+      setLocalError(
+        `${normalizedCode} already exists in your reusable codes.`
+      );
+      return;
+    }
+
+    if (typeof onCreate !== "function") {
+      setLocalError(
+        "Annotation-code service is unavailable."
+      );
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await onCreate({
+        code: normalizedCode,
+        name: normalizedName,
+        explanation:
+          explanation.trim(),
+      });
+
+      setCode("");
+      setName("");
+      setExplanation("");
+      setLocalError("");
+    } catch (error) {
+      setLocalError(
+        error?.message ||
+          "Could not create annotation code."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(
+    annotationCode
+  ) {
+    if (
+      !annotationCode ||
+      deletingCode
+    ) {
+      return;
+    }
+
+    if (typeof onDelete !== "function") {
+      setLocalError(
+        "Annotation-code service is unavailable."
+      );
+      return;
+    }
+
+    setLocalError("");
+    setDeletingCode(annotationCode);
+
+    try {
+      await onDelete(annotationCode);
+    } catch (error) {
+      setLocalError(
+        error?.message ||
+          "Could not delete annotation code."
+      );
+    } finally {
+      setDeletingCode("");
+    }
+  }
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onMouseDown={(event) =>
+          event.preventDefault()
+        }
+        onClick={() => {
+          setLocalError("");
+          setOpen((value) => !value);
+        }}
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-all ${
+          open
+            ? "border-blue-200 bg-blue-50 text-blue-700"
+            : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+        }`}
+      >
+        <Plus className="h-3 w-3" />
+        Manage codes
+      </button>
+
+      {open && (
+        <div className="mt-2 rounded-xl border border-blue-100 bg-[#F8FAFC] p-3">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-bold text-slate-900">
+                Reusable annotation codes
+              </p>
+
+              <p className="mt-0.5 text-[10px] leading-4 text-slate-500">
+                Your custom codes are saved to your instructor account and can be reused across assignments.
+              </p>
+            </div>
+
+            <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[9px] font-bold text-slate-500">
+              {customAnnotationCodes.length} custom
+            </span>
+          </div>
+
+          {loading && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-500">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Loading reusable codes…
+            </div>
+          )}
+
+          {!loading &&
+            customAnnotationCodes.length >
+              0 && (
+              <div className="mt-3 space-y-1.5">
+                {customAnnotationCodes.map(
+                  (item) => (
+                    <div
+                      key={
+                        item.id ||
+                        item.code
+                      }
+                      className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[9px] font-bold text-blue-700">
+                            {item.code}
+                          </span>
+
+                          <span className="text-[10px] font-semibold text-slate-800">
+                            {item.label}
+                          </span>
+                        </div>
+
+                        {item.explanation && (
+                          <p className="mt-1 text-[10px] leading-4 text-slate-500">
+                            {
+                              item.explanation
+                            }
+                          </p>
+                        )}
+                      </div>
+
+                      <button
+                        type="button"
+                        onMouseDown={(
+                          event
+                        ) =>
+                          event.preventDefault()
+                        }
+                        disabled={
+                          deletingCode ===
+                          item.code
+                        }
+                        onClick={() =>
+                          handleDelete(
+                            item.code
+                          )
+                        }
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-red-100 bg-red-50 text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        aria-label={`Delete ${item.code}`}
+                        title={`Delete ${item.code}`}
+                      >
+                        {deletingCode ===
+                        item.code ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                      </button>
+                    </div>
+                  )
+                )}
+              </div>
+            )}
+
+          {!loading &&
+            customAnnotationCodes.length ===
+              0 && (
+              <p className="mt-3 rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-center text-[10px] text-slate-500">
+                You have not created any custom codes yet.
+              </p>
+            )}
+
+          <form
+            onSubmit={handleSubmit}
+            className="mt-3 space-y-2 border-t border-slate-200 pt-3"
+          >
+            <p className="text-[10px] font-bold text-slate-700">
+              Add a reusable code
+            </p>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[100px_minmax(0,1fr)]">
+              <input
+                type="text"
+                maxLength={8}
+                value={code}
+                onChange={(event) =>
+                  setCode(
+                    event.target.value
+                      .toUpperCase()
+                      .replace(
+                        /[^A-Z0-9]/g,
+                        ""
+                      )
+                  )
+                }
+                placeholder="CODE"
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 font-mono text-[10px] font-bold uppercase text-slate-800 outline-none focus:border-blue-400"
+              />
+
+              <input
+                type="text"
+                value={name}
+                onChange={(event) =>
+                  setName(
+                    event.target.value
+                  )
+                }
+                placeholder="Name, e.g. Unclear argument"
+                className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] text-slate-800 outline-none focus:border-blue-400"
+              />
+            </div>
+
+            <textarea
+              rows={2}
+              value={explanation}
+              onChange={(event) =>
+                setExplanation(
+                  event.target.value
+                )
+              }
+              placeholder="Explanation shown when this code is used (optional)"
+              className="max-h-24 w-full resize-none rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] leading-4 text-slate-800 outline-none focus:border-blue-400"
+            />
+
+            {(localError ||
+              apiError) && (
+              <p className="text-[10px] font-medium text-red-600">
+                {localError ||
+                  apiError}
+              </p>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={
+                  saving ||
+                  !code.trim() ||
+                  !name.trim()
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {saving ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Plus className="h-3 w-3" />
+                )}
+
+                {saving
+                  ? "Saving"
+                  : "Add code"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

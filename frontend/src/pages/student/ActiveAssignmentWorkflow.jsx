@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useStudentWorkspace } from "../../hooks/useStudentWorkspace";
 
 import Step1IdeasChat from "./steps/Step1IdeasChat";
@@ -391,8 +392,8 @@ export default function ActiveAssignmentWorkflow() {
 
   return (
     <div className="flex-1 min-h-0">
-      <div className="flex min-h-[620px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)]">
-        <div className="mb-4 flex shrink-0 flex-col gap-3 border-b border-slate-100 pb-3 xl:flex-row xl:items-center">
+      <div className="student-assignment-shell flex min-h-[620px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)]">
+        <div className="student-workflow-header mb-4 flex shrink-0 flex-col gap-3 border-b border-slate-100 pb-3 xl:flex-row xl:items-center">
           <button
             type="button"
             onClick={closeStudentAssignment}
@@ -539,13 +540,48 @@ export default function ActiveAssignmentWorkflow() {
           <WorkflowNoticeBox
             key={studentWorkflowNotice.id}
             notice={studentWorkflowNotice}
-            onPrimary={() => confirmStudentWorkflowNotice()}
-            onSecondary={() => clearStudentWorkflowNotice()}
+            onPrimary={() => {
+              if (
+                studentWorkflowNotice?.title ===
+                "Feedback checks are still available"
+              ) {
+                try {
+                  window.sessionStorage.setItem(
+                    `praxis-request-inline-feedback:${activeAssignment?.id}`,
+                    "1"
+                  );
+                } catch {
+                  // AI Feedback can still be opened if browser storage is unavailable.
+                }
+
+                clearStudentWorkflowNotice();
+
+                goToStudentStep(3, {
+                  draftText: typedText,
+                  currentText: typedText,
+                });
+
+                return;
+              }
+
+              confirmStudentWorkflowNotice();
+            }}
+            onSecondary={() => {
+              if (
+                studentWorkflowNotice?.title ===
+                "Feedback checks are still available"
+              ) {
+                confirmStudentWorkflowNotice();
+                return;
+              }
+
+              clearStudentWorkflowNotice();
+            }}
             onClose={() => clearStudentWorkflowNotice()}
           />
         )}
 
-        <div className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:overflow-hidden">
+        <div className="student-assignment-step mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:overflow-hidden">
           {renderActiveStepComponent()}
         </div>
       </div>
@@ -669,11 +705,22 @@ function WorkflowNoticeBox({
     </div>
   );
 
-  if (hasPendingAction) {
-    return (
-      <div className="fixed inset-0 z-[2147483645] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm">
-        {noticeCard}
-      </div>
+  if (
+    hasPendingAction &&
+    typeof document !== "undefined"
+  ) {
+    return createPortal(
+      <div className="fixed inset-0 z-[2147483646] flex items-center justify-center p-4">
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 bg-slate-950/45 backdrop-blur-[4px]"
+        />
+
+        <div className="relative z-10 flex w-full justify-center">
+          {noticeCard}
+        </div>
+      </div>,
+      document.body
     );
   }
 
@@ -686,7 +733,7 @@ function CompactAssignmentBrief({
   compact = false,
 }) {
   return (
-    <section className="relative shrink-0 overflow-hidden rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/40 px-5 py-4 shadow-sm">
+    <section className="student-assignment-brief relative shrink-0 overflow-hidden rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/40 px-5 py-4 shadow-sm">
       <span className="absolute inset-y-0 left-0 w-1.5 bg-blue-600" />
       <div className={`flex items-start gap-3 ${compact ? "xl:items-center" : ""}`}>
         <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">

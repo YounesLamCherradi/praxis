@@ -1118,12 +1118,16 @@ function InlineFeedbackEditor({
       ),
       sticky: true,
     });
+
+    onSelectIssue?.(issue);
   }
 
   function handleFeedbackHover(event) {
     const mark = event.target.closest("mark[data-feedback-issue-id]");
     if (!mark) {
-      setHoveredFeedback(null);
+      setHoveredFeedback((current) =>
+        current?.sticky ? current : null
+      );
       return;
     }
     const issue = safeArray(issues).find(
@@ -1165,7 +1169,21 @@ function InlineFeedbackEditor({
       suppressContentEditableWarning
       data-placeholder="Revise your draft in your own words."
       onInput={handleInput}
-      onClick={handleIssueOpen}
+      onPointerDown={(event) => {
+        const mark = event.target.closest(
+          "mark[data-feedback-issue-id]"
+        );
+
+        if (!mark) return;
+
+        /*
+         * Highlights live inside a contentEditable editor.
+         * Pin the feedback before the browser moves the text caret or
+         * fires mouse-leave behavior.
+         */
+        event.preventDefault();
+        handleIssueOpen(event);
+      }}
       onMouseOver={handleFeedbackHover}
       onMouseLeave={() =>
         setHoveredFeedback((current) =>
@@ -1215,7 +1233,9 @@ function InlineFeedbackEditor({
               {hoveredFeedback.issue.problem}
             </p>
             <p className="mt-1 text-[9px] text-slate-400">
-              Click the highlight to keep this note open.
+              {hoveredFeedback.sticky
+                ? "Pinned open. Use × to close this note."
+                : "Click the highlight to keep this note open."}
             </p>
           </div>,
           document.body
@@ -1650,8 +1670,8 @@ export default function Step3AIFeedback() {
 
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 pb-1">
-      <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="student-feedback-step flex h-full min-h-0 flex-col gap-3 pb-1">
+      <section className="student-feedback-editor-shell relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="shrink-0 border-b border-slate-100 px-4 py-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -1775,7 +1795,7 @@ export default function Step3AIFeedback() {
         )}
       </section>
 
-      <div className="shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className="student-feedback-footer shrink-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-[11px] leading-relaxed text-slate-500">
             Click a highlighted phrase to understand the issue, then revise it directly in your draft.

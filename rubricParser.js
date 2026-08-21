@@ -373,6 +373,108 @@ ${rawText}`,
   return normalizeRubricSchema(parsed, fileName);
 }
 
+
+async function parsePdfWithClaude(buffer, fileName = "Uploaded rubric") {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      "ANTHROPIC_API_KEY is required to parse uploaded rubrics."
+    );
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    RUBRIC_AI_TIMEOUT_MS
+  );
+
+  let response;
+
+  try {
+    response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6",
+        max_tokens: 8192,
+        system: SYSTEM_PROMPT,
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: {
+                  type: "base64",
+                  media_type: "application/pdf",
+                  data: buffer.toString("base64"),
+                },
+              },
+              {
+                type: "text",
+                text: `File name: ${fileName}
+
+This PDF may be scanned or image-only.
+
+Read the visible content on every page, including rubric tables,
+criteria names, score bands, headings, and descriptors.
+
+Parse the complete rubric into the JSON schema required by the
+system prompt. Do not omit information simply because it appears
+inside an image or table.`,
+              },
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(
+        "Rubric PDF parsing timed out while waiting for the AI service. Please try again."
+      );
+      timeoutError.code = "RUBRIC_PARSE_TIMEOUT";
+      throw timeoutError;
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message ||
+        `Claude PDF rubric parse failed (${response.status})`
+    );
+  }
+
+  const raw = Array.isArray(data?.content)
+    ? data.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("")
+    : "";
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(cleanClaudeJson(raw));
+  } catch (error) {
+    throw new Error(
+      `Claude returned invalid rubric JSON from PDF: ${error.message}`
+    );
+  }
+
+  return normalizeRubricSchema(parsed, fileName);
+}
+
 function unreadableRubricError(message, cause) {
   const error = new Error(message);
   error.code = "RUBRIC_UNREADABLE";
@@ -389,20 +491,46 @@ async function parseRubricBuffer(
   mimeType = "",
   fileName = "Uploaded rubric"
 ) {
-  let text;
+  const lowerName = String(fileName || "").toLowerCase();
+  const isPdf =
+    mimeType === "application/pdf" || lowerName.endsWith(".pdf");
+
+  let text = "";
+  let extractError = null;
 
   try {
     text = await extractTextFromBuffer(buffer, mimeType, fileName);
-  } catch (extractError) {
+  } catch (error) {
+    extractError = error;
+  }
+
+  const hasReadableText =
+    String(text || "").replace(/\s+/g, "").length >= 15;
+
+  // Normal PDF parsing cannot read scanned/image-only PDFs.
+  // For PDFs only, fall back to Claude's native visual PDF support.
+  if (isPdf && (extractError || !hasReadableText)) {
+    const schema = await parsePdfWithClaude(buffer, fileName);
+
+    return {
+      // Preserve useful rubric content for downstream features even
+      // though the original PDF did not contain an extractable text layer.
+      text: JSON.stringify(schema, null, 2),
+      schema,
+      rubricData: rubricSchemaToMatrix(schema, fileName),
+    };
+  }
+
+  if (extractError) {
     throw unreadableRubricError(
-      "We couldn't read this file. It may be a scanned image, password-protected, or a damaged PDF. Try a text-based PDF / Word file, or paste the rubric text instead.",
+      "We couldn't read this file. It may be password-protected or damaged. Try another PDF / Word file, or paste the rubric text instead.",
       extractError
     );
   }
 
-  if (text.replace(/\s+/g, "").length < 15) {
+  if (!hasReadableText) {
     throw unreadableRubricError(
-      "We couldn't find readable text in this file. If it's a scanned or image-only PDF, upload a text-based PDF / Word file, or paste the rubric text instead."
+      "We couldn't find readable text in this file. Upload a text-based PDF / Word file, or paste the rubric text instead."
     );
   }
 

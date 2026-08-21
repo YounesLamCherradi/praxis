@@ -171,6 +171,58 @@ const QUICK_STATUS_CONTROLS = [
   },
 ];
 
+function isCanonicalCurrentAttempt(
+  submission,
+  attempts = []
+) {
+  if (!submission) return false;
+
+  const list = Array.isArray(attempts)
+    ? attempts.filter(Boolean)
+    : [];
+
+  if (!list.length) {
+    return submission.isCurrent === true;
+  }
+
+  const highestAttemptNumber = Math.max(
+    ...list.map((attempt) =>
+      Number(attempt.attemptNumber || 1)
+    )
+  );
+
+  const submissionAttemptNumber =
+    Number(submission.attemptNumber || 1);
+
+  if (
+    submissionAttemptNumber <
+    highestAttemptNumber
+  ) {
+    return false;
+  }
+
+  const explicitCurrentAtHighestAttempt =
+    list.find(
+      (attempt) =>
+        attempt.isCurrent === true &&
+        Number(attempt.attemptNumber || 1) ===
+          highestAttemptNumber
+    );
+
+  if (explicitCurrentAtHighestAttempt) {
+    return (
+      String(explicitCurrentAtHighestAttempt.id) ===
+      String(submission.id)
+    );
+  }
+
+  return (
+    submissionAttemptNumber ===
+      highestAttemptNumber &&
+    submission.isCurrent !== false
+  );
+}
+
 function CompactStatusActions({
   selectedItem,
   selectedSubmission,
@@ -193,7 +245,10 @@ function CompactStatusActions({
     );
 
   const isCurrentAttempt =
-    submission?.isCurrent !== false;
+    isCanonicalCurrentAttempt(
+      submission,
+      selectedItem?.attempts || []
+    );
 
   const isControlDisabled = (control) =>
     !isCurrentAttempt ||
@@ -2042,7 +2097,10 @@ function ReviewModalOverlay({
     selectedSubmissionStatus === "Reopened";
 
   const isPreviousAttempt =
-    selectedSubmission?.isCurrent === false;
+    !isCanonicalCurrentAttempt(
+      selectedSubmission,
+      selectedAttempts
+    );
 
   return createPortal(
     <div
@@ -2244,6 +2302,7 @@ export default function TeacherSubmissions({
   activeCourse,
   activeAssignment,
   requestedStatusFilter = "All",
+  requestedSubmissionId = null,
 }) {
   const {
     assignments = [],
@@ -2257,6 +2316,7 @@ export default function TeacherSubmissions({
 
   const [selectedRosterId, setSelectedRosterId] = useState(null);
   const [selectedAttemptId, setSelectedAttemptId] = useState(null);
+  const handledRequestedSubmissionRef = useRef("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [searchTerm, setSearchTerm] = useState("");
   const [reviewOpen, setReviewOpen] = useState(false);
@@ -2287,8 +2347,8 @@ export default function TeacherSubmissions({
     const enrollments = data.enrollments || [];
 
     const latestSubmissions = mergeSubmissionSources(
-      data.submissions,
-      submissions
+      submissions,
+      data.submissions
     );
 
     const classEnrollments = enrollments.filter((enrollment) =>
@@ -2544,25 +2604,77 @@ export default function TeacherSubmissions({
           classCode: selectedSubmission.classCode,
           className: selectedSubmission.className,
         });
-        const hydratedAttempts = (Array.isArray(details.attempts)
-          ? details.attempts
-          : [details]
-        ).map(attachWorkspaceDetails);
-        const hydrated = hydratedAttempts.find(
-          (attempt) => String(attempt.id) === String(selectedSubmission.id)
-        ) || hydratedAttempts.find((attempt) => attempt.isCurrent === true) || attachWorkspaceDetails(details);
+        const serverReturnedAttempts =
+          Array.isArray(details.attempts) &&
+          details.attempts.length > 0;
+
+        const hydratedAttempts = serverReturnedAttempts
+          ? details.attempts.map(attachWorkspaceDetails)
+          : [
+              attachWorkspaceDetails({
+                ...selectedSubmission,
+                ...details,
+
+                // The detail endpoint returns the physical PostgreSQL row.
+                // Attempt number/current state are synthetic properties created
+                // by the submissions-list reconstruction, so preserve them.
+                attemptNumber:
+                  selectedSubmission.attemptNumber,
+                isCurrent:
+                  selectedSubmission.isCurrent,
+                sourceSubmissionId:
+                  selectedSubmission.sourceSubmissionId ||
+                  selectedSubmission.id,
+                previousSubmissionId:
+                  selectedSubmission.previousSubmissionId ||
+                  null,
+              }),
+            ];
+
+        const hydrated =
+          hydratedAttempts.find(
+            (attempt) =>
+              String(attempt.id) ===
+              String(selectedSubmission.id)
+          ) ||
+          hydratedAttempts.find(
+            (attempt) =>
+              attempt.isCurrent === true
+          ) ||
+          hydratedAttempts[0];
+
         setReviewSubmissionSnapshot(hydrated);
+
         if (typeof setSubmissions === "function") {
-          const sourceSubmissionId = String(
-            selectedSubmission.sourceSubmissionId || selectedSubmission.id
-          );
-          setSubmissions((current) => [
-            ...current.filter((item) =>
-              String(item.id) !== sourceSubmissionId &&
-              String(item.sourceSubmissionId || "") !== sourceSubmissionId
-            ),
-            ...hydratedAttempts,
-          ]);
+          if (serverReturnedAttempts) {
+            const sourceSubmissionId = String(
+              selectedSubmission.sourceSubmissionId ||
+              selectedSubmission.id
+            );
+
+            setSubmissions((current) => [
+              ...current.filter(
+                (item) =>
+                  String(item.id) !==
+                    sourceSubmissionId &&
+                  String(
+                    item.sourceSubmissionId || ""
+                  ) !== sourceSubmissionId
+              ),
+              ...hydratedAttempts,
+            ]);
+          } else {
+            // Loading heavy details for one attempt must never remove or
+            // relabel the sibling historical attempts.
+            setSubmissions((current) =>
+              current.map((item) =>
+                String(item.id) ===
+                String(selectedSubmission.id)
+                  ? hydrated
+                  : item
+              )
+            );
+          }
         }
       })
       .catch((error) => {
@@ -2604,6 +2716,51 @@ export default function TeacherSubmissions({
     setReviewSubmissionSnapshot(current);
     setReviewOpen(true);
   }
+
+  useEffect(() => {
+    const targetSubmissionId = String(
+      requestedSubmissionId || ""
+    ).trim();
+
+    if (!targetSubmissionId) {
+      handledRequestedSubmissionRef.current = "";
+      return;
+    }
+
+    if (
+      handledRequestedSubmissionRef.current ===
+      targetSubmissionId
+    ) {
+      return;
+    }
+
+    const targetRosterItem = roster.find((item) =>
+      (item.attempts || []).some(
+        (attempt) =>
+          String(attempt?.id || "") ===
+          targetSubmissionId
+      )
+    );
+
+    if (!targetRosterItem) return;
+
+    const targetAttempt =
+      (targetRosterItem.attempts || []).find(
+        (attempt) =>
+          String(attempt?.id || "") ===
+          targetSubmissionId
+      ) || null;
+
+    if (!targetAttempt) return;
+
+    handledRequestedSubmissionRef.current =
+      targetSubmissionId;
+
+    setSelectedRosterId(targetRosterItem.id);
+    setSelectedAttemptId(targetAttempt.id);
+    setReviewSubmissionSnapshot(targetAttempt);
+    setReviewOpen(true);
+  }, [requestedSubmissionId, roster]);
 
   function createPlaceholderSubmission(item, nextStatus) {
     if (!selectedAssignment || !item) return null;

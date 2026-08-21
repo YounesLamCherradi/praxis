@@ -1281,9 +1281,9 @@ export default function Step2DraftingCanvas() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 pb-2">
+    <div className="student-draft-step flex h-full min-h-0 flex-col gap-3 pb-2">
       {/* Compact progress and editor toolbar */}
-      <div className="z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
+      <div className="student-draft-toolbar z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -1440,7 +1440,7 @@ export default function Step2DraftingCanvas() {
           When the automatic outline is enabled, the editable outline
           appears as a right-side planning panel on desktop. */}
       <div
-        className={`grid min-h-[300px] w-full flex-1 gap-3 ${
+        className={`student-draft-workspace grid min-h-[300px] w-full flex-1 gap-3 ${
           showChatOutline
             ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_340px]"
             : "grid-cols-1"

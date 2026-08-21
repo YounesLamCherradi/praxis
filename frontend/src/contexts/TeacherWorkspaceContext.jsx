@@ -1247,7 +1247,6 @@ export function TeacherWorkspaceProvider({ children }) {
               classId: course.id,
               classCode: course.code || "",
               className: course.name || "",
-              isCurrent: true,
             };
           })
         );

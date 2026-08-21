@@ -95,7 +95,7 @@ function normalizeAssignmentType(value) {
   const clean = getText(value).toLowerCase();
 
   if (clean.includes("compare")) return "Compare and Contrast";
-  if (clean.includes("process")) return "Process Paragraph";
+  if (clean.includes("process")) return "Process";
   if (clean.includes("narrative")) return "Narrative";
   if (clean.includes("argument")) return "Argument";
   if (clean.includes("definition")) return "Definition";

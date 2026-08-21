@@ -21,6 +21,7 @@ import {
 } from "../../utils/courseInvite.js";
 
 export default function Login() {
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [inviteCode] = useState(
@@ -273,17 +274,43 @@ export default function Login() {
                       <Lock className="w-4 h-4" />
                     </div>
 
-                    <input
-                      id="login-password"
-                      type="password"
-                      name="password"
-                      autoComplete="current-password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      placeholder="••••••••"
-                      required
-                      className="block w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
-                    />
+                    <div className="relative">
+                      <input
+                        id="login-password"
+                        type={showLoginPassword ? "text" : "password"}
+                        name="password"
+                        autoComplete="current-password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        required
+                        className="block w-full pl-10 pr-11 py-3 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all bg-white"
+                      />
+                      <button
+                        type="button"
+                        data-password-toggle="showLoginPassword"
+                        onClick={() => setShowLoginPassword((current) => !current)}
+                        aria-label={showLoginPassword ? "Hide password" : "Show password"}
+                        aria-pressed={showLoginPassword}
+                        title={showLoginPassword ? "Hide password" : "Show password"}
+                        className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="h-4 w-4"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                          <circle cx="12" cy="12" r="2.5" />
+                          {showLoginPassword && <path d="M4 4l16 16" />}
+                        </svg>
+                      </button>
+                    </div>
                   </div>
                 </div>
 

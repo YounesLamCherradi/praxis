@@ -255,6 +255,7 @@ export default function Step1IdeasChat() {
   ] = useState(false);
 
   const chatEndRef = useRef(null);
+  const chatInputRef = useRef(null);
   const requestInFlightRef = useRef(false);
   const openingRequestKeyRef = useRef("");
 
@@ -628,6 +629,24 @@ export default function Step1IdeasChat() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isThinking]);
 
+  useEffect(() => {
+    if (isThinking || !chatAvailable) {
+      return undefined;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const input = chatInputRef.current;
+
+      if (input && !input.disabled) {
+        input.focus({ preventScroll: true });
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [isThinking, chatAvailable, messages.length]);
+
   async function sendMessageToCoach(messageText) {
     const cleanMessage = messageText.trim();
 
@@ -836,7 +855,7 @@ export default function Step1IdeasChat() {
     <div className="flex h-full min-h-0 flex-col gap-3">
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3">
 
-        <section className="flex min-h-[480px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
+        <section className="student-coach-panel flex min-h-[480px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:min-h-0">
           <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
@@ -980,6 +999,7 @@ export default function Step1IdeasChat() {
               className="flex gap-2"
             >
               <input
+                ref={chatInputRef}
                 type="text"
                 value={chatInput}
                 onChange={(event) =>

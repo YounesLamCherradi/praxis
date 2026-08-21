@@ -1852,7 +1852,9 @@ export function StudentWorkspaceProvider({
             classId: assignment?.classId || null,
             classCode: assignment?.classCode || "",
             className: assignment?.className || "",
-            isCurrent: true,
+            // Preserve the canonical attempt state returned by PostgreSQL.
+            // Historical attempts must remain read-only after refresh.
+            isCurrent: submission.isCurrent !== false,
           };
         });
         persistedSubmissions.forEach((submission) => {
@@ -2066,7 +2068,7 @@ export function StudentWorkspaceProvider({
             const incoming = backendById.get(String(current.id));
             if (!incoming) return current;
 
-            return {
+            const merged = {
               ...current,
               status: incoming.status || current.status,
               teacherReview:
@@ -2087,9 +2089,27 @@ export function StudentWorkspaceProvider({
                 null,
               gradedAt:
                 incoming.gradedAt || current.gradedAt || null,
+
+              // Reopen/teacher review changes the durable row version.
+              // Keep the student's optimistic-concurrency token current.
+              version:
+                incoming.version ?? current.version,
+
               updatedAt:
                 incoming.updatedAt || current.updatedAt,
             };
+
+            if (
+              merged.assignmentId &&
+              merged.id
+            ) {
+              rememberDurableSubmission(
+                merged.assignmentId,
+                merged
+              );
+            }
+
+            return merged;
           });
         });
       } catch {
@@ -2863,8 +2883,37 @@ export function StudentWorkspaceProvider({
       existingDraft &&
       isReopenedSubmission
     ) {
+      const previousAttemptNumber =
+        Math.max(
+          1,
+          Number(
+            existingDraft.attemptNumber || 2
+          ) - 1
+        );
+
+      /*
+        PostgreSQL revision history may already have reconstructed the
+        previous immutable attempt. Reuse it instead of manufacturing a
+        duplicate Attempt 1 during resubmission.
+      */
+      const persistedPreviousAttempt =
+        sameStudentAttempts
+          .filter(
+            (submission) =>
+              submission.isCurrent === false &&
+              Number(
+                submission.attemptNumber || 0
+              ) === previousAttemptNumber
+          )
+          .sort(
+            (a, b) =>
+              getSubmissionTime(b) -
+              getSubmissionTime(a)
+          )[0] || null;
+
       const originalSnapshot =
         existingDraft.reopenSnapshot ||
+        persistedPreviousAttempt ||
         null;
 
       const originalText =
@@ -2877,15 +2926,14 @@ export function StudentWorkspaceProvider({
         ...(originalSnapshot ||
           existingDraft),
 
-        id: `${existingDraft.id}:attempt:${Math.max(
-          1,
-          Number(originalSnapshot?.attemptNumber || existingDraft.attemptNumber || 2) - 1
-        )}`,
+        id:
+          persistedPreviousAttempt?.id ||
+          `${existingDraft.id}:attempt:${previousAttemptNumber}`,
 
         attemptNumber:
           Number(
             originalSnapshot?.attemptNumber ||
-              Math.max(1, Number(existingDraft.attemptNumber || 2) - 1) ||
+              previousAttemptNumber ||
               1
           ),
 
@@ -3096,7 +3144,9 @@ export function StudentWorkspaceProvider({
           .filter(
             (submission) =>
               String(submission.id) !==
-              String(existingDraft.id)
+                String(existingDraft.id) &&
+              String(submission.id) !==
+                String(previousAttempt.id)
           )
           .map((submission) => {
             const isSameStudentAssignment =
@@ -3798,16 +3848,14 @@ export function StudentWorkspaceProvider({
         !options.skipFeedbackPrompt &&
         !activeSubmission?.feedbackPromptResolvedAt
       ) {
-        const currentFeedbackView = "Draft";
-
         showStudentWorkflowNotice({
           tone: "blue",
           title: "Feedback checks are still available",
           message: `You still have ${remaining} feedback check${
             remaining === 1 ? "" : "s"
-          } available. You may stay in ${currentFeedbackView}, or continue to the Rubric Check without using them.`,
-          primaryLabel: "Continue to Rubric",
-          secondaryLabel: `Stay in ${currentFeedbackView}`,
+          } available. You can get AI feedback now, or continue to the Rubric Check without using them.`,
+          primaryLabel: "Get AI feedback",
+          secondaryLabel: "Continue to Rubric",
           pendingTransition: {
             targetStep: 4,
             options: {

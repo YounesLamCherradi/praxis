@@ -220,6 +220,8 @@ function getTeacherIdentity(authUser, authProfile) {
 }
 
 export default function TeacherDashboard() {
+  const [showTeacherNewPassword, setShowTeacherNewPassword] = useState(false);
+  const [showTeacherConfirmPassword, setShowTeacherConfirmPassword] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const workspaceRequestIdRef = useRef(0);
@@ -321,6 +323,7 @@ export default function TeacherDashboard() {
       next.delete("assignment");
       next.delete("review");
       next.delete("status");
+      next.delete("submission");
     }
 
     if (next.toString() !== searchParams.toString()) {
@@ -915,7 +918,10 @@ export default function TeacherDashboard() {
     setActiveTab("assignments");
   }
 
-  function openAssignmentReview(assignment) {
+  function openAssignmentReview(
+    assignment,
+    { submissionId = null } = {}
+  ) {
     if (!assignment) {
       openAssignmentList();
       return;
@@ -931,6 +937,7 @@ export default function TeacherDashboard() {
         courseId: assignment.classId || null,
         assignmentId: assignment.id,
         statusFilter: "Pending",
+        submissionId: submissionId || null,
       })
     );
 
@@ -943,6 +950,13 @@ export default function TeacherDashboard() {
     next.set("assignment", String(assignment.id));
     next.set("review", "submissions");
     next.set("status", "Pending");
+
+    if (submissionId) {
+      next.set("submission", String(submissionId));
+    } else {
+      next.delete("submission");
+    }
+
     setSearchParams(next, { replace: true });
   }
 
@@ -951,9 +965,14 @@ export default function TeacherDashboard() {
     const courseId = String(searchParams.get("course") || "").trim();
     const reviewMode = String(searchParams.get("review") || "").trim();
     const statusFilter = String(searchParams.get("status") || "").trim();
+    const submissionId = String(
+      searchParams.get("submission") || ""
+    ).trim();
+
     if (!assignmentId) return;
 
-    const deepLinkKey = `${courseId}:${assignmentId}:${reviewMode}:${statusFilter}`;
+    const deepLinkKey =
+      `${courseId}:${assignmentId}:${reviewMode}:${statusFilter}:${submissionId}`;
     if (handledDeepLinkRef.current === deepLinkKey) return;
 
     const assignment = assignments.find(
@@ -963,10 +982,15 @@ export default function TeacherDashboard() {
 
     handledDeepLinkRef.current = deepLinkKey;
     if (reviewMode === "submissions") {
-      openAssignmentReview({
-        ...assignment,
-        classId: assignment.classId || courseId || null,
-      });
+      openAssignmentReview(
+        {
+          ...assignment,
+          classId: assignment.classId || courseId || null,
+        },
+        {
+          submissionId: submissionId || null,
+        }
+      );
       return;
     }
 
@@ -3487,17 +3511,43 @@ function TeacherPasswordModal({
               New password
             </label>
 
-            <input
-              id="teacher-new-password"
-              type="password"
-              value={newPassword}
-              onChange={(event) => {
-                setNewPassword(event.target.value);
-                setPasswordUiMessage("");
-              }}
-              placeholder="At least 10 characters"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-            />
+            <div className="relative">
+              <input
+                id="teacher-new-password"
+                type={showTeacherNewPassword ? "text" : "password"}
+                value={newPassword}
+                onChange={(event) => {
+                  setNewPassword(event.target.value);
+                  setPasswordUiMessage("");
+                }}
+                placeholder="At least 10 characters"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-11 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              />
+              <button
+                type="button"
+                data-password-toggle="showTeacherNewPassword"
+                onClick={() => setShowTeacherNewPassword((current) => !current)}
+                aria-label={showTeacherNewPassword ? "Hide password" : "Show password"}
+                aria-pressed={showTeacherNewPassword}
+                title={showTeacherNewPassword ? "Hide password" : "Show password"}
+                className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                  {showTeacherNewPassword && <path d="M4 4l16 16" />}
+                </svg>
+              </button>
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -3508,17 +3558,43 @@ function TeacherPasswordModal({
               Confirm password
             </label>
 
-            <input
-              id="teacher-confirm-password"
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => {
-                setConfirmPassword(event.target.value);
-                setPasswordUiMessage("");
-              }}
-              placeholder="Repeat the new password"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-            />
+            <div className="relative">
+              <input
+                id="teacher-confirm-password"
+                type={showTeacherConfirmPassword ? "text" : "password"}
+                value={confirmPassword}
+                onChange={(event) => {
+                  setConfirmPassword(event.target.value);
+                  setPasswordUiMessage("");
+                }}
+                placeholder="Repeat the new password"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-11 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+              />
+              <button
+                type="button"
+                data-password-toggle="showTeacherConfirmPassword"
+                onClick={() => setShowTeacherConfirmPassword((current) => !current)}
+                aria-label={showTeacherConfirmPassword ? "Hide password" : "Show password"}
+                aria-pressed={showTeacherConfirmPassword}
+                title={showTeacherConfirmPassword ? "Hide password" : "Show password"}
+                className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                >
+                  <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                  <circle cx="12" cy="12" r="2.5" />
+                  {showTeacherConfirmPassword && <path d="M4 4l16 16" />}
+                </svg>
+              </button>
+            </div>
           </div>
 
           {passwordUiMessage && (

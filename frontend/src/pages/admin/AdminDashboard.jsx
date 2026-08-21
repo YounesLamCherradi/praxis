@@ -1562,6 +1562,8 @@ function downloadCsv(
 ========================================================= */
 
 export default function AdminDashboard() {
+  const [showAdminNewPassword, setShowAdminNewPassword] = useState(false);
+  const [showAdminConfirmPassword, setShowAdminConfirmPassword] = useState(false);
 
   const [adminCefrBenchmarks, setAdminCefrBenchmarks] =
     useState({});
@@ -4126,20 +4128,46 @@ export default function AdminDashboard() {
                   New password
                 </label>
 
-                <input
-                  id="admin-new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(event) => {
-                    setNewPassword(
-                      event.target.value
-                    );
+                <div className="relative">
+                  <input
+                    id="admin-new-password"
+                    type={showAdminNewPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(event) => {
+                      setNewPassword(
+                        event.target.value
+                      );
 
-                    setPasswordUiMessage("");
-                  }}
-                  placeholder="At least 10 characters"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                />
+                      setPasswordUiMessage("");
+                    }}
+                    placeholder="At least 10 characters"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-11 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                  />
+                  <button
+                    type="button"
+                    data-password-toggle="showAdminNewPassword"
+                    onClick={() => setShowAdminNewPassword((current) => !current)}
+                    aria-label={showAdminNewPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showAdminNewPassword}
+                    title={showAdminNewPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-4 w-4"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                      {showAdminNewPassword && <path d="M4 4l16 16" />}
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -4150,20 +4178,46 @@ export default function AdminDashboard() {
                   Confirm password
                 </label>
 
-                <input
-                  id="admin-confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(event) => {
-                    setConfirmPassword(
-                      event.target.value
-                    );
+                <div className="relative">
+                  <input
+                    id="admin-confirm-password"
+                    type={showAdminConfirmPassword ? "text" : "password"}
+                    value={confirmPassword}
+                    onChange={(event) => {
+                      setConfirmPassword(
+                        event.target.value
+                      );
 
-                    setPasswordUiMessage("");
-                  }}
-                  placeholder="Repeat the new password"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
-                />
+                      setPasswordUiMessage("");
+                    }}
+                    placeholder="Repeat the new password"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 pl-4 pr-11 py-3 text-sm text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                  />
+                  <button
+                    type="button"
+                    data-password-toggle="showAdminConfirmPassword"
+                    onClick={() => setShowAdminConfirmPassword((current) => !current)}
+                    aria-label={showAdminConfirmPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showAdminConfirmPassword}
+                    title={showAdminConfirmPassword ? "Hide password" : "Show password"}
+                    className="absolute inset-y-0 right-0 z-10 flex items-center pr-3.5 text-slate-400 transition-colors hover:text-blue-600 focus:text-blue-600 focus:outline-none cursor-pointer"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className="h-4 w-4"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" />
+                      <circle cx="12" cy="12" r="2.5" />
+                      {showAdminConfirmPassword && <path d="M4 4l16 16" />}
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               {passwordUiMessage && (

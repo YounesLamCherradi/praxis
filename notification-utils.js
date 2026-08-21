@@ -22,9 +22,19 @@ function teacherReviewWasNewlySaved(previousReview, nextReview) {
 }
 
 function submissionWasReopened(previousSubmission, nextSubmission) {
-  const previousStatus = String(previousSubmission?.status || "").toLowerCase();
-  const nextStatus = String(nextSubmission?.status || "").toLowerCase();
-  return nextStatus === "draft" && previousStatus && previousStatus !== "draft";
+  const previousStatus = String(
+    previousSubmission?.status || ""
+  ).toLowerCase();
+
+  const nextStatus = String(
+    nextSubmission?.status || ""
+  ).toLowerCase();
+
+  return (
+    ["draft", "reopened"].includes(nextStatus) &&
+    Boolean(previousStatus) &&
+    !["draft", "reopened"].includes(previousStatus)
+  );
 }
 
 function submissionPayloadWithGradedStatus(payload = {}) {

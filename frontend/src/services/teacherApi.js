@@ -215,7 +215,9 @@ export function normalizeSubmission(row = {}) {
       "",
     draftText: value.draftText || "",
     finalText: value.finalText || "",
-    submittedText: value.status === "submitted" || value.status === "graded"
+    submittedText: ["submitted", "graded", "late"].includes(
+      String(value.status || "").toLowerCase()
+    )
       ? value.finalText || ""
       : "",
     chatHistory: Array.isArray(value.chatHistory) ? value.chatHistory : [],
@@ -551,7 +553,10 @@ export async function saveMySubmission(submission, baseline = {}) {
       method: "PATCH",
       body: JSON.stringify(submissionPayload({
         ...submission,
-        updatedAt: error.updatedAt || submission.updatedAt,
+        updatedAt:
+          error.updatedAt ||
+          error.updated_at ||
+          submission.updatedAt,
       })),
     });
   }
