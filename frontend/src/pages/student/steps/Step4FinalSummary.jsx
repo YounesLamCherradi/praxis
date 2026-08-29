@@ -176,6 +176,61 @@ function escapeReportHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
+function formatOverallFeedbackHtml(value) {
+  const feedback = String(
+    value || "No overall feedback was provided."
+  ).trim();
+
+  if (!feedback) {
+    return '<p class="feedback-intro">No overall feedback was provided.</p>';
+  }
+
+  /*
+   * AI grading feedback commonly arrives as:
+   *
+   * Intro sentence... (1) First point... (2) Second point...
+   *
+   * Preserve the wording, but present numbered points separately
+   * so the grade report is easier to scan.
+   */
+  const numberedPattern = /\s*\((\d+)\)\s*/g;
+  const matches = [...feedback.matchAll(numberedPattern)];
+
+  if (!matches.length) {
+    return `<p class="feedback-intro">${escapeReportHtml(feedback)}</p>`;
+  }
+
+  const firstIndex = matches[0].index ?? 0;
+  const intro = feedback.slice(0, firstIndex).trim();
+
+  const items = matches.map((match, index) => {
+    const start =
+      (match.index ?? 0) + match[0].length;
+
+    const end =
+      index + 1 < matches.length
+        ? matches[index + 1].index
+        : feedback.length;
+
+    return feedback.slice(start, end).trim();
+  }).filter(Boolean);
+
+  const introHtml = intro
+    ? `<p class="feedback-intro">${escapeReportHtml(intro)}</p>`
+    : "";
+
+  const listHtml = items.length
+    ? `<ol class="feedback-points">${items
+        .map(
+          (item) =>
+            `<li>${escapeReportHtml(item)}</li>`
+        )
+        .join("")}</ol>`
+    : "";
+
+  return `${introHtml}${listHtml}`;
+}
+
 function downloadGradeReportPdf({ assignment, submission, rubric }) {
   if (!submission) return;
 
@@ -201,7 +256,11 @@ function downloadGradeReportPdf({ assignment, submission, rubric }) {
         ? submission.planningChat
         : submission.chatHistory
   );
-  const events = safeArray(submission.writingEvents);
+  const events = safeArray(
+    submission.writingEvents?.length
+      ? submission.writingEvents
+      : submission.writingReplay
+  );
 
   let cursor = 0;
   const annotatedParts = [];
@@ -230,11 +289,50 @@ function downloadGradeReportPdf({ assignment, submission, rubric }) {
     return `<div class="message-row ${isCoach ? "coach" : "student"}"><div class="avatar">${isCoach ? "P" : escapeReportHtml(String(studentName).slice(0, 1).toUpperCase())}</div><div class="message"><div class="message-meta"><strong>${isCoach ? "Praxis coach" : escapeReportHtml(studentName)}</strong>${createdAt ? `<time>${escapeReportHtml(formatDateTime(createdAt))}</time>` : ""}</div><p>${escapeReportHtml(message?.content || message?.text || "")}</p></div></div>`;
   }).join("");
 
-  const insertionCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("insert")).length;
-  const deletionCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("delete")).length;
-  const pasteCount = events.filter((event) => String(event?.type || "").toLowerCase().includes("paste")).length;
+  const insertionCount = events.filter((event) => {
+    const type = String(event?.type || "").toLowerCase();
+
+    return (
+      type.includes("insert") ||
+      Number(event?.addedChars || 0) > 0
+    );
+  }).length;
+
+  const deletionCount = events.filter((event) => {
+    const type = String(event?.type || "").toLowerCase();
+
+    return (
+      type.includes("delete") ||
+      Number(event?.deletedChars || 0) > 0
+    );
+  }).length;
+
+  const pasteCount = events.filter((event) =>
+    String(event?.type || "")
+      .toLowerCase()
+      .includes("paste")
+  ).length;
+
   const changedCharacters = events.reduce(
-    (sum, event) => sum + Math.abs(Number(event?.delta || event?.addedChars || event?.deletedChars || 0)), 0
+    (sum, event) => {
+      const added = Math.abs(
+        Number(event?.addedChars || 0)
+      );
+
+      const deleted = Math.abs(
+        Number(event?.deletedChars || 0)
+      );
+
+      if (added || deleted) {
+        return sum + added + deleted;
+      }
+
+      return (
+        sum +
+        Math.abs(Number(event?.delta || 0))
+      );
+    },
+    0
   );
   const eventRows = [
     ["Insertions", `${insertionCount} events`],
@@ -257,11 +355,11 @@ function downloadGradeReportPdf({ assignment, submission, rubric }) {
   const prompt = assignment?.prompt || assignment?.description || submission.assignmentPrompt || "No assignment prompt recorded.";
   const deadline = assignment?.deadline || assignment?.dueDate || assignment?.dueAt;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeReportHtml(title)} — Grade report</title><style>
-    @page{size:letter;margin:15mm 14mm 17mm}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:#172033;font:11pt/1.5 Georgia,"Times New Roman",serif;background:#f5f8ff}main{max-width:820px;margin:28px auto;padding:28px 32px;background:#fff;border:1px solid #dbe5f2;border-radius:18px;box-shadow:0 18px 45px rgba(30,64,175,.08)}.brand{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:3px solid #2563eb}.brand-name{color:#1745d1;font:700 18px Arial,sans-serif;letter-spacing:.02em}.report-label{color:#64748b;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.12em}h1{font-size:22px;line-height:1.25;margin:20px 0 8px;color:#0f172a}h2{color:#1d4ed8;font-size:15px;margin:25px 0 10px;padding-bottom:5px;border-bottom:1px solid #bfdbfe;break-after:avoid}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:25px;padding-bottom:5px;border-bottom:1px solid #bfdbfe}.section-heading h2{margin:0;padding:0;border:0}.count-badge{display:inline-flex;align-items:center;border:1px solid #bfdbfe;border-radius:999px;padding:3px 8px;background:#eff6ff;color:#1d4ed8;font:700 9px Arial,sans-serif}.meta{color:#52627a;font-size:10.5pt;margin-bottom:20px}.meta strong{color:#172033}.summary{display:grid;grid-template-columns:130px 1fr;gap:14px;align-items:center;background:#eff6ff;border:1px solid #bfdbfe;border-left:5px solid #2563eb;border-radius:12px;padding:14px 16px}.grade{font:700 25px Arial,sans-serif;color:#1745d1}.feedback{border-left:1px solid #bfdbfe;padding-left:14px}.feedback strong{display:block;color:#334155;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}table{width:100%;border-collapse:separate;border-spacing:0;font-size:10pt;border:1px solid #dbe5f2;border-radius:10px;overflow:hidden}th{text-align:left;color:#334155;background:#eaf2ff;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em}th,td{padding:8px 9px;border-bottom:1px solid #dbe5f2;vertical-align:top}tbody tr:last-child td{border-bottom:0}td.score{white-space:nowrap;color:#1745d1;font-weight:700}small{display:block;color:#64748b;font-size:9pt;margin-top:3px}.chat-thread{max-height:430px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin;padding:14px;background:linear-gradient(180deg,#f8fbff,#f5f8ff);border:1px solid #dbeafe;border-radius:14px}.chat-thread::-webkit-scrollbar,.scroll-text::-webkit-scrollbar{width:8px}.chat-thread::-webkit-scrollbar-track,.scroll-text::-webkit-scrollbar-track{background:#eaf2ff;border-radius:999px}.chat-thread::-webkit-scrollbar-thumb,.scroll-text::-webkit-scrollbar-thumb{background:#93b4f8;border:2px solid #eaf2ff;border-radius:999px}.message-row{display:flex;align-items:flex-end;gap:8px;margin:10px 0;break-inside:avoid}.message-row:first-child{margin-top:0}.message-row:last-child{margin-bottom:0}.message-row.student{flex-direction:row-reverse}.avatar{display:flex;width:28px;height:28px;flex:0 0 28px;align-items:center;justify-content:center;border-radius:10px;background:#2563eb;color:#fff;font:700 10px Arial,sans-serif;box-shadow:0 3px 8px #2563eb25}.message-row.student .avatar{background:#10b981}.message{max-width:78%;padding:9px 12px;border:1px solid #dbe5f2;border-radius:6px 14px 14px 14px;background:#fff;box-shadow:0 3px 10px rgba(30,64,175,.05)}.message-row.student .message{border-color:#a7f3d0;border-radius:14px 6px 14px 14px;background:#ecfdf5}.message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.message strong{color:#52627a;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.07em}.message time{color:#94a3b8;font:8px Arial,sans-serif;white-space:nowrap}.message p{margin:3px 0 0}.text-box{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #dbe5f2;border-radius:10px;padding:14px;font-size:10.5pt}.scroll-text{max-height:360px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin}mark{background:#fef3c7;border-bottom:2px solid #f59e0b;border-radius:3px;padding:1px 2px;cursor:pointer;transition:box-shadow .2s,background .2s}mark:hover,mark:focus{background:#fde68a;outline:none;box-shadow:0 0 0 3px rgba(245,158,11,.2)}sup{color:#b45309;font:700 7px Arial,sans-serif;margin-left:2px}.annotation-row{cursor:pointer;transition:background .2s,box-shadow .2s}.annotation-row:hover,.annotation-row:focus{background:#eff6ff;outline:none}.report-focus{animation:reportPulse 1.5s ease}@keyframes reportPulse{0%,100%{box-shadow:none}20%,70%{box-shadow:inset 0 0 0 3px rgba(37,99,235,.32);background:#dbeafe}}.empty{color:#64748b;font-style:italic}.print-action{position:sticky;top:12px;float:right;border:0;border-radius:999px;padding:9px 16px;color:white;background:#1769ff;font:700 12px Arial,sans-serif;cursor:pointer;box-shadow:0 5px 15px #2563eb33}.footer-note{margin-top:28px;padding-top:10px;border-top:1px solid #dbe5f2;color:#64748b;font:9px Arial,sans-serif}.section{break-inside:auto}@media print{body{background:#fff}main{max-width:none;margin:0;padding:0;border:0;border-radius:0;box-shadow:none}.print-action{display:none}.brand{margin-top:0}h2{margin-top:18px}.section-heading{margin-top:18px}.count-badge{background:#fff}.chat-thread{max-height:none;overflow:visible;padding:0;background:#fff;border:0;border-radius:0}.scroll-text{max-height:none;overflow:visible}.message-row,tr,.summary{break-inside:avoid}.text-box{break-inside:auto}.annotation-row{cursor:default}.footer-note{position:running(reportFooter)}}
+    @page{size:letter;margin:15mm 14mm 17mm}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;color:#172033;font:11pt/1.5 Georgia,"Times New Roman",serif;background:#f5f8ff}main{max-width:820px;margin:28px auto;padding:28px 32px;background:#fff;border:1px solid #dbe5f2;border-radius:18px;box-shadow:0 18px 45px rgba(30,64,175,.08)}.brand{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:3px solid #2563eb}.brand-name{color:#1745d1;font:700 18px Arial,sans-serif;letter-spacing:.02em}.report-label{color:#64748b;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.12em}h1{font-size:22px;line-height:1.25;margin:20px 0 8px;color:#0f172a}h2{color:#1d4ed8;font-size:15px;margin:25px 0 10px;padding-bottom:5px;border-bottom:1px solid #bfdbfe;break-after:avoid}.section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:25px;padding-bottom:5px;border-bottom:1px solid #bfdbfe}.section-heading h2{margin:0;padding:0;border:0}.count-badge{display:inline-flex;align-items:center;border:1px solid #bfdbfe;border-radius:999px;padding:3px 8px;background:#eff6ff;color:#1d4ed8;font:700 9px Arial,sans-serif}.meta{color:#52627a;font-size:10.5pt;margin-bottom:20px}.meta strong{color:#172033}.summary{display:grid;grid-template-columns:130px 1fr;gap:14px;align-items:center;background:#eff6ff;border:1px solid #bfdbfe;border-left:5px solid #2563eb;border-radius:12px;padding:14px 16px}.grade{font:700 25px Arial,sans-serif;color:#1745d1}.feedback{border-left:1px solid #bfdbfe;padding-left:14px}.feedback strong{display:block;color:#334155;font:700 10px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px}.feedback-intro{margin:0;color:#253047;line-height:1.55}.feedback-points{margin:9px 0 0;padding-left:20px;color:#253047}.feedback-points li{margin:0 0 7px;padding-left:3px;line-height:1.5}.feedback-points li:last-child{margin-bottom:0}.feedback-points li::marker{color:#2563eb;font-family:Arial,sans-serif;font-weight:700}table{width:100%;border-collapse:separate;border-spacing:0;font-size:10pt;border:1px solid #dbe5f2;border-radius:10px;overflow:hidden}th{text-align:left;color:#334155;background:#eaf2ff;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.08em}th,td{padding:8px 9px;border-bottom:1px solid #dbe5f2;vertical-align:top}tbody tr:last-child td{border-bottom:0}td.score{white-space:nowrap;color:#1745d1;font-weight:700}small{display:block;color:#64748b;font-size:9pt;margin-top:3px}.chat-thread{max-height:430px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin;padding:14px;background:linear-gradient(180deg,#f8fbff,#f5f8ff);border:1px solid #dbeafe;border-radius:14px}.chat-thread::-webkit-scrollbar,.scroll-text::-webkit-scrollbar{width:8px}.chat-thread::-webkit-scrollbar-track,.scroll-text::-webkit-scrollbar-track{background:#eaf2ff;border-radius:999px}.chat-thread::-webkit-scrollbar-thumb,.scroll-text::-webkit-scrollbar-thumb{background:#93b4f8;border:2px solid #eaf2ff;border-radius:999px}.message-row{display:flex;align-items:flex-end;gap:8px;margin:10px 0;break-inside:avoid}.message-row:first-child{margin-top:0}.message-row:last-child{margin-bottom:0}.message-row.student{flex-direction:row-reverse}.avatar{display:flex;width:28px;height:28px;flex:0 0 28px;align-items:center;justify-content:center;border-radius:10px;background:#2563eb;color:#fff;font:700 10px Arial,sans-serif;box-shadow:0 3px 8px #2563eb25}.message-row.student .avatar{background:#10b981}.message{max-width:78%;padding:9px 12px;border:1px solid #dbe5f2;border-radius:6px 14px 14px 14px;background:#fff;box-shadow:0 3px 10px rgba(30,64,175,.05)}.message-row.student .message{border-color:#a7f3d0;border-radius:14px 6px 14px 14px;background:#ecfdf5}.message-meta{display:flex;align-items:center;justify-content:space-between;gap:12px}.message strong{color:#52627a;font:700 9px Arial,sans-serif;text-transform:uppercase;letter-spacing:.07em}.message time{color:#94a3b8;font:8px Arial,sans-serif;white-space:nowrap}.message p{margin:3px 0 0}.text-box{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border:1px solid #dbe5f2;border-radius:10px;padding:14px;font-size:10.5pt}.scroll-text{max-height:360px;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#93b4f8 #eaf2ff;scrollbar-width:thin}mark{background:#fef3c7;border-bottom:2px solid #f59e0b;border-radius:3px;padding:1px 2px;cursor:pointer;transition:box-shadow .2s,background .2s}mark:hover,mark:focus{background:#fde68a;outline:none;box-shadow:0 0 0 3px rgba(245,158,11,.2)}sup{color:#b45309;font:700 7px Arial,sans-serif;margin-left:2px}.annotation-row{cursor:pointer;transition:background .2s,box-shadow .2s}.annotation-row:hover,.annotation-row:focus{background:#eff6ff;outline:none}.report-focus{animation:reportPulse 1.5s ease}@keyframes reportPulse{0%,100%{box-shadow:none}20%,70%{box-shadow:inset 0 0 0 3px rgba(37,99,235,.32);background:#dbeafe}}.empty{color:#64748b;font-style:italic}.print-action{position:sticky;top:12px;float:right;border:0;border-radius:999px;padding:9px 16px;color:white;background:#1769ff;font:700 12px Arial,sans-serif;cursor:pointer;box-shadow:0 5px 15px #2563eb33}.footer-note{margin-top:28px;padding-top:10px;border-top:1px solid #dbe5f2;color:#64748b;font:9px Arial,sans-serif}.section{break-inside:auto}@media print{body{background:#fff}main{max-width:none;margin:0;padding:0;border:0;border-radius:0;box-shadow:none}.print-action{display:none}.brand{margin-top:0}h2{margin-top:18px}.section-heading{margin-top:18px}.count-badge{background:#fff}.chat-thread{max-height:none;overflow:visible;padding:0;background:#fff;border:0;border-radius:0}.scroll-text{max-height:none;overflow:visible}.message-row,tr,.summary{break-inside:avoid}.text-box{break-inside:auto}.annotation-row{cursor:default}.footer-note{position:running(reportFooter)}}
   </style><script>function jumpToReportItem(id){var target=document.getElementById(id);if(!target)return;target.scrollIntoView({behavior:'smooth',block:'center'});target.classList.remove('report-focus');void target.offsetWidth;target.classList.add('report-focus');window.setTimeout(function(){target.classList.remove('report-focus')},1600)}</script></head><body><main><button class="print-action" onclick="window.print()">Print / Save PDF</button><header class="brand"><span class="brand-name">praxis</span><span class="report-label">Student grade report</span></header>
     <h1>${escapeReportHtml(title)}</h1><div class="meta">Student: <strong>${escapeReportHtml(studentName)}</strong> &nbsp;·&nbsp; Status: <strong>${escapeReportHtml(getStatusLabel(submission.status))}</strong> &nbsp;·&nbsp; Attempt: <strong>${Number(submission.attemptNumber || 1)}</strong><br>Submitted: <strong>${escapeReportHtml(formatDateTime(submission.submittedAt) || "Not recorded")}</strong>${deadline ? ` &nbsp;·&nbsp; Due: <strong>${escapeReportHtml(formatDateTime(deadline))}</strong>` : ""}</div>
     <section><h2>Assignment</h2><p>${escapeReportHtml(prompt)}</p></section>
-    <section><h2>Teacher grade summary</h2><div class="summary"><div><span class="report-label">Final grade</span><div class="grade">${escapeReportHtml(score)} / ${total}</div></div><div class="feedback"><strong>Overall feedback</strong>${escapeReportHtml(submission.feedback || "No overall feedback was provided.")}</div></div></section>
+    <section><h2>Teacher grade summary</h2><div class="summary"><div><span class="report-label">Final grade</span><div class="grade">${escapeReportHtml(score)} / ${total}</div></div><div class="feedback"><strong>Overall feedback</strong>${formatOverallFeedbackHtml(submission.feedback)}</div></div></section>
     <section><h2>Rubric breakdown</h2><table><thead><tr><th>Criterion</th><th>Selected band</th><th>Score</th></tr></thead><tbody>${rubricRows || '<tr><td colspan="3" class="empty">No rubric available.</td></tr>'}</tbody></table></section>
     <section><div class="section-heading"><h2>1 — Coaching conversation</h2><span class="count-badge">${chat.length} ${chat.length === 1 ? "message" : "messages"}</span></div><div class="chat-thread">${chatRows || '<p class="empty">No conversation recorded.</p>'}</div></section>
     <section><h2>2 — Draft writing log</h2><table><thead><tr><th>Event type</th><th>Summary</th></tr></thead><tbody>${eventRows}</tbody></table><div class="section-heading"><h2>Draft text</h2><span class="count-badge">${draftWordCount} ${draftWordCount === 1 ? "word" : "words"}</span></div><div class="text-box scroll-text">${escapeReportHtml(draftText || "No draft recorded.")}</div></section>
@@ -761,7 +859,7 @@ function HighlightedTeacherSubmission({
 
   if (ranges.length === 0) {
     return (
-      <p className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700">
+      <p className="whitespace-pre-wrap text-[12px] leading-5 text-slate-700 sm:text-[15px] sm:leading-8">
         {text}
       </p>
     );
@@ -802,7 +900,7 @@ function HighlightedTeacherSubmission({
   }
 
   return (
-    <p className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700">
+    <p className="whitespace-pre-wrap text-[12px] leading-5 text-slate-700 sm:text-[15px] sm:leading-8">
       {parts.map((part, index) => {
         if (part.type === "annotation") {
           return (
@@ -907,7 +1005,7 @@ function TeacherFeedbackModal({
   ];
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483646] flex items-center justify-center p-0 sm:p-4">
+    <div className="fixed inset-0 z-[2147483646] flex items-end justify-center p-0 sm:items-center sm:p-3 xl:p-4">
       <div
         aria-hidden="true"
         className="absolute inset-0 bg-slate-950/45 backdrop-blur-[3px]"
@@ -917,27 +1015,27 @@ function TeacherFeedbackModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="instructor-review-title"
-        className="relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden bg-[#F8FAFC] shadow-2xl sm:h-[min(92vh,900px)] sm:w-[min(94vw,1100px)] sm:rounded-3xl sm:border sm:border-slate-200 animate-fade-in-up"
+        className="relative z-10 flex h-[88dvh] w-full min-h-0 flex-col overflow-hidden rounded-t-2xl bg-[#F8FAFC] pb-[env(safe-area-inset-bottom)] shadow-2xl sm:h-[min(92dvh,900px)] sm:w-[min(94vw,1100px)] sm:rounded-3xl sm:border sm:border-slate-200 sm:pb-0 animate-fade-in-up"
       >
         <header className="shrink-0 border-b border-slate-200 bg-white">
-          <div className="flex items-start justify-between gap-4 px-5 py-3.5">
+          <div className="flex items-start justify-between gap-2 px-2.5 py-2 sm:gap-4 sm:px-5 sm:py-3.5">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 shrink-0 text-blue-700" />
+                <MessageSquare className="h-3 w-3 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
 
-                <p className="font-mono text-[10px] font-black uppercase tracking-[0.18em] text-blue-700">
+                <p className="truncate font-mono text-[7px] font-black uppercase tracking-[0.1em] text-blue-700 sm:text-[10px] sm:tracking-[0.18em]">
                   Attempt {Number(submission?.attemptNumber || 1)} Instructor Review
                 </p>
               </div>
 
-              <h2 id="instructor-review-title" className="mt-1 truncate font-serif text-lg font-bold text-slate-950">
+              <h2 id="instructor-review-title" className="mt-0.5 truncate font-serif text-sm font-bold leading-tight text-slate-950 sm:mt-1 sm:text-lg">
                 {assignment?.title ||
                   submission.assignmentTitle ||
                   "Assignment Feedback"}
               </h2>
 
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500">
-                <span>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[7px] leading-3.5 text-slate-500 sm:mt-1 sm:gap-x-3 sm:gap-y-1 sm:text-[10px] sm:leading-normal">
+                <span className="hidden sm:inline">
                   Review your grade, instructor comments, rubric results, and highlighted notes.
                 </span>
 
@@ -955,7 +1053,7 @@ function TeacherFeedbackModal({
 
                 <span className="hidden h-3 w-px bg-slate-200 sm:block" />
 
-                <span className="max-w-[260px] truncate font-medium text-slate-600">
+                <span className="hidden max-w-[260px] truncate font-medium text-slate-600 sm:inline">
                   {rubric?.title ||
                     submission.rubricTitle ||
                     "Assignment Rubric"}
@@ -967,13 +1065,13 @@ function TeacherFeedbackModal({
               type="button"
               onClick={onClose}
               aria-label="Close instructor review"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-white hover:text-slate-900"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-white hover:text-slate-900 sm:h-9 sm:w-9 sm:rounded-xl"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-3 border-t border-slate-100 px-3 pt-2">
+          <div className="grid grid-cols-3 border-t border-slate-100 px-1 pt-1 sm:px-3 sm:pt-2">
             {reviewTabs.map((tab) => {
               const Icon = tab.icon;
               const selected =
@@ -986,13 +1084,13 @@ function TeacherFeedbackModal({
                   onClick={() =>
                     setActiveTab(tab.id)
                   }
-                  className={`relative inline-flex items-center justify-center gap-1.5 rounded-t-xl px-3 py-3 text-[11px] font-bold transition-colors ${
+                  className={`relative inline-flex min-w-0 items-center justify-center gap-1 rounded-t-lg px-1 py-1.5 text-[8px] font-bold transition-colors sm:gap-1.5 sm:rounded-t-xl sm:px-3 sm:py-3 sm:text-[11px] ${
                     selected
                       ? "bg-blue-50 text-blue-700"
                       : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                   }`}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <Icon className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
                   {tab.label}
 
                   {tab.count !== undefined && (
@@ -1016,22 +1114,22 @@ function TeacherFeedbackModal({
           </div>
         </header>
 
-        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
+        <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain p-2 sm:p-5">
           {activeTab === "overview" && (
             <div className="space-y-2">
-              <section className="rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-600 to-indigo-700 px-4 py-3 text-white shadow-sm">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <section className="rounded-lg border border-blue-200 bg-gradient-to-r from-blue-600 to-indigo-700 px-2.5 py-1.5 text-white shadow-sm sm:rounded-2xl sm:px-4 sm:py-3">
+                <div className="flex items-center justify-between gap-2 sm:gap-3">
                   <div className="flex items-end gap-2">
                     <div>
                       <p className="font-mono text-[8px] font-black uppercase tracking-[0.16em] text-blue-200">
                         Final grade
                       </p>
 
-                      <p className="mt-0.5 text-3xl font-mono font-black leading-none">
+                      <p className="mt-0.5 font-mono text-lg font-black leading-none sm:text-3xl">
                         {hasGrade
                           ? submission.score
                           : " - "}
-                        <span className="ml-1 text-sm text-blue-200">
+                        <span className="ml-0.5 text-[9px] text-blue-200 sm:ml-1 sm:text-sm">
                           / {rubricTotal}
                         </span>
                       </p>
@@ -1044,33 +1142,33 @@ function TeacherFeedbackModal({
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-4 sm:min-w-[300px]">
+                  <div className="grid shrink-0 grid-cols-3 gap-2 border-l border-white/15 pl-2.5 sm:min-w-[320px] sm:gap-5 sm:border-l-0 sm:pl-0">
                     <div>
-                      <p className="text-[7px] font-mono font-black uppercase text-blue-200">
+                      <p className="text-[9px] font-mono font-black uppercase tracking-wide text-blue-100 sm:text-[11px]">
                         Rubric
                       </p>
 
-                      <p className="mt-0.5 text-[11px] font-bold">
+                      <p className="mt-1 text-sm font-black leading-none sm:text-base">
                         {gradedCriteriaCount}/{rubricCriteria.length}
                       </p>
                     </div>
 
                     <div>
-                      <p className="text-[7px] font-mono font-black uppercase text-blue-200">
+                      <p className="text-[9px] font-mono font-black uppercase tracking-wide text-blue-100 sm:text-[11px]">
                         Highlights
                       </p>
 
-                      <p className="mt-0.5 text-[11px] font-bold">
+                      <p className="mt-1 text-sm font-black leading-none sm:text-base">
                         {annotations.length}
                       </p>
                     </div>
 
                     <div>
-                      <p className="text-[7px] font-mono font-black uppercase text-blue-200">
+                      <p className="text-[9px] font-mono font-black uppercase tracking-wide text-blue-100 sm:text-[11px]">
                         Words
                       </p>
 
-                      <p className="mt-0.5 text-[11px] font-bold">
+                      <p className="mt-1 text-sm font-black leading-none sm:text-base">
                         {countWords(finalText)}
                       </p>
                     </div>
@@ -1078,21 +1176,48 @@ function TeacherFeedbackModal({
                 </div>
               </section>
 
-              <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
-                    <MessageSquare className="h-4 w-4" />
+              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:min-h-[260px] sm:rounded-2xl">
+                <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50/70 px-3 py-2.5 sm:px-5 sm:py-3.5">
+                  <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-blue-50 text-blue-700 sm:h-10 sm:w-10 sm:rounded-xl">
+                    <MessageSquare className="h-4 w-4 sm:h-[18px] sm:w-[18px]" />
                   </div>
 
                   <div className="min-w-0">
-                    <p className="font-mono text-[9px] font-black uppercase tracking-wider text-slate-400">
+                    <p className="font-mono text-[9px] font-black uppercase tracking-[0.12em] text-blue-700 sm:text-[11px]">
                       Overall instructor comment
                     </p>
 
-                    <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">
-                      {submission.feedback ||
-                        "Your instructor has not added an overall comment."}
+                    <p className="mt-0.5 hidden text-xs text-slate-500 sm:block">
+                      Review your instructor's overall feedback for this assignment.
                     </p>
+                  </div>
+                </div>
+
+                <div className="px-3 py-3 sm:px-6 sm:py-5">
+                  <div className="max-w-[920px] whitespace-pre-wrap text-[12px] leading-5.5 text-slate-700 sm:text-[15px] sm:leading-7">
+                    {String(
+                      submission.feedback ||
+                        "Your instructor has not added an overall comment."
+                    )
+                      .split(/(?<=[.!?])\s+(?=[A-Z])/)
+                      .reduce((groups, sentence, index) => {
+                        const groupIndex = Math.floor(index / 3);
+
+                        if (!groups[groupIndex]) {
+                          groups[groupIndex] = [];
+                        }
+
+                        groups[groupIndex].push(sentence);
+                        return groups;
+                      }, [])
+                      .map((sentences, index) => (
+                        <p
+                          key={index}
+                          className={index === 0 ? "" : "mt-4"}
+                        >
+                          {sentences.join(" ")}
+                        </p>
+                      ))}
                   </div>
                 </div>
               </section>
@@ -1292,11 +1417,11 @@ function TeacherFeedbackModal({
           )}
         </div>
 
-        <footer className="shrink-0 border-t border-slate-200 bg-white p-4">
+        <footer className="shrink-0 border-t border-slate-200 bg-white px-2 py-1.5 sm:p-4">
           <button
             type="button"
             onClick={onClose}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-xs font-bold text-white transition-colors hover:bg-slate-800"
+            className="inline-flex min-h-8 w-full items-center justify-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-[9px] font-bold text-white transition-colors hover:bg-slate-800 sm:min-h-0 sm:gap-2 sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs"
           >
             <CheckCircle2 className="h-4 w-4" />
             Done Reviewing
@@ -1338,6 +1463,12 @@ export default function Step4FinalSummary({
 
   const submitLockRef = useRef(false);
   const rubricPromptedRef = useRef(false);
+
+  // Preserve in-progress rubric/reflection work across refreshes.
+  // This autosave does NOT mark the self-assessment complete.
+  const selfGradeAutosaveTimerRef = useRef(null);
+  const lastSelfGradeAutosaveRef = useRef("");
+
   const [selfRubricScores, setSelfRubricScores] =
     useState(
       activeSubmission?.selfRubricScores || {}
@@ -1374,6 +1505,109 @@ export default function Step4FinalSummary({
     activeSubmission?.id,
     activeSubmission?.attemptNumber,
     activeSubmission?.reopenedAt,
+  ]);
+
+  useEffect(() => {
+    if (
+      !activeAssignment?.id ||
+      !activeSubmission?.id ||
+      typeof saveDraftProgress !== "function"
+    ) {
+      return undefined;
+    }
+
+    const currentSnapshot = JSON.stringify({
+      selfRubricScores: selfRubricScores || {},
+      reflectionImproved: String(reflectionImproved || ""),
+    });
+
+    const persistedSnapshot = JSON.stringify({
+      selfRubricScores:
+        activeSubmission?.selfRubricScores || {},
+      reflectionImproved: String(
+        activeSubmission?.reflections?.improved || ""
+      ),
+    });
+
+    // Initial load / already persisted state:
+    // do not create an unnecessary save request.
+    if (currentSnapshot === persistedSnapshot) {
+      lastSelfGradeAutosaveRef.current =
+        currentSnapshot;
+
+      return undefined;
+    }
+
+    // Avoid repeating a snapshot we already sent.
+    if (
+      lastSelfGradeAutosaveRef.current ===
+      currentSnapshot
+    ) {
+      return undefined;
+    }
+
+    if (selfGradeAutosaveTimerRef.current) {
+      window.clearTimeout(
+        selfGradeAutosaveTimerRef.current
+      );
+    }
+
+    selfGradeAutosaveTimerRef.current =
+      window.setTimeout(async () => {
+        try {
+          await saveDraftProgress(
+            activeAssignment.id,
+            {
+              selfRubricScores:
+                selfRubricScores || {},
+              reflections: {
+                ...(activeSubmission?.reflections ||
+                  {}),
+                improved: String(
+                  reflectionImproved || ""
+                ),
+              },
+            }
+          );
+
+          lastSelfGradeAutosaveRef.current =
+            currentSnapshot;
+        } catch (error) {
+          /*
+           * Keep autosave silent so it does not interrupt
+           * the student while typing. The explicit
+           * Save & Continue action still reports failures.
+           */
+          console.warn(
+            "Self-assessment progress autosave failed:",
+            error
+          );
+        } finally {
+          selfGradeAutosaveTimerRef.current =
+            null;
+        }
+      }, 800);
+
+    return () => {
+      if (selfGradeAutosaveTimerRef.current) {
+        window.clearTimeout(
+          selfGradeAutosaveTimerRef.current
+        );
+
+        selfGradeAutosaveTimerRef.current =
+          null;
+      }
+    };
+  }, [
+    activeAssignment?.id,
+    activeSubmission?.id,
+    activeSubmission?.attemptNumber,
+    activeSubmission?.reopenedAt,
+    activeSubmission?.selfRubricScores,
+    activeSubmission?.reflections,
+    selfRubricScores,
+    reflectionImproved,
+    saveDraftProgress,
   ]);
 
   useEffect(() => {
@@ -1850,6 +2084,14 @@ export default function Step4FinalSummary({
   }
 
   async function saveSelfAssessment() {
+    if (selfGradeAutosaveTimerRef.current) {
+      window.clearTimeout(
+        selfGradeAutosaveTimerRef.current
+      );
+
+      selfGradeAutosaveTimerRef.current = null;
+    }
+
     if (
       !currentRubric ||
       rubricCriteria.length === 0
@@ -1907,6 +2149,14 @@ export default function Step4FinalSummary({
   }
 
   function saveFinalProgress() {
+    if (selfGradeAutosaveTimerRef.current) {
+      window.clearTimeout(
+        selfGradeAutosaveTimerRef.current
+      );
+
+      selfGradeAutosaveTimerRef.current = null;
+    }
+
     if (
       !activeAssignment?.id ||
       typeof saveDraftProgress !== "function"
@@ -2037,16 +2287,37 @@ export default function Step4FinalSummary({
           />
 
           <TeacherReviewLauncher
-            hasTeacherReview={hasTeacherReview}
-            hasGrade={reviewHasGrade}
-            grade={reviewSubmissionToShow?.score}
+            hasTeacherReview={
+              !isCurrentRevisionAwaitingReview &&
+              hasTeacherReview
+            }
+            hasGrade={
+              !isCurrentRevisionAwaitingReview &&
+              reviewHasGrade
+            }
+            grade={
+              !isCurrentRevisionAwaitingReview
+                ? reviewSubmissionToShow?.score
+                : undefined
+            }
             rubricTotal={reviewRubricTotal}
-            annotationCount={reviewAnnotationsToShow.length}
+            annotationCount={
+              !isCurrentRevisionAwaitingReview
+                ? reviewAnnotationsToShow.length
+                : 0
+            }
             reviewAttemptNumber={reviewAttemptNumber}
             currentAttemptNumber={currentAttemptNumber}
             currentAttemptPending={isCurrentRevisionAwaitingReview}
-            onOpen={() => setShowTeacherFeedback(true)}
+            onOpen={() => {
+              if (isCurrentRevisionAwaitingReview) {
+                return;
+              }
+
+              setShowTeacherFeedback(true);
+            }}
             onDownloadGrade={
+              !isCurrentRevisionAwaitingReview &&
               reviewHasGrade
                 ? () =>
                     downloadGradeReportPdf({
@@ -2061,7 +2332,10 @@ export default function Step4FinalSummary({
         </div>
 
         <TeacherFeedbackModal
-          open={showTeacherFeedback}
+          open={
+            showTeacherFeedback &&
+            !isCurrentRevisionAwaitingReview
+          }
           onClose={() =>
             setShowTeacherFeedback(false)
           }
@@ -2206,60 +2480,87 @@ function SubmissionConfirmation({
   rubricTotal,
 }) {
   return (
-    <section className="relative shrink-0 overflow-hidden rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-blue-50 shadow-sm">
-      <div aria-hidden="true" className="absolute -right-12 -top-16 h-44 w-44 rounded-full bg-blue-100/50 blur-2xl" />
-      <div aria-hidden="true" className="absolute -bottom-20 left-12 h-40 w-40 rounded-full bg-emerald-100/60 blur-2xl" />
+    <section className="relative shrink-0 overflow-hidden rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-blue-50 shadow-sm sm:rounded-3xl">
+      <div
+        aria-hidden="true"
+        className="absolute -right-12 -top-16 h-44 w-44 rounded-full bg-blue-100/50 blur-2xl"
+      />
+      <div
+        aria-hidden="true"
+        className="absolute -bottom-20 left-12 h-40 w-40 rounded-full bg-emerald-100/60 blur-2xl"
+      />
 
-      <div className="relative grid gap-6 p-6 sm:p-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-        <div className="flex items-start gap-4">
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-emerald-200 bg-white text-emerald-600 shadow-sm ring-4 ring-emerald-100/70">
-            <CheckCircle2 className="h-7 w-7" />
+      <div className="relative grid gap-3 p-3.5 sm:gap-6 sm:p-7 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="flex items-start gap-3 sm:gap-4">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emerald-200 bg-white text-emerald-600 shadow-sm ring-2 ring-emerald-100/70 sm:h-14 sm:w-14 sm:rounded-2xl sm:ring-4">
+            <CheckCircle2 className="h-5 w-5 sm:h-7 sm:w-7" />
           </div>
 
-          <div>
-            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-100/80 px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-wider text-emerald-700">
+          <div className="min-w-0 flex-1">
+            <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-100/80 px-2 py-0.5 font-mono text-[8px] font-black uppercase tracking-wider text-emerald-700 sm:px-2.5 sm:py-1 sm:text-[9px]">
               {hasGrade ? "Review complete" : "Successfully submitted"}
             </span>
 
-            <h3 className="mt-2 font-serif text-2xl font-bold text-slate-950">
+            <h3 className="mt-1.5 font-serif text-xl font-bold leading-tight text-slate-950 sm:mt-2 sm:text-2xl">
               Your assignment has been submitted
             </h3>
 
-            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-600">
+            <p className="mt-1 text-[12px] leading-5 text-slate-600 sm:mt-1.5 sm:text-sm sm:leading-relaxed">
               {hasGrade
                 ? "Your instructor has finished grading. Your complete review is ready below."
                 : `Attempt ${attemptNumber} is with your instructor and ready for grading.`}
             </p>
 
             {!hasGrade && (
-              <p className="mt-3 inline-flex items-center gap-2 rounded-xl border border-blue-100 bg-white/80 px-3 py-2 text-[11px] text-slate-500">
-                <Info className="h-3.5 w-3.5 text-blue-600" />
-                You can return here when your instructor publishes the review.
+              <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-blue-100 bg-white/80 px-2.5 py-2 text-[10px] leading-4 text-slate-500 sm:mt-3 sm:inline-flex sm:items-center sm:gap-2 sm:rounded-xl sm:px-3 sm:text-[11px]">
+                <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600 sm:mt-0" />
+                <span>
+                  You can return here when your instructor publishes the review.
+                </span>
               </p>
             )}
           </div>
         </div>
 
-        <div className="grid min-w-[250px] grid-cols-2 overflow-hidden rounded-2xl border border-white/80 bg-white/80 shadow-sm backdrop-blur-sm">
-          <div className="border-r border-slate-100 px-4 py-3.5">
-            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+        <div className="grid w-full grid-cols-2 overflow-hidden rounded-xl border border-white/80 bg-white/80 shadow-sm backdrop-blur-sm sm:min-w-[250px] sm:rounded-2xl">
+          <div className="border-r border-slate-100 px-3 py-2.5 sm:px-4 sm:py-3.5">
+            <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
               Attempt
             </p>
-            <p className="mt-1 text-lg font-bold text-slate-900">#{attemptNumber}</p>
+
+            <p className="mt-0.5 text-base font-bold text-slate-900 sm:mt-1 sm:text-lg">
+              #{attemptNumber}
+            </p>
           </div>
-          <div className="px-4 py-3.5">
-            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+
+          <div className="px-3 py-2.5 sm:px-4 sm:py-3.5">
+            <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
               Status
             </p>
-            <p className={`mt-1 text-sm font-bold ${hasGrade ? "text-blue-700" : "text-emerald-700"}`}>
+
+            <p
+              className={`mt-0.5 text-[13px] font-bold sm:mt-1 sm:text-sm ${
+                hasGrade
+                  ? "text-blue-700"
+                  : "text-emerald-700"
+              }`}
+            >
               {hasGrade ? "Graded" : "Submitted"}
             </p>
           </div>
-          <div className="col-span-2 border-t border-slate-100 px-4 py-3.5">
-            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-slate-400">
+
+          <div className="col-span-2 border-t border-slate-100 px-3 py-2.5 sm:px-4 sm:py-3.5">
+            <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
               {hasGrade ? "Final grade" : "Submitted on"}
             </p>
-            <p className={`mt-1 font-mono font-black ${hasGrade ? "text-2xl text-blue-700" : "text-xs text-slate-700"}`}>
+
+            <p
+              className={`mt-0.5 font-mono font-black sm:mt-1 ${
+                hasGrade
+                  ? "text-xl text-blue-700 sm:text-2xl"
+                  : "break-words text-[10px] leading-4 text-slate-700 sm:text-xs"
+              }`}
+            >
               {hasGrade
                 ? `${grade} / ${rubricTotal}`
                 : formatDateTime(submission?.submittedAt) || "Recorded"}
@@ -2284,26 +2585,32 @@ function TeacherReviewLauncher({
   onDownloadGrade,
 }) {
   return (
-    <section className="shrink-0 overflow-hidden rounded-3xl border border-blue-200 bg-white shadow-sm">
+    <section className="shrink-0 overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm sm:rounded-3xl">
       <div className="h-1 bg-gradient-to-r from-blue-600 via-indigo-500 to-violet-500" />
-      <div className="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-        <div className="flex items-start gap-3">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-700">
-            {hasTeacherReview ? <Award className="h-6 w-6" /> : <MessageSquare className="h-5 w-5" />}
+
+      <div className="flex flex-col gap-3 p-3.5 sm:gap-5 sm:p-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-2.5 sm:gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700 sm:h-12 sm:w-12 sm:rounded-2xl">
+            {hasTeacherReview ? (
+              <Award className="h-4.5 w-4.5 sm:h-6 sm:w-6" />
+            ) : (
+              <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5" />
+            )}
           </div>
 
-          <div>
-            <p className="font-mono text-[9px] font-black uppercase tracking-wider text-blue-600">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-600 sm:text-[9px]">
               {hasTeacherReview ? "Ready to review" : "Next step"}
             </p>
-            <h3 className="mt-1 font-serif text-lg font-bold text-slate-950">
+
+            <h3 className="mt-0.5 font-serif text-base font-bold leading-tight text-slate-950 sm:mt-1 sm:text-lg">
               {currentAttemptPending &&
               hasTeacherReview
                 ? `Attempt ${reviewAttemptNumber} Instructor Review`
                 : "Instructor Review"}
             </h3>
 
-            <p className="mt-1.5 max-w-xl text-xs leading-relaxed text-slate-500">
+            <p className="mt-1 text-[11px] leading-5 text-slate-500 sm:mt-1.5 sm:text-xs sm:leading-relaxed">
               {currentAttemptPending &&
               hasTeacherReview
                 ? `Attempt ${currentAttemptNumber} feedback is not available yet. You can still review the completed feedback from Attempt ${reviewAttemptNumber}.`
@@ -2327,9 +2634,9 @@ function TeacherReviewLauncher({
             <button
               type="button"
               onClick={onDownloadGrade}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs font-bold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100"
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 transition-all hover:border-blue-300 hover:bg-blue-100 sm:gap-2 sm:px-4 sm:py-3 sm:text-xs"
             >
-              <FileDown className="h-4 w-4" />
+              <FileDown className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               Download Grade PDF
             </button>
           )}
@@ -2338,9 +2645,10 @@ function TeacherReviewLauncher({
             type="button"
             disabled={!hasTeacherReview}
             onClick={onOpen}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+            className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[11px] font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none sm:gap-2 sm:px-4 sm:py-3 sm:text-xs"
           >
-            <Eye className="h-4 w-4" />
+            <Eye className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+
             {currentAttemptPending &&
             hasTeacherReview
               ? `View Attempt ${reviewAttemptNumber} Feedback`
@@ -2364,25 +2672,25 @@ function FinalDraftPreview({
   wordCountIssue,
 }) {
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 px-4 py-3">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <FileCheck className="h-4 w-4 text-blue-700" />
+    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl">
+      <div className="shrink-0 border-b border-slate-100 px-2.5 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex flex-col gap-1.5 sm:gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-2">
+            <FileCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
 
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
+              <h3 className="text-[12px] font-bold leading-4 text-slate-900 sm:text-sm sm:leading-normal">
                 Final Draft Preview
               </h3>
 
-              <p className="mt-0.5 text-[11px] text-slate-500">
+              <p className="mt-0.5 text-[9px] leading-4 text-slate-500 sm:text-[11px] sm:leading-normal">
                 This exact version will be sent to your instructor.
               </p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5 text-[10px] font-mono font-bold text-slate-700">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            <span className="rounded-md border border-slate-200 bg-[#F8FAFC] px-2 py-1 font-mono text-[9px] font-bold text-slate-700 sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]">
               {wordCount}
               {Number(maxWords) > 0
                 ? ` / ${maxWords}`
@@ -2391,7 +2699,7 @@ function FinalDraftPreview({
             </span>
 
             <span
-              className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-mono font-bold ${
+              className={`rounded-md border px-2 py-1 font-mono text-[9px] font-bold sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px] ${
                 wordCountIssue
                   ? "border-amber-200 bg-amber-50 text-amber-800"
                   : "border-emerald-200 bg-emerald-50 text-emerald-700"
@@ -2403,10 +2711,10 @@ function FinalDraftPreview({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] px-6 py-5">
+      <div className="min-h-[120px] flex-1 overflow-y-auto bg-[#F8FAFC] px-3 py-3 sm:min-h-0 sm:px-6 sm:py-5">
         <article className="w-full">
           {finalText ? (
-            <p className="whitespace-pre-wrap text-[14px] leading-7 text-slate-700">
+            <p className="whitespace-pre-wrap text-[13px] leading-5 text-slate-700 sm:text-[14px] sm:leading-7">
               {finalText}
             </p>
           ) : (
@@ -2447,18 +2755,18 @@ function FinalCheckPanel({
     : "";
 
   return (
-    <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-3 py-2">
-        <div className="flex items-start gap-3">
+    <aside className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl">
+      <div className="border-b border-slate-100 px-2.5 py-2 sm:px-3">
+        <div className="flex items-start gap-2 sm:gap-3">
           <div className="flex items-start gap-2">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
 
             <div>
-              <h3 className="text-sm font-bold text-slate-900">
+              <h3 className="text-[12px] font-bold leading-4 text-slate-900 sm:text-sm sm:leading-normal">
                 Submit Assignment
               </h3>
 
-              <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+              <p className="mt-0.5 text-[9px] leading-4 text-slate-500 sm:text-[10px] sm:leading-snug">
                 Review, confirm, and submit your work.
               </p>
             </div>
@@ -2467,44 +2775,44 @@ function FinalCheckPanel({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2.5">
-        <div className={`rounded-xl border p-3.5 ${attested ? "border-emerald-200 bg-emerald-50/70" : "border-blue-200 bg-blue-50/70"}`}>
-          <p className="mb-2 font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-1.5 sm:gap-2 sm:p-2.5">
+        <div className={`rounded-lg border p-2 sm:rounded-xl sm:p-3.5 ${attested ? "border-emerald-200 bg-emerald-50/70" : "border-blue-200 bg-blue-50/70"}`}>
+          <p className="mb-1.5 font-mono text-[8px] font-black uppercase tracking-wider text-blue-700 sm:mb-2 sm:text-[9px] sm:tracking-widest">
             Before you submit
           </p>
           <button
             type="button"
             onClick={() => setShowOwnWorkMeaning(true)}
             aria-expanded={showOwnWorkMeaning}
-            className={`flex w-full items-center justify-between gap-4 rounded-xl border px-4 py-3 text-left transition-all ${
+            className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left transition-all sm:gap-4 sm:rounded-xl sm:px-4 sm:py-3 ${
               attested
                 ? "border-emerald-300 bg-white text-emerald-900 hover:bg-emerald-50"
                 : "border-blue-300 bg-white text-blue-950 hover:border-blue-400 hover:bg-blue-50"
             }`}
           >
-            <span className="flex min-w-0 items-center gap-3">
+            <span className="flex min-w-0 items-center gap-2 sm:gap-3">
               <span
-                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg sm:h-9 sm:w-9 sm:rounded-xl ${
                   attested
                     ? "bg-emerald-100 text-emerald-700"
                     : "bg-blue-100 text-blue-700"
                 }`}
               >
                 {attested ? (
-                  <CheckCircle2 className="h-5 w-5" />
+                  <CheckCircle2 className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 ) : (
-                  <ShieldCheck className="h-5 w-5" />
+                  <ShieldCheck className="h-3.5 w-3.5 sm:h-5 sm:w-5" />
                 )}
               </span>
 
               <span>
-                <span className="block text-xs font-bold">
+                <span className="block text-[10px] font-bold leading-4 sm:text-xs sm:leading-normal">
                   {attested
                     ? "Work confirmed"
                     : "Read and confirm your work"}
                 </span>
 
-                <span className="mt-0.5 block text-[10px] font-medium leading-relaxed text-slate-500">
+                <span className="mt-0.5 block text-[8px] font-medium leading-3.5 text-slate-500 sm:text-[10px] sm:leading-relaxed">
                   {attested
                     ? "You confirmed that this submission is your own work."
                     : "Read what “my own work” means, then confirm the statement."}
@@ -2512,7 +2820,7 @@ function FinalCheckPanel({
               </span>
             </span>
 
-            <ChevronRight className="h-4 w-4 shrink-0" />
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 sm:h-4 sm:w-4" />
           </button>
 
           <OwnWorkDefinition
@@ -2543,13 +2851,13 @@ function FinalCheckPanel({
           </p>
         )}
 
-        <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-2 border-t border-slate-100 bg-white px-1 pt-2">
+        <div className="sticky bottom-0 -mx-1 mt-auto grid grid-cols-2 gap-1.5 border-t border-slate-100 bg-white px-1 pt-1.5 sm:gap-2 sm:pt-2">
           <button
             type="button"
             onClick={onBack}
-            className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5 text-xs font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+            className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-2 text-[10px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             {wordCountReady ? "Back" : "Edit Draft"}
           </button>
 
@@ -2558,7 +2866,7 @@ function FinalCheckPanel({
             disabled={!canSubmit}
             title={submitDisabledReason || "Submit assignment"}
             onClick={handleSubmit}
-            className={`inline-flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold transition-all ${
+            className={`inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[10px] font-bold transition-all sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs ${
               canSubmit
                 ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
                 : "cursor-not-allowed bg-slate-100 text-slate-400"
@@ -2600,40 +2908,40 @@ function OwnWorkDefinition({
   ];
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[2147483647] flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label="Close own-work explanation" />
-      <section role="dialog" aria-modal="true" aria-labelledby="own-work-title" className="relative w-full max-w-xl overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
-        <header className="flex items-start justify-between gap-4 border-b border-blue-100 bg-gradient-to-r from-blue-50 via-white to-emerald-50 px-6 py-5">
-          <div className="flex items-start gap-3">
-            <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-md shadow-blue-600/20"><ShieldCheck className="h-5 w-5" /></span>
+      <section role="dialog" aria-modal="true" aria-labelledby="own-work-title" className="relative flex max-h-[90dvh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-3xl sm:pb-0">
+        <header className="flex shrink-0 items-start justify-between gap-2 border-b border-blue-100 bg-gradient-to-r from-blue-50 via-white to-emerald-50 px-3 py-3 sm:gap-4 sm:px-6 sm:py-5">
+          <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-md shadow-blue-600/20 sm:h-11 sm:w-11 sm:rounded-2xl"><ShieldCheck className="h-4 w-4 sm:h-5 sm:w-5" /></span>
             <div>
-              <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">Before you submit</p>
-              <h2 id="own-work-title" className="mt-1 font-serif text-xl font-black text-slate-950">Your work, your voice</h2>
-              <p className="mt-1 text-xs leading-5 text-slate-600">Here is exactly what Praxis means by &ldquo;my own work.&rdquo;</p>
+              <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-700 sm:text-[9px] sm:tracking-widest">Before you submit</p>
+              <h2 id="own-work-title" className="mt-0.5 font-serif text-base font-black leading-tight text-slate-950 sm:mt-1 sm:text-xl">Your work, your voice</h2>
+              <p className="mt-0.5 text-[10px] leading-4 text-slate-600 sm:mt-1 sm:text-xs sm:leading-5">Here is exactly what Praxis means by &ldquo;my own work.&rdquo;</p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:text-slate-900" aria-label="Close"><X className="h-4 w-4" /></button>
+          <button type="button" onClick={onClose} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-slate-900 sm:h-9 sm:w-9 sm:rounded-xl" aria-label="Close"><X className="h-3.5 w-3.5 sm:h-4 sm:w-4" /></button>
         </header>
 
-        <div className="max-h-[65vh] overflow-y-auto px-6 py-5">
-          <div className="grid gap-3 sm:grid-cols-2">
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:max-h-[65dvh] sm:px-6 sm:py-5">
+          <div className="grid gap-2 sm:grid-cols-2 sm:gap-3">
             {principles.map(([title, text]) => (
-              <div key={title} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex items-start gap-3">
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700"><Check className="h-4 w-4" /></span>
-                  <div><h3 className="text-xs font-bold text-slate-900">{title}</h3><p className="mt-1 text-[11px] leading-5 text-slate-600">{text}</p></div>
+              <div key={title} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 sm:rounded-2xl sm:p-4">
+                <div className="flex items-start gap-2 sm:gap-3">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-100 text-emerald-700 sm:h-7 sm:w-7 sm:rounded-lg"><Check className="h-3.5 w-3.5 sm:h-4 sm:w-4" /></span>
+                  <div><h3 className="text-[10px] font-bold text-slate-900 sm:text-xs">{title}</h3><p className="mt-0.5 text-[9px] leading-4 text-slate-600 sm:mt-1 sm:text-[11px] sm:leading-5">{text}</p></div>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
-            <p className="text-xs leading-5 text-blue-900"><strong>Using AI is allowed in Praxis.</strong> You can use the Coach to help you think and AI feedback on your draft when your teacher allows it. That is normal and encouraged.</p>
-            <p className="mt-3 border-t border-blue-200 pt-3 text-xs font-bold leading-5 text-blue-950">AI can support your work, but it should not do the work for you. The thinking, decisions, and final writing must be yours.</p>
+          <div className="mt-2.5 rounded-xl border border-blue-200 bg-blue-50 p-2.5 sm:mt-4 sm:rounded-2xl sm:p-4">
+            <p className="text-[9px] leading-4 text-blue-900 sm:text-xs sm:leading-5"><strong>Using AI is allowed in Praxis.</strong> You can use the Coach to help you think and AI feedback on your draft when your teacher allows it. That is normal and encouraged.</p>
+            <p className="mt-2 border-t border-blue-200 pt-2 text-[9px] font-bold leading-4 text-blue-950 sm:mt-3 sm:pt-3 sm:text-xs sm:leading-5">AI can support your work, but it should not do the work for you. The thinking, decisions, and final writing must be yours.</p>
           </div>
 
           <label
-            className={`mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition-all ${
+            className={`mt-3 flex cursor-pointer items-start gap-2 rounded-xl border p-2.5 transition-all sm:mt-5 sm:gap-3 sm:rounded-2xl sm:p-4 ${
               attested
                 ? "border-emerald-300 bg-emerald-50"
                 : "border-slate-300 bg-white hover:border-blue-300 hover:bg-blue-50/40"
@@ -2649,7 +2957,7 @@ function OwnWorkDefinition({
             />
 
             <span
-              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border-2 transition-all ${
+              className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md border-2 transition-all sm:h-6 sm:w-6 sm:rounded-lg ${
                 attested
                   ? "border-emerald-600 bg-emerald-600 text-white"
                   : "border-slate-300 bg-white text-transparent"
@@ -2659,11 +2967,11 @@ function OwnWorkDefinition({
             </span>
 
             <span>
-              <span className="block text-sm font-bold text-slate-950">
+              <span className="block text-[11px] font-bold text-slate-950 sm:text-sm">
                 I confirm this is my own work
               </span>
 
-              <span className="mt-1 block text-xs leading-5 text-slate-600">
+              <span className="mt-0.5 block text-[9px] leading-4 text-slate-600 sm:mt-1 sm:text-xs sm:leading-5">
                 I planned and wrote it, the choices are mine, and I only
                 used AI in the ways allowed for this assignment.
               </span>
@@ -2671,11 +2979,11 @@ function OwnWorkDefinition({
           </label>
         </div>
 
-        <footer className="border-t border-slate-200 bg-slate-50 px-6 py-4">
+        <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-3 py-2.5 sm:px-6 sm:py-4">
           <button
             type="button"
             onClick={onClose}
-            className={`w-full rounded-xl px-4 py-3 text-xs font-bold transition-all ${
+            className={`min-h-10 w-full rounded-lg px-3 py-2 text-[10px] font-bold transition-all sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs ${
               attested
                 ? "bg-blue-600 text-white shadow-sm hover:bg-blue-700"
                 : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-100"
@@ -2734,7 +3042,7 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[2147483647] flex items-end justify-center bg-slate-950/50 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4">
       <button
         type="button"
         aria-label="Close honor agreement"
@@ -2746,22 +3054,22 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="honor-agreement-title"
-        className="relative flex max-h-[min(760px,94vh)] w-full max-w-2xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+        className="relative flex h-[90dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-2xl sm:h-auto sm:max-h-[min(760px,94dvh)] sm:rounded-3xl sm:pb-0"
       >
-        <header className="shrink-0 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-5 py-4 sm:px-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-blue-200 bg-white text-blue-700 shadow-sm">
+        <header className="shrink-0 border-b border-slate-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-3 py-2.5 sm:px-6 sm:py-4">
+          <div className="flex items-start justify-between gap-2 sm:gap-4">
+            <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-white text-blue-700 shadow-sm sm:h-11 sm:w-11 sm:rounded-2xl">
                 <ShieldCheck className="h-5 w-5" />
               </span>
               <div>
-                <p className="font-mono text-[9px] font-black uppercase tracking-widest text-blue-700">
+                <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-700 sm:text-[9px] sm:tracking-widest">
                   Before you submit
                 </p>
-                <h2 id="honor-agreement-title" className="mt-1 font-serif text-xl font-bold text-slate-950">
+                <h2 id="honor-agreement-title" className="mt-0.5 font-serif text-base font-bold leading-tight text-slate-950 sm:mt-1 sm:text-xl">
                   Academic Honor Agreement
                 </h2>
-                <p className="mt-1 text-xs text-slate-600">
+                <p className="mt-0.5 text-[9px] leading-4 text-slate-600 sm:mt-1 sm:text-xs sm:leading-normal">
                   Please read the complete agreement before accepting it.
                 </p>
               </div>
@@ -2770,7 +3078,7 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
             <button
               type="button"
               onClick={onClose}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition-colors hover:text-slate-900"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 transition-colors hover:text-slate-900 sm:h-9 sm:w-9 sm:rounded-xl"
               aria-label="Close"
             >
               <X className="h-4 w-4" />
@@ -2788,9 +3096,9 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7"
+          className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-7 sm:py-5"
         >
-          <div className="space-y-5 text-sm leading-7 text-slate-700">
+          <div className="space-y-3 text-[11px] leading-5 text-slate-700 sm:space-y-5 sm:text-sm sm:leading-7">
             <p>
               By submitting this assignment, I confirm that the work represents my own learning and effort. I understand that academic honesty protects the value of my work and the learning community.
             </p>
@@ -2808,22 +3116,22 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
               This is the version I intend my instructor to grade. I understand that my instructor may review the writing process and supporting activity connected to this assignment.
             </AgreementItem>
 
-            <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-xs leading-6 text-blue-900">
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-2.5 text-[9px] leading-4 text-blue-900 sm:rounded-2xl sm:p-4 sm:text-xs sm:leading-6">
               I understand that submitting work that does not follow these commitments may be handled under my institution’s academic-integrity policies.
             </div>
           </div>
         </div>
 
-        <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+        <footer className="shrink-0 border-t border-slate-200 bg-slate-50 px-3 py-2.5 sm:px-6 sm:py-4">
           {!readToEnd && (
-            <p className="mb-3 flex items-center justify-center gap-2 text-[10px] font-semibold text-amber-700">
+            <p className="mb-2 flex items-center justify-center gap-1.5 text-[9px] font-semibold text-amber-700 sm:mb-3 sm:gap-2 sm:text-[10px]">
               <ChevronDown className="h-3.5 w-3.5" />
               Scroll to the end to unlock acceptance
             </p>
           )}
 
           <label
-            className={`flex items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
+            className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 transition-colors sm:gap-3 sm:rounded-xl sm:px-4 sm:py-3 ${
               readToEnd
                 ? "cursor-pointer border-emerald-200 bg-white"
                 : "cursor-not-allowed border-slate-200 bg-slate-100 opacity-60"
@@ -2836,16 +3144,16 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
               onChange={(event) => setAccepted(event.target.checked)}
               className="mt-0.5 h-4 w-4 accent-emerald-600"
             />
-            <span className="text-xs font-semibold leading-5 text-slate-700">
+            <span className="text-[10px] font-semibold leading-4 text-slate-700 sm:text-xs sm:leading-5">
               I have read and agree to the Academic Honor Agreement.
             </span>
           </label>
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:mt-3 sm:gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 hover:bg-slate-100"
+              className="min-h-10 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[10px] font-bold text-slate-600 hover:bg-slate-100 sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs"
             >
               Cancel
             </button>
@@ -2853,7 +3161,7 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
               type="button"
               disabled={!accepted}
               onClick={onAccept}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-xs font-bold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none"
+              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-2 py-2 text-[10px] font-bold text-white shadow-sm transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none sm:gap-2 sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs"
             >
               <ShieldCheck className="h-4 w-4" />
               Accept Agreement
@@ -2868,13 +3176,13 @@ export function HonorAgreementModal({ open, onClose, onAccept }) {
 
 function AgreementItem({ number, title, children }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-slate-900 font-mono text-[10px] font-black text-white">
+    <div className="flex items-start gap-2 sm:gap-3">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-900 font-mono text-[9px] font-black text-white sm:h-7 sm:w-7 sm:rounded-lg sm:text-[10px]">
         {number}
       </span>
       <div>
-        <h3 className="text-sm font-bold text-slate-900">{title}</h3>
-        <p className="mt-0.5 text-sm leading-6 text-slate-600">{children}</p>
+        <h3 className="text-[11px] font-bold text-slate-900 sm:text-sm">{title}</h3>
+        <p className="mt-0.5 text-[10px] leading-4 text-slate-600 sm:text-sm sm:leading-6">{children}</p>
       </div>
     </div>
   );
@@ -2899,8 +3207,8 @@ function HorizontalRubricCriteria({
   const activeSelection = selfRubricScores?.[activeCriterion?.id];
 
   return (
-    <div className="space-y-3">
-      <div className="flex gap-2 overflow-x-auto pb-0.5">
+    <div className="space-y-2 sm:space-y-3 [@media(min-width:1024px)_and_(max-height:900px)]:space-y-1.5">
+      <div className="grid grid-cols-2 gap-1.5 pb-0.5 sm:flex sm:gap-2 sm:overflow-x-auto">
         {rubricCriteria.map((criterion, index) => {
           const criterionKey = `${criterion.id || "criterion"}::${index}`;
           const selected = selfRubricScores?.[criterion.id];
@@ -2918,7 +3226,7 @@ function HorizontalRubricCriteria({
               type="button"
               aria-pressed={isActive}
               onClick={() => onOpenCriterion(criterionKey)}
-              className={`min-w-[190px] flex-1 rounded-xl border px-3 py-1.5 text-left transition-all ${
+              className={`min-w-0 rounded-lg border px-2 py-1.5 text-left transition-all sm:min-w-[190px] sm:flex-1 sm:rounded-xl sm:px-3 [@media(min-width:1024px)_and_(max-height:900px)]:py-1 ${
                 isCompleted
                   ? "border-emerald-300 bg-emerald-50 shadow-sm"
                   : isActive
@@ -2926,16 +3234,16 @@ function HorizontalRubricCriteria({
                   : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
               }`}
             >
-              <div className="flex items-start justify-between gap-2">
+              <div className="flex items-start justify-between gap-1.5 sm:gap-2">
                 <div className="min-w-0">
-                  <p className="line-clamp-1 text-[11px] font-bold leading-4 text-slate-900">
+                  <p className="line-clamp-2 text-[9px] font-bold leading-3.5 text-slate-900 sm:line-clamp-1 sm:text-[11px] sm:leading-4">
                     {criterion.name}
                   </p>
-                  <p className={`mt-0.5 text-[8px] font-semibold ${selectedBand ? "text-emerald-700" : "text-slate-400"}`}>
+                  <p className={`mt-0.5 text-[7px] font-semibold sm:text-[8px] ${selectedBand ? "text-emerald-700" : "text-slate-400"}`}>
                     {selectedBand ? selectedBand.label : "Not assessed"}
                   </p>
                 </div>
-                <span className="shrink-0 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[9px] font-mono font-bold text-slate-500">
+                <span className="shrink-0 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-mono text-[7px] font-bold text-slate-500 sm:rounded-lg sm:px-2 sm:py-1 sm:text-[9px]">
                   {criterion.points} pts
                 </span>
               </div>
@@ -2945,29 +3253,29 @@ function HorizontalRubricCriteria({
       </div>
 
       {activeCriterion && (
-        <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm">
-          <div className="border-b border-blue-100 bg-blue-50/70 px-4 py-1.5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+        <section className="overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm sm:rounded-2xl">
+          <div className="border-b border-blue-100 bg-blue-50/70 px-2.5 py-2 sm:px-4 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1">
+            <div className="flex items-start justify-between gap-2 sm:flex-wrap sm:gap-3">
               <div>
-                <p className="text-[9px] font-mono font-black uppercase tracking-wider text-blue-600">
+                <p className="font-mono text-[7px] font-black uppercase tracking-wider text-blue-600 sm:text-[9px]">
                   Criterion {activeIndex + 1} of {rubricCriteria.length}
                 </p>
-                <h3 className="mt-0.5 text-sm font-bold text-slate-950">
+                <h3 className="mt-0.5 text-[12px] font-bold leading-4 text-slate-950 sm:text-sm sm:leading-normal">
                   {activeCriterion.name}
                 </h3>
                 {activeCriterion.description && (
-                  <p className="mt-0.5 line-clamp-2 max-w-5xl text-[10px] leading-4 text-slate-500">
+                  <p className="mt-0.5 line-clamp-2 max-w-5xl text-[9px] leading-4 text-slate-500 sm:text-[10px] [@media(min-width:1024px)_and_(max-height:900px)]:line-clamp-none">
                     {activeCriterion.description}
                   </p>
                 )}
               </div>
-              <span className="rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-[10px] font-mono font-bold text-blue-700">
+              <span className="shrink-0 rounded-md border border-blue-200 bg-white px-2 py-1 font-mono text-[8px] font-bold text-blue-700 sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]">
                 {activeCriterion.points} points
               </span>
             </div>
           </div>
 
-          <div className="grid gap-2 p-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+          <div className="grid items-start gap-1.5 p-1.5 sm:grid-cols-2 sm:gap-2 sm:p-2 xl:grid-cols-5 [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5">
             {safeArray(activeCriterion.bands).map((band) => {
               const isSelected =
                 String(activeSelection?.bandId) === String(band.id);
@@ -2979,27 +3287,27 @@ function HorizontalRubricCriteria({
                   onClick={() =>
                     onSelectBand(activeCriterion, band, activeIndex)
                   }
-                  className={`h-full rounded-xl border px-3 py-1.5 text-left transition-all ${
+                  className={`self-start rounded-lg border px-2.5 py-2 text-left transition-all sm:rounded-xl sm:px-3 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1 ${
                     isSelected
                       ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/10"
                       : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
                   }`}
                 >
-                  <div className="flex h-full items-start justify-between gap-4">
+                  <div className="flex items-start justify-between gap-2 sm:gap-4">
                     <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-900">
+                      <p className="text-[11px] font-bold leading-tight text-slate-900 sm:text-xs">
                         {band.label}
                       </p>
                       {band.description && (
                         <p
-                          className="mt-0.5 line-clamp-6 text-[9px] leading-[1.35] text-slate-500"
+                          className="mt-0.5 line-clamp-3 text-[8px] leading-3.5 text-slate-500 sm:line-clamp-6 sm:text-[9px] sm:leading-[1.35] [@media(min-width:1024px)_and_(max-height:900px)]:line-clamp-none"
                           title={band.description}
                         >
                           {band.description}
                         </p>
                       )}
                     </div>
-                    <span className="shrink-0 font-mono text-xs font-black text-blue-700">
+                    <span className="shrink-0 font-mono text-[10px] font-black text-blue-700 sm:text-xs">
                       {band.points}/{activeCriterion.points}
                     </span>
                   </div>
@@ -3104,34 +3412,34 @@ function SelfGradeDrawer({
   if (!open) return null;
 
   return (
-      <div className="w-full">
-        <div className="grid w-full grid-cols-1 gap-2">
-          <section className="shrink-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <header className="shrink-0 border-b border-slate-200 px-4 py-2.5">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            <div className="flex shrink-0 items-center gap-2">
-              <ClipboardList className="h-4 w-4 text-blue-700" />
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden sm:pr-1">
+        <div className="flex h-full min-h-0 w-full flex-col gap-2 pb-2 [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:pb-1">
+          <section className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl [@media(min-width:1024px)_and_(max-height:900px)]:flex-1">
+        <header className="shrink-0 border-b border-slate-200 px-2.5 py-2.5 sm:px-4 [@media(min-width:1024px)_and_(max-height:900px)]:py-1.5">
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
+            <div className="flex min-w-0 items-center gap-2">
+              <ClipboardList className="h-3.5 w-3.5 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
 
-              <h2 className="font-serif text-lg font-bold text-slate-950">
+              <h2 className="font-serif text-[16px] font-bold leading-tight text-slate-950 sm:text-lg">
                 Rubric Self-Assessment
               </h2>
             </div>
 
             <span className="hidden h-4 w-px bg-slate-200 md:block" />
 
-            <p className="min-w-0 flex-1 text-[10px] text-slate-500">
+            <p className="w-full text-[10px] leading-4 text-slate-500 sm:min-w-0 sm:w-auto sm:flex-1">
               Select the level that best represents your work for every criterion.
             </p>
 
             {rubric?.title && (
-              <p className="shrink-0 font-mono text-[9px] text-slate-400">
+              <p className="w-full truncate font-mono text-[8px] text-slate-400 sm:w-auto sm:shrink-0 sm:text-[9px]">
                 {rubric.title}
               </p>
             )}
           </div>
         </header>
 
-        <div className="shrink-0 bg-[#F8FAFC] p-2">
+        <div className="min-h-0 shrink-0 bg-[#F8FAFC] p-1.5 sm:p-2 [@media(min-width:1024px)_and_(max-height:900px)]:flex-1 [@media(min-width:1024px)_and_(max-height:900px)]:overflow-y-auto [@media(min-width:1024px)_and_(max-height:900px)]:overscroll-contain [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:[scrollbar-gutter:stable]">
           {rubricCriteria.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
               <Info className="mx-auto h-7 w-7 text-slate-300" />
@@ -3153,9 +3461,9 @@ function SelfGradeDrawer({
           </section>
 
           {rubricCriteria.length > 0 && (
-            <section className="rounded-2xl border border-blue-100 bg-white px-3.5 py-1.5 shadow-sm">
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <p className="shrink-0 font-mono text-[9px] font-black uppercase tracking-wider text-blue-700">
+            <section className="shrink-0 rounded-xl border border-blue-100 bg-white px-2.5 py-2 shadow-sm sm:rounded-2xl sm:px-3.5 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-x-3">
+              <p className="shrink-0 font-mono text-[8px] font-black uppercase tracking-wider text-blue-700 sm:text-[9px]">
                 Reflection
               </p>
 
@@ -3163,12 +3471,9 @@ function SelfGradeDrawer({
 
               <label
                 htmlFor="student-reflection-improved"
-                className="shrink-0 text-sm font-bold text-slate-900"
+                className="shrink-0 text-[12px] font-bold text-slate-900 sm:text-sm"
               >
                 What did you improve?
-                <span className="ml-1 text-[10px] font-medium text-slate-400">
-                  Optional
-                </span>
               </label>
 
             </div>
@@ -3182,14 +3487,14 @@ function SelfGradeDrawer({
                 )
               }
               placeholder="What did you improve in your final version?"
-              className="mt-1 h-[36px] min-h-[36px] w-full resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs leading-5 text-slate-800 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              className="mt-1.5 h-28 min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2.5 text-[16px] leading-5 text-slate-800 outline-none transition placeholder:text-[12px] focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100 sm:mt-1 sm:h-24 sm:min-h-24 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs sm:placeholder:text-xs [@media(min-width:1024px)_and_(max-height:900px)]:h-20 [@media(min-width:1024px)_and_(max-height:900px)]:min-h-20 [@media(min-width:1024px)_and_(max-height:900px)]:py-2"
             />
           </section>
         )}
 
-          <footer className="rounded-2xl border border-slate-200 bg-white px-3 py-1 shadow-sm">
-          <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
-          <div className="shrink-0 rounded-xl border border-blue-100 bg-blue-50 px-3 py-1 xl:w-[250px]">
+          <footer className="mt-auto shrink-0 rounded-xl border border-slate-200 bg-white px-2 py-2 shadow-md sm:rounded-2xl sm:px-3 sm:py-1 sm:shadow-sm [@media(min-width:1024px)_and_(max-height:900px)]:py-0.5">
+          <div className="flex flex-col gap-1.5 sm:gap-2 xl:flex-row xl:items-center">
+          <div className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 sm:rounded-xl sm:px-3 sm:py-1 xl:w-[250px]">
             <div className="flex items-end justify-between gap-3">
               <div>
                 <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-600">
@@ -3203,7 +3508,7 @@ function SelfGradeDrawer({
               </div>
 
               <div className="text-right">
-                <p className="font-mono text-base font-black text-blue-800">
+                <p className="font-mono text-sm font-black text-blue-800 sm:text-base">
                   {selfRubricTotal}/
                   {rubricTotal}
                 </p>
@@ -3221,11 +3526,11 @@ function SelfGradeDrawer({
             </p>
           )}
 
-          <div className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-2 xl:max-w-[720px]">
+          <div className="grid flex-1 grid-cols-2 gap-2 xl:max-w-[720px]">
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+              className="min-h-10 rounded-lg border border-slate-200 bg-white px-2 py-2 text-[10px] font-bold leading-tight text-slate-700 hover:bg-slate-50 sm:rounded-xl sm:px-4 sm:text-xs sm:leading-normal"
             >
               {completedSelfCriteria === rubricCriteria.length
                 ? "Back to Draft"
@@ -3240,7 +3545,7 @@ function SelfGradeDrawer({
                 completedSelfCriteria !==
                 rubricCriteria.length
               }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              className="inline-flex min-h-10 items-center justify-center gap-1 rounded-lg bg-blue-600 px-2 py-2 text-center text-[10px] font-bold leading-tight text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-xs sm:leading-normal"
             >
               {isSaving ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

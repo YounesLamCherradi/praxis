@@ -226,9 +226,20 @@ export async function requestJson(path, options = {}, {
 export async function signIn(
   email,
   password,
-  stayLoggedIn = true
+  stayLoggedIn = true,
+  loginSurface = "portal"
 ) {
-  const data = await fetch("/api/auth/signin", {
+  const normalizedLoginSurface =
+    String(loginSurface || "portal")
+      .trim()
+      .toLowerCase();
+
+  const endpoint =
+    normalizedLoginSurface === "admin"
+      ? "/api/auth/admin-signin"
+      : "/api/auth/signin";
+
+  const data = await fetch(endpoint, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -273,39 +284,77 @@ export async function signOut() {
 
 export async function requestSignupCode(email, name = "") {
   let response;
+
   try {
-    response = await fetchWithPolicy("/api/auth/signup/request-code", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ email, name }),
-    });
+    response = await fetchWithPolicy(
+      "/api/auth/signup/request-code",
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email,
+          name,
+        }),
+      }
+    );
   } catch (error) {
     if (error?.name === "AbortError") {
       throw new Error(
         "The verification service is taking too long. Please wait a moment and check your inbox before requesting another code."
       );
     }
+
     throw new Error(
       "Could not reach the verification service. Please check your connection and try again."
     );
   }
-  const data = await response.json().catch(() => ({}));
 
-  if (data.error) {
-    throw new Error(data.error);
+  const data =
+    await response.json().catch(() => ({}));
+
+  if (!response.ok || data.error) {
+    const error = new Error(
+      data.error ||
+        "Could not send verification code."
+    );
+
+    error.code =
+      data.code ||
+      "SIGNUP_CODE_REQUEST_FAILED";
+
+    error.status = response.status;
+
+    throw error;
   }
 
   return data;
 }
 
+// TEMPORARY WORKSHOP MODE.
+const WORKSHOP_SIGNUP_WITHOUT_OTP = true;
+
 export async function signUp(name, email, password, role, otpCode = "") {
-  if (!otpCode) {
-    throw new Error("Verification code is required.");
+  if (
+    !WORKSHOP_SIGNUP_WITHOUT_OTP &&
+    !otpCode
+  ) {
+    throw new Error(
+      "Verification code is required."
+    );
   }
-  return signUpWithCode(name, email, password, role, otpCode);
+
+  return signUpWithCode(
+    name,
+    email,
+    password,
+    role,
+    WORKSHOP_SIGNUP_WITHOUT_OTP
+      ? ""
+      : otpCode
+  );
 }
 
 export async function signUpWithCode(name, email, password, role, otpCode) {

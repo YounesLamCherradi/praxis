@@ -1338,7 +1338,7 @@ export default function StudentDashboard() {
   }
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
+    <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
       {workspaceSyncState.status === "loading" && classes.length === 0 && (
         <div className="fixed inset-0 z-[2147483640] flex items-center justify-center bg-[#F8FAFC]/90 backdrop-blur-sm">
           <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-4 text-sm font-semibold text-slate-600 shadow-xl">
@@ -1432,18 +1432,19 @@ export default function StudentDashboard() {
           type="button"
           aria-label="Close course menu"
           onClick={() => setIsSidebarOpen(false)}
-          className="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] md:hidden"
+          className="fixed inset-0 z-30 touch-none bg-slate-950/45 backdrop-blur-[1px] md:hidden"
         />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 h-screen w-64 border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-64 md:translate-x-0 ${
+        aria-label="Student course navigation"
+        className={`fixed inset-y-0 left-0 z-40 h-[100dvh] w-[min(86vw,16rem)] border-r border-blue-100 bg-[#F6F9FF] pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] text-slate-700 shadow-xl transition-transform duration-200 will-change-transform md:relative md:z-20 md:h-full md:w-56 md:pb-0 md:pt-0 xl:w-60 2xl:w-64 md:translate-x-0 ${
           isSidebarOpen
             ? "translate-x-0"
             : "-translate-x-full"
         }`}
       >
-        <div className="flex h-full flex-col justify-between">
+        <div className="flex h-full min-h-0 flex-col justify-between">
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex items-center gap-3 border-b border-blue-100/80 px-5 py-5">
             <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
@@ -1457,9 +1458,9 @@ export default function StudentDashboard() {
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight leading-none">
                 <span className="text-slate-900">pr</span>
-                <span className="text-blue-600">a</span>
+                <span className="text-blue-700">a</span>
                 <span className="text-slate-900">x</span>
-                <span className="text-blue-600">i</span>
+                <span className="text-blue-700">i</span>
                 <span className="text-slate-900">s</span>
               </h1>
 
@@ -1469,7 +1470,7 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          <div className="flex-1 space-y-7 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 touch-pan-y space-y-5 overflow-y-auto overscroll-contain p-3.5 pb-5 sm:space-y-6 sm:p-4">
             <div className="space-y-1.5">
               <div className="mb-2 flex items-center px-2">
                 <span className="text-xs font-bold text-slate-700">
@@ -1593,20 +1594,20 @@ export default function StudentDashboard() {
               <div
                 className={
                   studentNotifications.length === 0
-                    ? "overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm"
+                    ? "overflow-hidden rounded-lg border border-blue-100 bg-white/70 sm:rounded-2xl sm:bg-white sm:shadow-sm"
                     : "space-y-1.5"
                 }
               >
                 {studentNotifications.length === 0 ? (
-                  <div className="flex items-center gap-3 px-3.5 py-3.5">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-                      <BadgeCheck className="h-4 w-4" />
+                  <div className="flex items-center gap-2 px-2 py-2 sm:gap-3 sm:px-3.5 sm:py-3.5">
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600 sm:h-9 sm:w-9 sm:rounded-xl">
+                      <BadgeCheck className="h-3 w-3 sm:h-4 sm:w-4" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-[10px] font-bold text-slate-700">
+                      <p className="text-[9px] font-bold leading-tight text-slate-700 sm:text-[10px]">
                         You’re up to date
                       </p>
-                      <p className="mt-0.5 text-[9px] text-slate-400">
+                      <p className="mt-0.5 text-[8px] leading-tight text-slate-400 sm:text-[9px]">
                         No new course updates.
                       </p>
                     </div>
@@ -1655,36 +1656,36 @@ export default function StudentDashboard() {
                                 notification
                               )
                             }
-                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-blue-100 hover:bg-blue-50/60 hover:shadow-sm"
+                            className="group relative flex w-full items-center gap-1.5 overflow-hidden rounded-lg border border-slate-100 bg-white/70 px-2 py-1.5 text-left transition-all hover:border-blue-100 hover:bg-blue-50/60 sm:items-start sm:gap-2.5 sm:rounded-xl sm:bg-slate-50/70 sm:px-3 sm:py-2.5 sm:hover:-translate-y-px sm:hover:shadow-sm"
                           >
                             <span
-                              className={`absolute bottom-2 left-0 top-2 w-0.5 rounded-r-full ${tone.line}`}
+                              className={`absolute bottom-1.5 left-0 top-1.5 w-0.5 rounded-r-full sm:bottom-2 sm:top-2 ${tone.line}`}
                             />
 
                             <div
-                              className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border ${tone.icon}`}
+                              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border sm:mt-0.5 sm:h-8 sm:w-8 sm:rounded-xl ${tone.icon}`}
                             >
-                              <NotificationIcon className="h-4 w-4" />
+                              <NotificationIcon className="h-3 w-3 sm:h-4 sm:w-4" />
                             </div>
 
                             <div className="min-w-0 flex-1">
                               <div className="flex items-start justify-between gap-2">
-                                <p className="text-[10px] font-bold leading-tight text-slate-700">
+                                <p className="line-clamp-1 text-[9px] font-bold leading-tight text-slate-700 sm:text-[10px]">
                                   {notification.title}
                                 </p>
 
-                                <span className="shrink-0 text-[8px] text-slate-400">
+                                <span className="shrink-0 text-[7px] text-slate-400 sm:text-[8px]">
                                   {formatRelativeTime(
                                     notification.createdAt
                                   )}
                                 </span>
                               </div>
 
-                              <p className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-slate-500">
+                              <p className="mt-0.5 line-clamp-1 text-[8px] leading-4 text-slate-500 sm:mt-1 sm:line-clamp-2 sm:text-[9px] sm:leading-relaxed">
                                 {notification.message}
                               </p>
 
-                              <span className="mt-1.5 inline-flex items-center gap-1 text-[8px] font-bold text-blue-600 transition-colors group-hover:text-blue-700">
+                              <span className="mt-1.5 hidden items-center gap-1 text-[8px] font-bold text-blue-600 transition-colors group-hover:text-blue-700 sm:inline-flex">
                                 Open assignment
                                 <ChevronRight className="h-3 w-3" />
                               </span>
@@ -1750,17 +1751,17 @@ export default function StudentDashboard() {
           <button
             type="button"
             onClick={openBugReportForm}
-            className="mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700"
+            className="mb-1 inline-flex min-h-8 w-fit max-w-full items-center gap-1.5 rounded-lg px-1.5 py-1 text-left text-[9px] font-semibold text-slate-400 transition-all hover:bg-white hover:text-blue-700 sm:mb-2 sm:min-h-10 sm:w-full sm:gap-2.5 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs sm:font-medium sm:text-slate-500"
             aria-label="Report a bug"
           >
-            <Megaphone className="h-4 w-4 text-slate-400" />
-            <span className="flex-1">Share feedback</span>
+            <Megaphone className="h-3.5 w-3.5 shrink-0 text-slate-400 sm:h-4 sm:w-4" />
+            <span>Share feedback</span>
           </button>
 
           <button
             type="button"
             onClick={toggleAccountMenu}
-            className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
+            className={`flex min-h-10 w-full items-center gap-2 rounded-lg border px-2 py-1.5 text-left transition-all sm:min-h-0 sm:gap-3 sm:rounded-2xl sm:px-3 sm:py-3 ${
               isAccountMenuOpen
                 ? "border-blue-200 bg-white shadow-sm"
                 : "border-transparent hover:border-blue-100 hover:bg-white"
@@ -1768,21 +1769,22 @@ export default function StudentDashboard() {
             aria-expanded={isAccountMenuOpen}
             aria-label="Open student account menu"
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-blue-600 font-mono text-[10px] font-black text-white shadow-sm shadow-blue-600/20 sm:h-9 sm:w-9 sm:rounded-xl sm:text-xs sm:shadow-md">
               ST
             </div>
 
             <div className="min-w-0 flex-1">
-              <p className="text-[9px] font-medium text-slate-400">
+              <p className="hidden text-[9px] font-medium text-slate-400 sm:block">
                 Welcome back,
               </p>
-              <h4 className="truncate text-xs font-bold text-slate-800">
+
+              <h4 className="truncate text-[10px] font-bold leading-tight text-slate-800 sm:text-xs">
                 {studentName === "Student Account" ? "My account" : studentName}
               </h4>
             </div>
 
             <ChevronDown
-              className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+              className={`h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform sm:h-4 sm:w-4 ${
                 isAccountMenuOpen
                   ? "rotate-180 text-blue-600"
                   : ""
@@ -1794,14 +1796,18 @@ export default function StudentDashboard() {
         </div>
       </aside>
 
-      <main className="relative flex h-screen min-w-0 w-full flex-1 flex-col overflow-hidden">
-        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white px-4 sm:px-5 md:px-8">
-          <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
+      <main className="relative flex h-full min-h-0 min-w-0 w-full flex-1 flex-col overflow-hidden">
+        <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-2.5 sm:h-16 sm:px-4 md:px-5 xl:px-6 2xl:px-8">
+          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden text-xs font-medium text-slate-500">
             <button
               type="button"
               onClick={() => setIsSidebarOpen((current) => !current)}
               className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
-              aria-label="Open course menu"
+              aria-label={
+                isSidebarOpen
+                  ? "Close course menu"
+                  : "Open course menu"
+              }
               aria-expanded={isSidebarOpen}
             >
               {isSidebarOpen ? (
@@ -1815,7 +1821,7 @@ export default function StudentDashboard() {
 
             <ChevronRight className="hidden h-3.5 w-3.5 text-slate-300 sm:inline" />
 
-            <span className="truncate font-bold text-slate-950">
+            <span className="min-w-0 flex-1 truncate font-bold text-slate-950">
               {currentClassId === "__all__"
                 ? "All Course Workspaces"
                 : classes.find(
@@ -1837,7 +1843,7 @@ export default function StudentDashboard() {
             <button
               type="button"
               onClick={openEnrollModal}
-              className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98] sm:px-4"
+              className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-2.5 text-[11px] font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98] sm:h-auto sm:gap-2 sm:px-4 sm:py-2 sm:text-xs"
             >
               <Plus className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">Enter Course Code</span>
@@ -1849,11 +1855,11 @@ export default function StudentDashboard() {
 
         <div
           className={`flex-1 overflow-y-auto relative blueprint-grid ${
-            useWideDraftWorkspace ? "p-5 2xl:p-6" : "p-8"
+            useWideDraftWorkspace ? "p-2.5 sm:p-4 2xl:p-6" : "p-3 sm:p-4 lg:p-5 xl:p-6 2xl:p-8"
           }`}
         >
           <div
-            className={`mx-auto min-h-full w-full flex flex-col relative z-10 space-y-8 transition-[max-width] duration-300 ${
+            className={`mx-auto min-h-full w-full flex flex-col relative z-10 space-y-4 lg:space-y-5 xl:space-y-6 2xl:space-y-8 transition-[max-width] duration-300 ${
               useWideDraftWorkspace
                 ? "max-w-[1500px]"
                 : "max-w-7xl"
@@ -1877,8 +1883,8 @@ export default function StudentDashboard() {
                   <AssignmentTray />
                 </div>
                 ) : (
-                  <section className="flex min-h-[58vh] items-center justify-center animate-fade-in-up">
-                    <div className="relative w-full max-w-2xl overflow-hidden rounded-3xl border border-blue-100 bg-white px-6 py-12 text-center shadow-xl shadow-blue-950/5 sm:px-10 sm:py-14">
+                  <section className="flex min-h-[calc(100dvh-8rem)] items-center justify-center py-4 animate-fade-in-up sm:min-h-[58vh] sm:py-0">
+                    <div className="relative w-full max-w-2xl overflow-hidden rounded-2xl border border-blue-100 bg-white px-4 py-8 text-center shadow-xl shadow-blue-950/5 sm:rounded-3xl sm:px-10 sm:py-14">
                       <div
                         aria-hidden="true"
                         className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-blue-100/60 blur-2xl"
@@ -1888,7 +1894,7 @@ export default function StudentDashboard() {
                         className="absolute -bottom-20 -left-16 h-48 w-48 rounded-full bg-sky-100/60 blur-2xl"
                       />
 
-                      <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600 shadow-sm">
+                      <div className="relative mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600 shadow-sm sm:h-16 sm:w-16">
                         <BookOpen className="h-7 w-7" />
                       </div>
 
@@ -1896,7 +1902,7 @@ export default function StudentDashboard() {
                         Welcome to Praxis
                       </p>
 
-                      <h2 className="relative mt-1 text-2xl font-black text-slate-900 sm:text-3xl">
+                      <h2 className="relative mt-1 text-xl font-black text-slate-900 sm:text-3xl">
                         Join your first course
                       </h2>
 
@@ -1908,7 +1914,7 @@ export default function StudentDashboard() {
                       <button
                         type="button"
                         onClick={openEnrollModal}
-                        className="relative mt-7 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-lg active:translate-y-0"
+                        className="relative mt-5 inline-flex min-h-11 items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-lg active:translate-y-0 sm:mt-7 sm:px-6 sm:py-3"
                       >
                         <Plus className="h-4 w-4" />
                         Enter Course Code
@@ -1927,8 +1933,8 @@ export default function StudentDashboard() {
       </main>
 
       {isPasswordPanelOpen && (
-        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-7">
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-2 backdrop-blur-sm sm:p-3 xl:p-4">
+          <div className="relative max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-3.5 shadow-2xl sm:max-h-[92dvh] sm:p-5 2xl:rounded-3xl 2xl:p-7">
             <button
               type="button"
               onClick={closePasswordPanel}
@@ -2083,229 +2089,239 @@ export default function StudentDashboard() {
       )}
 
       {isBugReportOpen && (
-        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="relative max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8 animate-in fade-in zoom-in-95 duration-150">
-            <button
-              type="button"
-              onClick={closeBugReportForm}
-              disabled={isSubmittingBugReport}
-              className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label="Close bug-report form"
-            >
-              <X className="h-5 w-5" />
-            </button>
+        <div className="fixed inset-0 z-[2147483647] flex items-end justify-center bg-slate-950/60 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4">
+          <div className="relative max-h-[92dvh] w-full touch-pan-y overflow-y-auto overscroll-contain rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[92dvh] sm:max-w-xl sm:rounded-2xl 2xl:rounded-3xl animate-in fade-in slide-in-from-bottom-4 sm:zoom-in-95 duration-150">
 
-            <div className="space-y-5">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-600">
-                <Bug className="h-6 w-6" />
-              </div>
-
-              <div className="space-y-1">
-                <h3 className="text-lg font-bold text-slate-900">
-                  Report a Bug
-                </h3>
-
-                <p className="max-w-lg text-xs leading-relaxed text-slate-500">
-                  Describe what happened. Praxis automatically includes your current course, assignment, and workflow step.
-                </p>
-              </div>
-
-              <form
-                onSubmit={handleBugReportSubmit}
-                className="space-y-5"
-              >
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="student-bug-description"
-                    className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400"
-                  >
-                    What happened?
-                  </label>
-
-                  <textarea
-                    id="student-bug-description"
-                    value={bugDescription}
-                    disabled={isSubmittingBugReport}
-                    onChange={(event) => {
-                      setBugDescription(
-                        event.target.value
-                      );
-
-                      if (bugReportError) {
-                        setBugReportError("");
-                      }
-
-                      if (bugReportSuccess) {
-                        setBugReportSuccess("");
-                      }
-                    }}
-                    rows={5}
-                    maxLength={1500}
-                    placeholder="Example: I clicked Continue to Feedback, but the page stayed on Step 2."
-                    className="w-full resize-y rounded-2xl border border-slate-200 bg-[#F8FAFC] px-4 py-3.5 text-sm leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-
-                  <div className="flex items-center justify-between text-[10px] text-slate-400">
-                    <span>Include the action and what you expected.</span>
-                    <span className="font-mono">
-                      {bugDescription.length}/1500
-                    </span>
-                  </div>
+            <div className="sticky top-0 z-20 border-b border-slate-100 bg-white/95 px-3 py-3 backdrop-blur sm:px-5 sm:py-4">
+              <div className="flex items-start gap-2.5 pr-9">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 sm:h-11 sm:w-11 sm:rounded-2xl">
+                  <Bug className="h-4 w-4 sm:h-5 sm:w-5" />
                 </div>
 
-                <div className="space-y-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-bold text-slate-900 sm:text-lg">
+                    Report a Bug
+                  </h3>
+
+                  <p className="mt-0.5 text-[10px] leading-4 text-slate-500 sm:text-xs sm:leading-relaxed">
+                    Tell us what happened. Praxis includes your current course, assignment, and workflow step.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeBugReportForm}
+                disabled={isSubmittingBugReport}
+                className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 sm:right-4 sm:top-4"
+                aria-label="Close bug-report form"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleBugReportSubmit}
+              className="space-y-3.5 px-3 py-3 sm:space-y-5 sm:px-5 sm:py-5 2xl:px-8 2xl:py-6"
+            >
+              <div className="space-y-1.5">
+                <label
+                  htmlFor="student-bug-description"
+                  className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]"
+                >
+                  What happened?
+                </label>
+
+                <textarea
+                  id="student-bug-description"
+                  value={bugDescription}
+                  disabled={isSubmittingBugReport}
+                  onChange={(event) => {
+                    setBugDescription(
+                      event.target.value
+                    );
+
+                    if (bugReportError) {
+                      setBugReportError("");
+                    }
+
+                    if (bugReportSuccess) {
+                      setBugReportSuccess("");
+                    }
+                  }}
+                  rows={4}
+                  maxLength={1500}
+                  placeholder="Example: I clicked Continue to Feedback, but the page stayed on Step 2."
+                  className="min-h-[96px] w-full resize-y rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5 text-[13px] leading-5 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-[120px] sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm sm:leading-6"
+                />
+
+                <div className="flex items-start justify-between gap-3 text-[9px] text-slate-400 sm:text-[10px]">
+                  <span className="leading-4">
+                    Include the action and what you expected.
+                  </span>
+
+                  <span className="shrink-0 font-mono">
+                    {bugDescription.length}/1500
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-end justify-between gap-3">
                   <div>
-                    <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                    <p className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]">
                       Picture
                       <span className="ml-1 normal-case tracking-normal text-slate-300">
                         optional
                       </span>
                     </p>
 
-                    <p className="mt-1 text-[10px] text-slate-400">
-                      PNG, JPG, or WebP only · maximum 3 MB
+                    <p className="mt-0.5 text-[9px] text-slate-400 sm:mt-1 sm:text-[10px]">
+                      PNG, JPG or WebP · max 3 MB
                     </p>
                   </div>
+                </div>
 
-                  {!bugScreenshot ? (
-                    <label className="group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-5 py-7 text-center transition-all hover:border-blue-300 hover:bg-blue-50/50">
-                      <input
-                        key={bugFileInputKey}
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        disabled={isSubmittingBugReport}
-                        onChange={handleBugScreenshotChange}
-                        className="sr-only"
+                {!bugScreenshot ? (
+                  <label className="group flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 px-3 py-2.5 text-left transition-all hover:border-blue-300 hover:bg-blue-50/50 sm:flex-col sm:justify-center sm:rounded-2xl sm:px-5 sm:py-6 sm:text-center">
+                    <input
+                      key={bugFileInputKey}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={isSubmittingBugReport}
+                      onChange={handleBugScreenshotChange}
+                      className="sr-only"
+                    />
+
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-600 shadow-sm transition-transform group-hover:-translate-y-0.5 sm:h-11 sm:w-11 sm:rounded-2xl">
+                      <ImagePlus className="h-4 w-4 sm:h-5 sm:w-5" />
+                    </div>
+
+                    <div className="min-w-0 sm:text-center">
+                      <p className="text-[11px] font-bold text-slate-700 sm:mt-2 sm:text-xs">
+                        Upload screenshot
+                      </p>
+
+                      <p className="mt-0.5 text-[9px] leading-4 text-slate-400 sm:text-[10px]">
+                        Tap to choose an image
+                      </p>
+                    </div>
+                  </label>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:rounded-2xl">
+                    <div className="relative bg-slate-950/5 p-2 sm:p-3">
+                      <img
+                        src={bugScreenshot.dataUrl}
+                        alt="Bug screenshot preview"
+                        className="max-h-40 w-full rounded-lg border border-slate-200 bg-white object-contain sm:max-h-64 sm:rounded-xl"
                       />
 
-                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-600 shadow-sm transition-transform group-hover:-translate-y-0.5">
-                        <ImagePlus className="h-5 w-5" />
-                      </div>
-
-                      <p className="mt-3 text-xs font-bold text-slate-700">
-                        Upload a picture
-                      </p>
-
-                      <p className="mt-1 text-[10px] text-slate-400">
-                        Click to choose a screenshot of the issue
-                      </p>
-                    </label>
-                  ) : (
-                    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
-                      <div className="relative bg-slate-950/5 p-3">
-                        <img
-                          src={bugScreenshot.dataUrl}
-                          alt="Bug screenshot preview"
-                          className="max-h-64 w-full rounded-xl border border-slate-200 bg-white object-contain"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={removeBugScreenshot}
-                          disabled={isSubmittingBugReport}
-                          className="absolute right-5 top-5 inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/70 bg-white/95 text-slate-500 shadow-md transition-all hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50"
-                          aria-label="Remove uploaded picture"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3">
-                        <div className="min-w-0">
-                          <p className="truncate text-xs font-bold text-slate-700">
-                            {bugScreenshot.name}
-                          </p>
-
-                          <p className="mt-0.5 text-[10px] text-slate-400">
-                            {formatBugFileSize(
-                              bugScreenshot.size
-                            )}
-                          </p>
-                        </div>
-
-                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[9px] font-bold text-emerald-700">
-                          Picture ready
-                        </span>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={removeBugScreenshot}
+                        disabled={isSubmittingBugReport}
+                        className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/70 bg-white/95 text-slate-500 shadow-md transition-all hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-50 sm:right-5 sm:top-5 sm:h-9 sm:w-9 sm:rounded-xl"
+                        aria-label="Remove uploaded picture"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                      </button>
                     </div>
-                  )}
-                </div>
 
-                {bugReportError && (
-                  <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
-                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                    <div className="flex items-center justify-between gap-2 border-t border-slate-200 bg-white px-3 py-2 sm:px-4 sm:py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-[10px] font-bold text-slate-700 sm:text-xs">
+                          {bugScreenshot.name}
+                        </p>
 
-                    <span className="font-semibold leading-relaxed">
-                      {bugReportError}
-                    </span>
+                        <p className="mt-0.5 text-[9px] text-slate-400 sm:text-[10px]">
+                          {formatBugFileSize(
+                            bugScreenshot.size
+                          )}
+                        </p>
+                      </div>
+
+                      <span className="shrink-0 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-bold text-emerald-700 sm:px-2.5 sm:py-1 sm:text-[9px]">
+                        Ready
+                      </span>
+                    </div>
                   </div>
                 )}
+              </div>
 
-                {bugReportSuccess && (
-                  <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
-                    <CheckSquare className="mt-0.5 h-4 w-4 shrink-0" />
+              {bugReportError && (
+                <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-2.5 text-[11px] text-red-700 sm:p-3 sm:text-xs">
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
 
-                    <span className="font-semibold leading-relaxed">
-                      {bugReportSuccess}
-                    </span>
-                  </div>
-                )}
-
-                <div className="flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
-                  <button
-                    type="button"
-                    onClick={closeBugReportForm}
-                    disabled={isSubmittingBugReport}
-                    className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={
-                      isSubmittingBugReport ||
-                      bugDescription.trim().length < 10
-                    }
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <Send className="h-4 w-4" />
-
-                    {isSubmittingBugReport
-                      ? "Sending report..."
-                      : "Send Report"}
-                  </button>
+                  <span className="font-semibold leading-relaxed">
+                    {bugReportError}
+                  </span>
                 </div>
-              </form>
-            </div>
+              )}
+
+              {bugReportSuccess && (
+                <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-2.5 text-[11px] text-emerald-700 sm:p-3 sm:text-xs">
+                  <CheckSquare className="mt-0.5 h-4 w-4 shrink-0" />
+
+                  <span className="font-semibold leading-relaxed">
+                    {bugReportSuccess}
+                  </span>
+                </div>
+              )}
+
+              <div className="sticky bottom-0 -mx-3 grid grid-cols-2 gap-2 border-t border-slate-100 bg-white/95 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:static sm:mx-0 sm:flex sm:justify-end sm:bg-transparent sm:px-0 sm:pb-0 sm:pt-4">
+                <button
+                  type="button"
+                  onClick={closeBugReportForm}
+                  disabled={isSubmittingBugReport}
+                  className="min-h-10 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4 sm:py-3 sm:text-xs"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={
+                    isSubmittingBugReport ||
+                    bugDescription.trim().length < 10
+                  }
+                  className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[11px] font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:gap-2 sm:px-5 sm:py-3 sm:text-xs"
+                >
+                  <Send className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+
+                  {isSubmittingBugReport
+                    ? "Sending..."
+                    : "Send Report"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
       {isEnrollOpen && (
-        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4">
-          <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8 animate-in fade-in zoom-in-95 duration-150">
+        <div className="fixed inset-0 z-[2147483647] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4">
+          <div className="relative max-h-[92dvh] w-full touch-pan-y overflow-y-auto overscroll-contain rounded-t-2xl border border-slate-200 bg-white px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 shadow-2xl sm:max-h-[92dvh] sm:max-w-md sm:rounded-2xl sm:p-5 2xl:rounded-3xl 2xl:p-8 animate-in fade-in zoom-in-95 duration-150">
             <button
               type="button"
               onClick={closeEnrollModal}
               disabled={isJoiningCourse}
-              className="absolute right-5 top-5 text-slate-400 transition-colors hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-400 transition-colors hover:bg-white hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 sm:right-5 sm:top-5 sm:h-auto sm:w-auto sm:border-0 sm:bg-transparent"
               aria-label="Close join-course modal"
             >
-              <X className="w-5 h-5" />
+              <X className="h-4 w-4 sm:h-5 sm:w-5" />
             </button>
 
-            <div className="space-y-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-600">
-                <BookOpen className="w-6 h-6" />
+            <div className="space-y-3 sm:space-y-4">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-600 sm:h-12 sm:w-12 sm:rounded-2xl">
+                <BookOpen className="h-4 w-4 sm:h-6 sm:w-6" />
               </div>
 
               <div className="space-y-1">
-                <h3 className="text-lg font-bold text-slate-900">
+                <h3 className="pr-9 text-base font-bold leading-tight text-slate-900 sm:pr-0 sm:text-lg">
                   Join an Instructor&apos;s Course
                 </h3>
 
-                <p className="text-xs leading-relaxed text-slate-500">
+                <p className="text-[11px] leading-5 text-slate-500 sm:text-xs sm:leading-relaxed">
                   Enter the course code issued by your instructor to
                   access the course workspace and assigned writing
                   prompts.
@@ -2314,10 +2330,10 @@ export default function StudentDashboard() {
 
               <form
                 onSubmit={handleEnrollCourseCode}
-                className="space-y-4 pt-2"
+                className="space-y-3 pt-1 sm:space-y-4 sm:pt-2"
               >
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold tracking-wider text-slate-400 uppercase">
+                  <label className="font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]">
                     Course access code
                   </label>
 
@@ -2341,12 +2357,12 @@ export default function StudentDashboard() {
                     placeholder="e.g. FAS1949"
                     autoComplete="off"
                     maxLength={12}
-                    className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-3.5 text-xs font-mono uppercase text-slate-900 shadow-inner transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5 font-mono text-[16px] uppercase text-slate-900 shadow-inner transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60 sm:px-4 sm:py-3.5 sm:text-xs"
                   />
                 </div>
 
                 {enrollError && (
-                  <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                  <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-[10px] text-red-700 sm:rounded-xl sm:p-3 sm:text-xs">
                     <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
 
                     <span className="font-semibold leading-relaxed">
@@ -2356,7 +2372,7 @@ export default function StudentDashboard() {
                 )}
 
                 {enrollSuccess && (
-                  <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
+                  <div className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-2.5 text-[10px] text-emerald-700 sm:rounded-xl sm:p-3 sm:text-xs">
                     <CheckSquare className="mt-0.5 h-4 w-4 shrink-0" />
 
                     <span className="font-semibold leading-relaxed">
@@ -2371,7 +2387,7 @@ export default function StudentDashboard() {
                     isJoiningCourse ||
                     !normalizeCourseCode(courseCodeInput)
                   }
-                  className="w-full rounded-xl bg-blue-600 py-3.5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  className="min-h-10 w-full rounded-xl bg-blue-600 px-3 py-2.5 text-[11px] font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:py-3.5 sm:text-xs sm:hover:scale-[1.01] sm:disabled:hover:scale-100"
                 >
                   {isJoiningCourse
                     ? "Checking course..."

@@ -86,7 +86,12 @@ export default function Login() {
     try {
       const cleanEmail = email.trim().toLowerCase();
 
-      const profile = await signIn(cleanEmail, password, stayLoggedIn);
+      const profile = await signIn(
+        cleanEmail,
+        password,
+        stayLoggedIn,
+        "portal"
+      );
 
       navigate(destinationForRole(profile.role), { replace: true });
     } catch (err) {
@@ -104,7 +109,7 @@ export default function Login() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F8FAFC] text-slate-900">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#F8FAFC] text-slate-900">
       <style>{`
         .login-grid {
           background-image:
@@ -158,7 +163,7 @@ export default function Login() {
         </button>
       </div>
 
-      <div className="relative z-10 min-h-screen grid lg:grid-cols-2">
+      <div className="relative z-10 grid min-h-[100dvh] lg:grid-cols-2">
         <div className="hidden lg:flex flex-col justify-center px-10 xl:px-16 pt-24 pb-12">
           <div className="max-w-xl login-float">
             <div className="inline-flex items-center gap-3 bg-white/85 backdrop-blur border border-blue-100 px-4 py-2 rounded-2xl shadow-sm mb-8">
@@ -171,8 +176,11 @@ export default function Login() {
               </div>
 
               <span className="text-xl font-bold tracking-tight leading-none">
-                <span className="text-blue-600">p</span>
-                <span className="text-slate-900">raxis</span>
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-700">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-700">i</span>
+                <span className="text-slate-900">s</span>
               </span>
 
               <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
@@ -213,7 +221,7 @@ export default function Login() {
 
         <div className="flex items-center justify-center px-4 sm:px-6 lg:px-10 py-28 lg:py-12">
           <div className="w-full max-w-md">
-            <div className="bg-white/90 backdrop-blur-xl border border-slate-200 shadow-2xl shadow-blue-950/10 rounded-3xl p-6 sm:p-8">
+            <div className="bg-white/90 backdrop-blur-xl border border-slate-200 shadow-2xl shadow-blue-950/10 rounded-2xl p-5 sm:p-6 2xl:rounded-3xl 2xl:p-8">
               <div className="mb-7 text-center">
                 <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-white border border-blue-100 shadow-md shadow-blue-100/70 flex items-center justify-center overflow-hidden">
                   <img

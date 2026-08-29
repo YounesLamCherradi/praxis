@@ -1,4 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   AlertCircle,
   Bot,
@@ -14,7 +18,7 @@ import {
   Wand2,
 } from "lucide-react";
 
-const ASSIGNMENT_TYPES = [
+const BASE_ASSIGNMENT_TYPES = [
   "Response",
   "Definition",
   "Argument",
@@ -96,6 +100,152 @@ export default function AssignmentDetailsStep({
   generatedDraft,
   handleGenerateAssignmentDraft,
 }) {
+  const [
+    sharedAssignmentTypes,
+    setSharedAssignmentTypes,
+  ] = useState([]);
+
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSharedAssignmentTypes() {
+      try {
+        const response = await fetch(
+          "/api/assignment-types",
+          {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        const payload =
+          await response.json();
+
+        if (
+          !response.ok ||
+          payload?.error
+        ) {
+          throw new Error(
+            payload?.error ||
+              "Could not load shared assignment types."
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const values =
+          Array.isArray(payload?.types)
+            ? payload.types
+                .map((type) => {
+                  if (
+                    typeof type === "string"
+                  ) {
+                    return type;
+                  }
+
+                  return (
+                    type?.value ||
+                    type?.name ||
+                    type?.label ||
+                    ""
+                  );
+                })
+                .map((value) =>
+                  String(
+                    value || ""
+                  ).trim()
+                )
+                .filter(Boolean)
+            : [];
+
+        setSharedAssignmentTypes(
+          values
+        );
+      } catch (error) {
+        console.warn(
+          "Shared assignment types could not be loaded:",
+          error
+        );
+
+        if (!cancelled) {
+          setSharedAssignmentTypes(
+            []
+          );
+        }
+      }
+    }
+
+    loadSharedAssignmentTypes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+
+  const assignmentTypeOptions =
+    useMemo(() => {
+      /*
+       * Keep "Other" at the bottom.
+       * Admin-managed types are inserted before it.
+       */
+      const baseWithoutOther =
+        BASE_ASSIGNMENT_TYPES.filter(
+          (type) =>
+            type.toLowerCase() !==
+            "other"
+        );
+
+      const merged = [
+        ...baseWithoutOther,
+        ...sharedAssignmentTypes,
+
+        /*
+         * Preserve a type already saved on an
+         * assignment even if an admin later
+         * removes it from Configuration.
+         */
+        assignmentType,
+
+        "Other",
+      ];
+
+      const seen =
+        new Set();
+
+      return merged
+        .map((value) =>
+          String(
+            value || ""
+          ).trim()
+        )
+        .filter(Boolean)
+        .filter((value) => {
+          const key =
+            value.toLowerCase();
+
+          if (
+            seen.has(key)
+          ) {
+            return false;
+          }
+
+          seen.add(key);
+
+          return true;
+        });
+    }, [
+      sharedAssignmentTypes,
+      assignmentType,
+    ]);
+
+
   const isAiMode = creationMode === "ai";
   const shouldShowGeneratedAssignment =
     isAiMode && Boolean(generatedDraft);
@@ -185,20 +335,20 @@ export default function AssignmentDetailsStep({
           <div
             className={`${
               isDescriptionExpanded || !generatedDraft ? "block" : "hidden"
-            } space-y-5 rounded-2xl border border-violet-200 bg-violet-50/50 p-5`}
+            } space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-3 sm:space-y-5 sm:rounded-2xl sm:p-5`}
           >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-3">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-violet-200 bg-white text-violet-700">
+          <div className="flex items-start justify-between gap-2 sm:gap-3">
+            <div className="flex min-w-0 items-start gap-2 sm:gap-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-violet-200 bg-white text-violet-700 sm:h-9 sm:w-9 sm:rounded-xl">
               <Wand2 className="h-4 w-4" />
             </div>
 
             <div>
-              <h4 className="font-serif text-sm font-bold text-slate-950">
+              <h4 className="font-serif text-[13px] font-bold leading-tight text-slate-950 sm:text-sm">
                 Describe the assignment
               </h4>
 
-              <p className="mt-1 max-w-3xl text-xs leading-relaxed text-violet-800">
+              <p className="mt-0.5 max-w-3xl text-[10px] leading-4 text-violet-800 sm:mt-1 sm:text-xs sm:leading-relaxed">
                 Use one plain-English description. Include only details that matter
                 to you. Praxis will choose sensible defaults for anything you omit.
               </p>
@@ -217,8 +367,8 @@ export default function AssignmentDetailsStep({
             )}
           </div>
 
-          <label className="block space-y-2">
-            <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <label className="block space-y-1 sm:space-y-2">
+            <span className="block text-[9px] font-bold uppercase tracking-wider text-slate-500 sm:text-[10px]">
               What assignment do you want to create?
               <span className="ml-1 text-red-600">*</span>
             </span>
@@ -226,11 +376,9 @@ export default function AssignmentDetailsStep({
             <textarea
               value={aiBrief}
               onChange={(event) => setAiBrief(event.target.value)}
-              rows={9}
-              placeholder={`Example:
-
-Create a B1 process paragraph for CSC4301 about how students prepare for an important exam. It should be 250–400 words and due next Friday at 11:59 PM. Give students two AI feedback checks and enable the planning coach with automatic outline.`}
-              className="w-full resize-y rounded-2xl border border-violet-200 bg-white px-5 py-4 text-sm leading-7 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-violet-500 focus:ring-4 focus:ring-violet-500/10"
+              rows={5}
+              placeholder={`Example: Create a B1 process paragraph for CSC4301, 250–400 words, due next Friday. Allow two AI feedback checks and the planning coach.`}
+              className="min-h-[125px] w-full resize-y rounded-xl border border-violet-200 bg-white px-3 py-2.5 text-[16px] leading-5 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/10 sm:min-h-[250px] sm:rounded-2xl sm:px-5 sm:py-4 sm:text-sm sm:leading-7 sm:focus:ring-4"
             />
           </label>
 
@@ -241,9 +389,14 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
             />
           )}
 
-          <div className="flex flex-col gap-2 border-t border-violet-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              You may mention the course, level, due date, word count, assignment type, Coach support, or feedback limits in the same description.
+          <div className="flex flex-col gap-2 border-t border-violet-200 pt-2.5 sm:flex-row sm:items-center sm:justify-between sm:pt-4">
+            <p className="text-[10px] leading-4 text-slate-500 sm:text-[11px] sm:leading-relaxed">
+              <span className="sm:hidden">
+                Include course, due date, word count, support, or feedback limits if needed.
+              </span>
+              <span className="hidden sm:inline">
+                You may mention the course, level, due date, word count, assignment type, Coach support, or feedback limits in the same description.
+              </span>
             </p>
 
             <button
@@ -254,7 +407,7 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
                 !aiBrief.trim() ||
                 classes.length === 0
               }
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-xs font-bold text-white shadow-sm shadow-violet-600/20 transition-all hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+              className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-3 text-[11px] font-bold text-white shadow-sm shadow-violet-600/20 transition-all hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none sm:h-auto sm:w-auto sm:gap-2 sm:rounded-xl sm:px-5 sm:py-3 sm:text-xs"
             >
               {isGenerating ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -299,6 +452,7 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
           setAssignmentType={setAssignmentType}
           assignmentTypeCustom={assignmentTypeCustom}
           setAssignmentTypeCustom={setAssignmentTypeCustom}
+          assignmentTypeOptions={assignmentTypeOptions}
           studentLevel={studentLevel}
           setStudentLevel={setStudentLevel}
           feedbackChecks={feedbackChecks}
@@ -415,7 +569,7 @@ Create a B1 process paragraph for CSC4301 about how students prepare for an impo
                 }}
                 className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
               >
-                {ASSIGNMENT_TYPES.map((type) => (
+                {assignmentTypeOptions.map((type) => (
                   <option key={type} value={type}>
                     {type}
                   </option>
@@ -542,6 +696,7 @@ function ManualAssignmentSetup({
   setAssignmentType,
   assignmentTypeCustom,
   setAssignmentTypeCustom,
+  assignmentTypeOptions = BASE_ASSIGNMENT_TYPES,
   studentLevel,
   setStudentLevel,
   feedbackChecks,
@@ -678,7 +833,7 @@ function ManualAssignmentSetup({
             }}
             className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-3 text-xs font-bold text-slate-900 outline-none focus:border-blue-500"
           >
-            {ASSIGNMENT_TYPES.map((type) => (
+            {assignmentTypeOptions.map((type) => (
               <option key={type} value={type}>
                 {type}
               </option>

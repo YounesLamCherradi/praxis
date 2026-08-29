@@ -867,10 +867,6 @@ export default function Step1IdeasChat() {
                   <h3 className="text-xs font-bold text-slate-950">
                     Coach
                   </h3>
-
-                  <p className="mt-0.5 truncate text-[10px] text-slate-500">
-                    One planning question at a time - no submission-ready writing.
-                  </p>
                 </div>
               </div>
 
@@ -895,9 +891,9 @@ export default function Step1IdeasChat() {
             )}
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-4">
+          <div className="min-h-0 flex-1 overflow-y-auto bg-[#F8FAFC] p-2.5 sm:p-4">
             {visibleMessages.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-2.5 sm:space-y-4">
                 {visibleMessages.map((msg, idx) => {
                   const isUser =
                     msg.role === "user";
@@ -907,14 +903,14 @@ export default function Step1IdeasChat() {
                   return (
                     <div
                       key={`${msg.createdAt || "msg"}-${idx}`}
-                      className={`flex max-w-[88%] gap-3 ${
+                      className={`flex max-w-[94%] gap-2 sm:max-w-[88%] sm:gap-3 ${
                         isUser
                           ? "ml-auto flex-row-reverse"
                           : ""
                       }`}
                     >
                       <div
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border shadow-sm ${
+                        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border shadow-sm sm:h-8 sm:w-8 sm:rounded-lg ${
                           isUser
                             ? "border-blue-600 bg-blue-600 text-white"
                             : isError
@@ -923,14 +919,14 @@ export default function Step1IdeasChat() {
                         }`}
                       >
                         {isUser ? (
-                          <User className="h-4 w-4" />
+                          <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                         ) : (
-                          <Bot className="h-4 w-4" />
+                          <Bot className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                         )}
                       </div>
 
                       <div
-                        className={`whitespace-pre-line rounded-2xl p-3 text-xs leading-relaxed ${
+                        className={`whitespace-pre-line rounded-xl p-2.5 text-[13px] leading-5 sm:rounded-2xl sm:p-3 sm:text-xs sm:leading-relaxed ${
                           isUser
                             ? "rounded-tr-none bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                             : isError
@@ -945,13 +941,13 @@ export default function Step1IdeasChat() {
                 })}
 
                 {isThinking && (
-                  <div className="flex max-w-[88%] gap-3">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-blue-100 bg-white text-blue-700 shadow-sm">
-                      <Bot className="h-4 w-4" />
+                  <div className="flex max-w-[94%] gap-2 sm:max-w-[88%] sm:gap-3">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-blue-100 bg-white text-blue-700 shadow-sm sm:h-8 sm:w-8 sm:rounded-lg">
+                      <Bot className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     </div>
 
-                    <div className="flex items-center gap-2 rounded-2xl rounded-tl-none border border-blue-100 bg-white p-3 text-xs text-slate-600 shadow-sm">
-                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                    <div className="flex items-center gap-1.5 rounded-xl rounded-tl-none border border-blue-100 bg-white p-2.5 text-[11px] leading-4 text-slate-600 shadow-sm sm:gap-2 sm:rounded-2xl sm:p-3 sm:text-xs sm:leading-normal">
+                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-blue-600 sm:h-4 sm:w-4" />
                       Coach is preparing a short reply...
                     </div>
                   </div>
@@ -1062,7 +1058,7 @@ export default function Step1IdeasChat() {
       </div>
 
       {showCoachSkipConfirm && (
-        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-3 xl:p-4">
           <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl">
             <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-700">
               <ShieldAlert className="h-5 w-5" />

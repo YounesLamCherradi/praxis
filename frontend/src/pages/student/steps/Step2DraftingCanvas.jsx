@@ -98,6 +98,22 @@ function getChatMessageText(message = {}) {
   ).trim();
 }
 
+function isStudentPlanningMessage(message = {}) {
+  const role = String(
+    message?.role ||
+      message?.sender ||
+      message?.author ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return (
+    ["user", "student"].includes(role) &&
+    Boolean(getChatMessageText(message))
+  );
+}
+
 function getPlanningChatHistory(submission = {}) {
   const candidates = [
     submission?.chatHistory,
@@ -431,11 +447,15 @@ export default function Step2DraftingCanvas() {
       false
   );
 
-  const showChatOutline =
-    autoOutlineFromChat &&
-    planningChatHistory.filter((message) =>
-      getChatMessageText(message)
-    ).length >= 2;
+  const hasStudentPlanningInteraction =
+    planningChatHistory.some((message) =>
+      isStudentPlanningMessage(message)
+    );
+
+  // If the teacher enabled the Coach-built outline, keep the
+  // outline panel visible even when the student skipped Coach.
+  // Generation itself is gated by real student participation.
+  const showChatOutline = autoOutlineFromChat;
 
   const wordProgress = getWordProgress(wordCount, minWords, maxWords);
 
@@ -578,6 +598,13 @@ export default function Step2DraftingCanvas() {
       return;
     }
 
+    if (!hasStudentPlanningInteraction) {
+      setOutlineStatus(
+        "No planning ideas yet. Add your ideas in Coach first to build this outline."
+      );
+      return;
+    }
+
     const currentText = String(chatOutlineText || "");
     const currentMeta = chatOutlineMeta || {};
 
@@ -650,7 +677,7 @@ export default function Step2DraftingCanvas() {
       setChatOutlineMeta(nextMeta);
       persistChatOutline(currentText, nextMeta);
       setOutlineStatus(
-        "Outline help is unavailable right now. Try “Rebuild from chat”, or write your own."
+        "Outline is unavailable right now. Rebuild it from chat or write your own notes."
       );
     } finally {
       outlineRequestInFlightRef.current = false;
@@ -1281,22 +1308,22 @@ export default function Step2DraftingCanvas() {
   }
 
   return (
-    <div className="student-draft-step flex h-full min-h-0 flex-col gap-3 pb-2">
+    <div className="student-draft-step flex h-full min-h-0 flex-col gap-2 pb-2 sm:gap-3">
       {/* Compact progress and editor toolbar */}
-      <div className="student-draft-toolbar z-30 shrink-0 rounded-2xl border border-slate-200 bg-white/95 px-4 py-3 shadow-lg shadow-slate-900/5 backdrop-blur">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      <div className="student-draft-toolbar z-30 shrink-0 rounded-xl border border-slate-200 bg-white/95 px-2.5 py-2.5 shadow-sm shadow-slate-900/5 backdrop-blur sm:rounded-2xl sm:px-4 sm:py-3 sm:shadow-lg">
+        <div className="flex flex-col gap-2 sm:gap-3">
+          <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1 sm:flex sm:flex-wrap sm:gap-x-4 sm:gap-y-2">
               <div className="flex items-center gap-2">
-                <FileText className="w-4 h-4 text-blue-700" />
-                <span className="text-xs font-bold text-slate-900">
+                <FileText className="h-3.5 w-3.5 text-blue-700 sm:h-4 sm:w-4" />
+                <span className="text-[11px] font-bold text-slate-900 sm:text-xs">
                   {wordCount}
                   {maxWords > 0 ? ` / ${maxWords}` : ""} words
                 </span>
               </div>
 
               <span
-                className={`text-[11px] font-bold ${
+                className={`justify-self-end text-right text-[10px] font-bold sm:justify-self-auto sm:text-left sm:text-[11px] ${
                   aboveMaxWords
                     ? "text-red-700"
                     : belowMinWords
@@ -1308,7 +1335,7 @@ export default function Step2DraftingCanvas() {
               </span>
 
               <span
-                className={`inline-flex items-center gap-1.5 text-[10px] font-mono font-bold ${
+                className={`col-span-2 inline-flex items-center gap-1 text-[9px] font-mono font-bold sm:col-span-1 sm:gap-1.5 sm:text-[10px] ${
                   saveStatus === "error"
                     ? "text-red-700"
                     : saveStatus === "saving"
@@ -1316,7 +1343,7 @@ export default function Step2DraftingCanvas() {
                     : "text-slate-500"
                 }`}
               >
-                <Save className="w-3.5 h-3.5" />
+                <Save className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
                 {saveStatus === "saving"
                   ? "Saving..."
                   : saveStatus === "error"
@@ -1325,7 +1352,7 @@ export default function Step2DraftingCanvas() {
               </span>
             </div>
 
-            <div className="flex w-full shrink-0 items-center gap-2 lg:w-auto lg:justify-end">
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2 lg:w-auto lg:justify-end">
               <button
                 type="button"
                 onClick={() => goToStudentStep(1)}
@@ -1339,9 +1366,9 @@ export default function Step2DraftingCanvas() {
                 type="button"
                 onClick={handleReviewDraft}
                 disabled={!canReview}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-4 py-2.5 text-xs font-bold text-blue-700 transition-all hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-300 sm:flex-none"
+                className="inline-flex min-w-0 items-center justify-center gap-1 rounded-lg bg-blue-600 px-2.5 py-2.5 text-center text-[9px] font-bold leading-tight text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none sm:flex-none sm:gap-1.5 sm:rounded-xl sm:px-5 sm:py-3 sm:text-xs sm:leading-normal"
               >
-                <Sparkles className="h-3.5 w-3.5" />
+                <Sparkles className="h-3 w-3 shrink-0 sm:h-3.5 sm:w-3.5" />
                 Request AI Feedback
               </button>
 
@@ -1354,24 +1381,24 @@ export default function Step2DraftingCanvas() {
                   type="button"
                   onClick={handleContinueForward}
                   disabled={!hasDraftText}
-                  className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 disabled:shadow-none"
+                  className="inline-flex min-w-0 items-center justify-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-2 text-center text-[9px] font-bold leading-tight text-slate-600 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300 disabled:shadow-none sm:shrink-0 sm:gap-2 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-xs sm:leading-normal"
                 >
-                  {rubricComplete ? "Continue to Submit" : "Continue to Rubric Check"}
-                  <ArrowRight className="h-4 w-4" />
+                  Continue to final step
+                  <ArrowRight className="h-3 w-3 shrink-0 sm:h-4 sm:w-4" />
                 </button>
               )}
             </div>
           </div>
 
           <div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-1 overflow-hidden rounded-full bg-slate-100 sm:h-1.5">
               <div
                 className={`h-full rounded-full transition-all duration-300 ${progressTone}`}
                 style={{ width: `${wordProgress}%` }}
               />
             </div>
 
-            <div className="mt-1.5 flex justify-between text-[9px] font-mono text-slate-400">
+            <div className="mt-1 flex justify-between font-mono text-[8px] text-slate-400 sm:mt-1.5 sm:text-[9px]">
               <span>
                 {minWords > 0 ? `${minWords} minimum` : "No minimum"}
               </span>
@@ -1396,20 +1423,20 @@ export default function Step2DraftingCanvas() {
         )}
 
       {outlineRebuildPrompt && (
-        <div className="shrink-0 rounded-2xl border border-blue-200 bg-blue-50 px-4 py-3 text-blue-950 shadow-sm">
-          <div className="flex items-start gap-3">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
+        <div className="shrink-0 rounded-xl border border-blue-200 bg-blue-50 px-2.5 py-2.5 text-blue-950 shadow-sm sm:rounded-2xl sm:px-4 sm:py-3">
+          <div className="flex items-start gap-2 sm:gap-3">
+            <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
 
             <div className="min-w-0 flex-1">
-              <h3 className="text-xs font-bold">
+              <h3 className="text-[11px] font-bold leading-tight sm:text-xs">
                 Replace your edited outline?
               </h3>
 
-              <p className="mt-1 text-[11px] leading-relaxed text-blue-800">
+              <p className="mt-0.5 text-[9px] leading-4 text-blue-800 sm:mt-1 sm:text-[11px] sm:leading-relaxed">
                 Rebuilding will replace the outline notes you edited. Your draft text will not be changed.
               </p>
 
-              <div className="mt-3 flex flex-wrap gap-2">
+              <div className="mt-2 grid grid-cols-2 gap-2 sm:mt-3 sm:flex sm:flex-wrap">
                 <button
                   type="button"
                   onClick={() =>
@@ -1418,7 +1445,7 @@ export default function Step2DraftingCanvas() {
                       confirmed: true,
                     })
                   }
-                  className="rounded-xl bg-blue-600 px-4 py-2.5 text-[11px] font-bold text-white hover:bg-blue-700"
+                  className="min-h-9 rounded-lg bg-blue-600 px-2 py-2 text-[9px] font-bold text-white hover:bg-blue-700 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-[11px]"
                 >
                   Rebuild Outline
                 </button>
@@ -1426,7 +1453,7 @@ export default function Step2DraftingCanvas() {
                 <button
                   type="button"
                   onClick={() => setOutlineRebuildPrompt(false)}
-                  className="rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
+                  className="min-h-9 rounded-lg border border-blue-200 bg-white px-2 py-2 text-[9px] font-bold text-blue-700 hover:bg-blue-100 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-[11px]"
                 >
                   Keep My Outline
                 </button>
@@ -1440,22 +1467,25 @@ export default function Step2DraftingCanvas() {
           When the automatic outline is enabled, the editable outline
           appears as a right-side planning panel on desktop. */}
       <div
-        className={`student-draft-workspace grid min-h-[300px] w-full flex-1 gap-3 ${
+        className={`student-draft-workspace grid min-h-[55dvh] w-full flex-1 gap-2 sm:min-h-[300px] sm:gap-3 ${
           showChatOutline
-            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] 2xl:grid-cols-[minmax(0,1fr)_340px]"
+            ? "grid-cols-1 xl:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_380px]"
             : "grid-cols-1"
         }`}
       >
-        <section className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-md shadow-blue-950/5 ring-1 ring-blue-500/5">
-          <div className="shrink-0 flex flex-col gap-2 border-b border-slate-100 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <section className="order-2 flex min-h-[55dvh] min-w-0 flex-col overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm shadow-blue-950/5 ring-1 ring-blue-500/5 sm:h-full sm:min-h-0 sm:rounded-2xl sm:shadow-md xl:order-1">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-100 bg-white px-2.5 py-2 sm:px-4 sm:py-3">
             <div>
-              <p className="text-[11px] font-medium text-slate-600">
-                Type the full assignment below. The outline is only for planning notes.
+              <p className="text-[10px] font-medium leading-4 text-slate-600 sm:text-[11px]">
+                <span className="sm:hidden">Write your full assignment here.</span>
+                <span className="hidden sm:inline">
+                  Type the full assignment below. The outline is only for planning notes.
+                </span>
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
-              <span className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 font-bold text-slate-500">
+            <div className="flex shrink-0 items-center gap-1.5 font-mono text-[9px] sm:gap-2 sm:text-[10px]">
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-bold text-slate-500 sm:rounded-lg sm:px-2 sm:py-1">
                 Autosave on
               </span>
             </div>
@@ -1473,16 +1503,23 @@ export default function Step2DraftingCanvas() {
             onDrop={handleDrop}
             onBlur={handleBlur}
             placeholder="Start with your main idea. Use your planning notes to guide your own writing."
-            className="min-h-0 w-full flex-1 resize-none overflow-y-auto bg-[#F8FAFC] px-5 py-5 text-sm leading-7 text-slate-800 placeholder-slate-400 outline-none transition-all focus:bg-white"
+            className="min-h-[48dvh] w-full flex-1 resize-none overflow-y-auto bg-[#F8FAFC] px-3 py-3 text-[16px] leading-6 text-slate-800 placeholder:text-[14px] placeholder:leading-6 placeholder-slate-400 outline-none transition-all focus:bg-white sm:min-h-0 sm:px-5 sm:py-5 sm:text-sm sm:leading-7 sm:placeholder:text-sm"
           />
 
         </section>
 
         {showChatOutline && (
           <ChatOutlinePanel
-            value={chatOutlineText}
+            value={
+              hasStudentPlanningInteraction
+                ? chatOutlineText
+                : ""
+            }
             status={outlineStatus}
             busy={outlineBusy}
+            hasStudentPlanningInteraction={
+              hasStudentPlanningInteraction
+            }
             onChange={handleOutlineChange}
             onRebuild={() =>
               generateOutline({ force: true })
@@ -1495,7 +1532,7 @@ export default function Step2DraftingCanvas() {
         typeof document !== "undefined" &&
         createPortal(
           <div
-            className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+            className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/55 p-2 backdrop-blur-sm sm:p-3 xl:p-4"
           role="presentation"
         >
           <section
@@ -1549,13 +1586,14 @@ function ChatOutlinePanel({
   value,
   status,
   busy,
+  hasStudentPlanningInteraction,
   onChange,
   onRebuild,
 }) {
   return (
     <aside
       aria-label="Planning outline reference"
-      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 p-3"
+      className="order-1 flex min-h-[220px] min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50/70 p-2.5 sm:h-full sm:min-h-0 sm:rounded-2xl sm:p-3 xl:order-2"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -1566,14 +1604,19 @@ function ChatOutlinePanel({
             </h2>
           </div>
           <p className="mt-1 text-[10px] text-slate-500">
-            Use these notes while you write your draft.
+            {hasStudentPlanningInteraction
+              ? "Use these notes to plan your draft."
+              : "No Coach planning yet. Add your ideas in Coach to build your outline."}
           </p>
         </div>
 
         <button
           type="button"
           onClick={onRebuild}
-          disabled={busy}
+          disabled={
+            busy ||
+            !hasStudentPlanningInteraction
+          }
           className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <Sparkles
@@ -1583,7 +1626,9 @@ function ChatOutlinePanel({
           />
           {busy
             ? "Building..."
-            : "Rebuild from chat"}
+            : hasStudentPlanningInteraction
+            ? "Rebuild from chat"
+            : "Use Coach first"}
         </button>
       </div>
 
@@ -1603,8 +1648,13 @@ function ChatOutlinePanel({
         aria-label="Editable planning outline"
         value={value}
         onChange={onChange}
-        placeholder="Add headings, bullet points, examples, and supporting details."
-        className="mt-2 min-h-[180px] w-full flex-1 resize-y overflow-y-auto rounded-xl border border-slate-200 bg-white px-3 py-3 text-xs leading-6 text-slate-700 outline-none transition-all placeholder:text-slate-400 focus:border-blue-300 focus:ring-3 focus:ring-blue-500/10 xl:min-h-0 xl:resize-none"
+        disabled={!hasStudentPlanningInteraction}
+        placeholder={
+          hasStudentPlanningInteraction
+            ? "Add headings, bullet points, examples, and supporting details."
+            : "Your outline is empty because you have not added planning ideas in Coach yet."
+        }
+        className="min-h-[160px] w-full flex-1 resize-none overflow-y-auto rounded-lg border border-slate-200 bg-white px-2.5 py-2.5 text-[16px] leading-5 text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:h-full sm:min-h-[150px] sm:rounded-xl sm:px-3 sm:py-3 sm:text-xs"
       />
     </aside>
   );

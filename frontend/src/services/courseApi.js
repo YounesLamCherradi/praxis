@@ -80,6 +80,16 @@ export async function removeStudentFromCourse(courseId, studentId) {
   );
 }
 
+export async function renameStudentInCourse(courseId, studentId, name) {
+  return request(
+    `/api/classes/${encodeURIComponent(courseId)}/members/${encodeURIComponent(studentId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }
+  );
+}
+
 export async function joinCourseByCode(code) {
   const data = await request("/api/classes/join-by-code", {
     method: "POST",

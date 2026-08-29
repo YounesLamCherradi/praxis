@@ -1,31 +1,79 @@
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
 import {
   ArrowRight,
-  BookOpen,
-  ClipboardCheck,
-  FileText,
+  CheckCircle2,
   GraduationCap,
-  Highlighter,
   MessageSquare,
   PenLine,
-  ShieldCheck,
+  RefreshCw,
   Sparkles,
-  Users,
+  User,
 } from "lucide-react";
 
+const COACH_MESSAGES = [
+  {
+    role: "student",
+    text: "I know my topic, but I am not sure how to organize the essay.",
+  },
+  {
+    role: "coach",
+    text: "What is the main idea you want your reader to understand first?",
+  },
+  {
+    role: "student",
+    text: "That planning first makes the process easier and clearer.",
+  },
+  {
+    role: "coach",
+    text: "Good. What two or three stages could help you explain that idea in order?",
+  },
+];
+
 export default function Hero() {
-  const navigate = useNavigate();
+  const [visibleMessages, setVisibleMessages] = useState(
+    COACH_MESSAGES.length
+  );
+  const [playing, setPlaying] = useState(false);
 
-  const handleScrollToSection = (id) => {
-    const targetElement = document.getElementById(id);
+  useEffect(() => {
+    if (!playing) return;
 
-    if (targetElement) {
-      targetElement.scrollIntoView({ behavior: "smooth" });
+    if (visibleMessages >= COACH_MESSAGES.length) {
+      setPlaying(false);
+      return;
     }
-  };
+
+    const timer = window.setTimeout(() => {
+      setVisibleMessages((value) =>
+        Math.min(COACH_MESSAGES.length, value + 1)
+      );
+    }, 850);
+
+    return () => window.clearTimeout(timer);
+  }, [playing, visibleMessages]);
+
+  function openRole(role) {
+    window.dispatchEvent(
+      new CustomEvent("praxis-landing-role", {
+        detail: role,
+      })
+    );
+
+    document
+      .getElementById("role-journey")
+      ?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+  }
+
+  function replayCoach() {
+    setVisibleMessages(1);
+    setPlaying(true);
+  }
 
   return (
-    <header className="relative overflow-hidden bg-[#F8FAFC] pb-12 pt-36 lg:pb-14 lg:pt-40">
+    <header className="relative overflow-hidden bg-[#F8FAFC] pb-10 pt-24 sm:pb-16 sm:pt-32 lg:pb-20 lg:pt-40">
       <style>{`
         @keyframes heroReveal {
           from { opacity: 0; transform: translateY(16px); }
@@ -33,19 +81,19 @@ export default function Hero() {
         }
 
         @keyframes heroFloat {
-          0%, 100% { transform: translateY(0px); }
+          0%, 100% { transform: translateY(0); }
           50% { transform: translateY(-8px); }
         }
 
         .hero-grid {
           background-image:
-            linear-gradient(to right, rgba(37, 99, 235, 0.045) 1px, transparent 1px),
-            linear-gradient(to bottom, rgba(37, 99, 235, 0.045) 1px, transparent 1px);
+            linear-gradient(to right, rgba(37,99,235,.045) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(37,99,235,.045) 1px, transparent 1px);
           background-size: 3rem 3rem;
         }
 
         .hero-reveal {
-          animation: heroReveal 0.55s cubic-bezier(0.16, 1, 0.3, 1) both;
+          animation: heroReveal .55s cubic-bezier(.16,1,.3,1) both;
         }
 
         .hero-float {
@@ -54,89 +102,75 @@ export default function Hero() {
       `}</style>
 
       <div className="hero-grid absolute inset-0 opacity-80" />
+
       <div className="pointer-events-none absolute -top-40 left-1/4 h-[560px] w-[560px] rounded-full bg-blue-500/15 blur-[130px]" />
+
       <div className="pointer-events-none absolute -right-24 top-28 h-[480px] w-[480px] rounded-full bg-indigo-500/15 blur-[120px]" />
 
       <div className="relative z-10 mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-10">
-        <div className="grid items-center gap-8 lg:grid-cols-12 lg:gap-12">
-          <div className="hero-reveal space-y-6 text-left lg:col-span-6">
-            <div className="inline-flex items-center gap-3 rounded-2xl border border-blue-100 bg-white/85 px-4 py-2 shadow-sm backdrop-blur">
-              <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                <img
-                  src="/praxis-logo.png"
-                  alt="Praxis logo"
-                  width="256"
-                  height="256"
-                  className="h-6 w-6 object-contain"
-                />
-              </div>
+        <div className="grid items-center gap-8 sm:gap-10 lg:grid-cols-12 lg:gap-14">
 
-              <span className="text-lg font-bold leading-none tracking-tight">
-                <span className="text-slate-900">pr</span>
-                <span className="text-blue-600">a</span>
-                <span className="text-slate-900">x</span>
-                <span className="text-blue-600">i</span>
-                <span className="text-slate-900">s</span>
-              </span>
-
-              <span className="hidden rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 sm:inline-flex">
-                AUI Writing Platform
-              </span>
+          <div className="hero-reveal space-y-5 sm:space-y-6 text-left lg:col-span-6">
+            <div className="inline-flex items-center gap-1.5 rounded-full border border-blue-100 bg-white/90 px-3 py-1.5 text-[11px] font-semibold text-blue-700 shadow-sm backdrop-blur sm:gap-2 sm:px-3.5 sm:py-2 sm:text-xs">
+              <Sparkles className="h-3.5 w-3.5" />
+              Guided writing for language classes
             </div>
 
-            <div className="space-y-4">
-              <h1 className="text-4xl font-extrabold leading-[1.05] tracking-tight text-slate-950 sm:text-5xl lg:text-[4.25rem]">
-                Responsible AI writing support for the{" "}
-                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-sky-500 bg-clip-text text-transparent">
-                  academic process
+            <div className="space-y-5">
+              <h1 className="text-[2.2rem] font-extrabold leading-[1.06] tracking-tight text-slate-950 sm:text-5xl sm:leading-[1.04] lg:text-[4.25rem]">
+                A writing space for{" "}
+                <span className="text-blue-600">
+                  language classes
                 </span>
                 .
               </h1>
 
-              <p className="max-w-2xl font-sans text-base leading-relaxed text-slate-600 sm:text-lg">
-                Praxis helps students plan, draft, revise, and submit their
-                assignments through a guided writing workflow. Instructors get
-                course management, submissions, rubrics, annotations, feedback,
-                and a clear process view.
+              <p className="max-w-2xl text-sm leading-6 text-slate-600 sm:text-lg sm:leading-relaxed">
+                Praxis guides students from planning to reflection while
+                giving instructors a clear space to respond. AI asks
+                questions, points to revision opportunities, and leaves
+                the writing to the student.
               </p>
             </div>
 
-            <div className="flex flex-col items-stretch gap-3 pt-1 sm:flex-row sm:items-center">
+            <div className="flex flex-col gap-3 pt-1 sm:flex-row">
               <button
                 type="button"
-                onClick={() => navigate("/signup")}
-                className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-600 px-7 py-3.5 text-sm font-bold text-white shadow-lg shadow-blue-600/20 transition-all hover:-translate-y-px hover:bg-blue-700 active:translate-y-0"
+                onClick={() => openRole("student")}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 sm:w-auto sm:rounded-2xl sm:px-6 sm:py-3.5 sm:shadow-lg"
               >
-                Get Started
-                <ArrowRight className="h-4 w-4" strokeWidth={2.5} />
+                <User className="h-4 w-4" />
+                I'm a student
+                <ArrowRight className="h-4 w-4" />
               </button>
 
               <button
                 type="button"
-                onClick={() => handleScrollToSection("platform-view")}
-                className="flex cursor-pointer items-center justify-center gap-2 rounded-2xl border border-slate-200/80 bg-white px-7 py-3.5 text-sm font-bold text-slate-700 shadow-sm transition-all hover:border-blue-200 hover:bg-slate-50 hover:text-blue-700"
+                onClick={() => openRole("instructor")}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 sm:w-auto sm:rounded-2xl sm:px-6 sm:py-3.5"
               >
-                Explore Platform
+                <GraduationCap className="h-4 w-4" />
+                I'm an instructor
               </button>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 pt-2">
+            <div className="grid grid-cols-3 gap-2 pt-2 sm:gap-3">
               <HeroFeature
+                title="Plan"
+                text="Develop ideas first"
+                icon={MessageSquare}
+              />
+
+              <HeroFeature
+                title="Revise"
+                text="Act on feedback"
                 icon={PenLine}
-                title="Writing"
-                text="Drafting steps"
               />
 
               <HeroFeature
-                icon={GraduationCap}
-                title="Review"
-                text="Instructor feedback"
-              />
-
-              <HeroFeature
-                icon={ShieldCheck}
-                title="AI Use"
-                text="Responsible support"
+                title="Reflect"
+                text="Explain your choices"
+                icon={CheckCircle2}
               />
             </div>
           </div>
@@ -146,231 +180,119 @@ export default function Hero() {
               <div className="absolute -right-5 -top-5 h-28 w-28 rounded-3xl bg-blue-500/15 blur-2xl" />
               <div className="absolute -bottom-5 -left-5 h-28 w-28 rounded-3xl bg-indigo-500/15 blur-2xl" />
 
-              <div className="hero-float relative overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-2xl">
-                <div className="flex items-center justify-between border-b border-slate-100 bg-white px-5 py-4">
-                  <div className="flex items-center gap-3 text-slate-700">
-                    <div className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-                      <img
-                        src="/praxis-logo.png"
-                        alt="Praxis logo"
-                        width="256"
-                        height="256"
-                        className="h-7 w-7 object-contain"
-                      />
+              <div className="hero-float relative overflow-hidden rounded-[20px] border border-slate-200 bg-white shadow-lg sm:rounded-[1.8rem] sm:shadow-2xl">
+                <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-600">
+                      <Sparkles className="h-4 w-4" />
                     </div>
 
                     <div>
                       <p className="text-sm font-bold text-slate-900">
-                        Praxis Writing Workspace
+                        Praxis Coach
                       </p>
+
                       <p className="text-[11px] text-slate-400">
-                        Student writing and instructor review
+                        Recorded planning example
                       </p>
                     </div>
                   </div>
 
-                  <span className="hidden rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-blue-700 sm:inline-flex">
-                    Guided writing
-                  </span>
+                  <button
+                    type="button"
+                    onClick={replayCoach}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[10px] font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 ${
+                        playing ? "animate-spin" : ""
+                      }`}
+                    />
+                    Replay
+                  </button>
                 </div>
 
-                <div className="bg-[#F8FAFC] p-5">
-                  <div className="mb-3 grid gap-3 sm:grid-cols-3">
-                    <DashboardStat
-                      icon={BookOpen}
-                      label="Courses"
-                      value="04"
-                      tone="blue"
-                    />
+                <div className="min-h-0 bg-[#F8FAFC] p-4 sm:min-h-[420px] sm:p-5">
+                  <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">
+                      The idea
+                    </p>
 
-                    <DashboardStat
-                      icon={ClipboardCheck}
-                      label="Assignments"
-                      value="12"
-                      tone="indigo"
-                    />
-
-                    <DashboardStat
-                      icon={Users}
-                      label="Students"
-                      value="86"
-                      tone="sky"
-                    />
+                    <p className="mt-1 text-sm font-semibold text-slate-800">
+                      AI helps the student think through the assignment.
+                      It does not produce the paper.
+                    </p>
                   </div>
 
-                  <div className="grid gap-3 lg:grid-cols-[1fr_1.15fr]">
-                    <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-bold text-slate-900">
-                          Student Writing
-                        </h3>
+                  <div className="space-y-3">
+                    {COACH_MESSAGES.slice(
+                      0,
+                      visibleMessages
+                    ).map((message, index) => {
+                      const isCoach =
+                        message.role === "coach";
 
-                        <Sparkles className="h-4 w-4 text-blue-500" />
-                      </div>
+                      return (
+                        <div
+                          key={index}
+                          className={`flex ${
+                            isCoach
+                              ? "justify-start"
+                              : "justify-end"
+                          }`}
+                        >
+                          <div
+                            className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                              isCoach
+                                ? "rounded-tl-md border border-slate-200 bg-white text-slate-700"
+                                : "rounded-tr-md bg-blue-600 text-white"
+                            }`}
+                          >
+                            {isCoach && (
+                              <div className="mb-1.5 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider text-blue-600">
+                                <Sparkles className="h-3 w-3" />
+                                Coach
+                              </div>
+                            )}
 
-                      <ProcessRow
-                        icon={MessageSquare}
-                        title="Ideas and Planning"
-                      />
-
-                      <ProcessRow
-                        icon={PenLine}
-                        title="Drafting and Revision"
-                        emphasized
-                      />
-
-                      <ProcessRow
-                        icon={FileText}
-                        title="Final Submission"
-                      />
-                    </div>
-
-                    <div className="space-y-2.5 rounded-2xl border border-slate-800 bg-slate-950 p-4 text-white">
-                      <h3 className="text-sm font-bold">Instructor Review</h3>
-
-                      <ReviewSignal
-                        icon={Highlighter}
-                        title="Annotations"
-                        text="Text comments and correction codes."
-                      />
-
-                      <ReviewSignal
-                        icon={ClipboardCheck}
-                        title="Rubric Grading"
-                        text="Criteria-based grading and feedback."
-                      />
-
-                      <ReviewSignal
-                        icon={ShieldCheck}
-                        title="Process View"
-                        text="Drafts, submissions, and revision activity support fair review conversations."
-                      />
-                    </div>
+                            {message.text}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  <div className="mt-3 grid gap-3 rounded-2xl border border-blue-100 bg-blue-50/70 p-4 sm:grid-cols-3">
-                    <WorkspacePrinciple
-                      title="Plan"
-                      text="Develop ideas before drafting."
-                    />
-
-                    <WorkspacePrinciple
-                      title="Revise"
-                      text="Use feedback to improve the work."
-                    />
-
-                    <WorkspacePrinciple
-                      title="Review"
-                      text="Receive clear instructor guidance."
-                    />
+                  <div className="mt-5 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] text-slate-500">
+                    <MessageSquare className="h-4 w-4 text-blue-500" />
+                    The student remains responsible for the ideas and final writing.
                   </div>
                 </div>
               </div>
             </div>
           </div>
+
         </div>
       </div>
     </header>
   );
 }
 
-function HeroFeature({ icon: Icon, title, text }) {
+function HeroFeature({
+  icon: Icon,
+  title,
+  text,
+}) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white/85 p-3.5 backdrop-blur transition-all hover:-translate-y-0.5 hover:bg-white hover:shadow-md">
+    <div className="rounded-2xl border border-slate-200 bg-white/85 p-2.5 backdrop-blur transition hover:-translate-y-0.5 hover:shadow-md sm:p-3.5">
       <div className="mb-2 flex h-8 w-8 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-600">
         <Icon className="h-4 w-4" />
       </div>
 
-      <h3 className="text-xs font-bold text-slate-900">{title}</h3>
-
-      <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
-        {text}
-      </p>
-    </div>
-  );
-}
-
-function DashboardStat({ icon: Icon, label, value, tone }) {
-  const tones = {
-    blue: "bg-blue-50 text-blue-600 border-blue-100",
-    indigo: "bg-indigo-50 text-indigo-600 border-indigo-100",
-    sky: "bg-sky-50 text-sky-600 border-sky-100",
-  };
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-3">
-      <div
-        className={`mb-2 flex h-8 w-8 items-center justify-center rounded-xl border ${
-          tones[tone] || tones.blue
-        }`}
-      >
-        <Icon className="h-4 w-4" />
-      </div>
-
-      <p className="font-mono text-[9px] font-bold uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
-
-      <p className="mt-0.5 font-serif text-xl font-black text-slate-900">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ProcessRow({ icon: Icon, title, emphasized = false }) {
-  return (
-    <div
-      className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${
-        emphasized
-          ? "border-blue-200 bg-blue-50/70 shadow-sm"
-          : "border-slate-200 bg-slate-50"
-      }`}
-    >
-      <div
-        className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border bg-white ${
-          emphasized
-            ? "border-blue-100 text-blue-600"
-            : "border-slate-200 text-slate-500"
-        }`}
-      >
-        <Icon className="h-3.5 w-3.5" />
-      </div>
-
-      <span className="truncate text-xs font-bold text-slate-800">
+      <h3 className="text-xs font-bold text-slate-900">
         {title}
-      </span>
-    </div>
-  );
-}
+      </h3>
 
-function ReviewSignal({ icon: Icon, title, text }) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900 p-2.5">
-      <div className="flex gap-2.5">
-        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-blue-400/20 bg-blue-500/10 text-blue-300">
-          <Icon className="h-3.5 w-3.5" />
-        </div>
-
-        <div>
-          <h4 className="text-xs font-bold text-white">{title}</h4>
-
-          <p className="mt-0.5 text-[10px] leading-relaxed text-slate-400">
-            {text}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function WorkspacePrinciple({ title, text }) {
-  return (
-    <div>
-      <p className="text-[10px] font-bold uppercase tracking-wide text-blue-700">
-        {title}
-      </p>
-      <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+      <p className="mt-0.5 text-[11px] text-slate-500">
         {text}
       </p>
     </div>

@@ -272,7 +272,7 @@ function CompactStatusActions({
           const nextStatus = event.target.value;
           if (nextStatus !== currentStatus) onChangeStatus(nextStatus);
         }}
-        className={`h-10 min-w-[138px] appearance-none rounded-xl border py-0 pl-3 pr-8 text-[11px] font-bold outline-none transition-colors focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 ${getStatusStyles(currentStatus)}`}
+        className={`h-8 min-w-[92px] appearance-none rounded-md border py-0 pl-2 pr-6 text-[15px] font-bold outline-none transition-colors focus:ring-2 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 sm:h-10 sm:min-w-[138px] sm:rounded-xl sm:pl-3 sm:pr-8 sm:text-[11px] sm:focus:ring-4 ${getStatusStyles(currentStatus)}`}
         title={isCurrentAttempt ? "Change submission status" : "Previous attempts are read-only"}
       >
         {!QUICK_STATUS_CONTROLS.some((control) => control.value === currentStatus) && (
@@ -288,7 +288,7 @@ function CompactStatusActions({
           </option>
         ))}
       </select>
-      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" />
+      <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 sm:right-2.5 sm:h-3.5 sm:w-3.5" />
     </div>
   );
 }
@@ -741,7 +741,7 @@ function GradeSheetModal({ open, onClose, data }) {
   return createPortal(
     <div
       id="praxis-grade-sheet-print-root"
-      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-3 backdrop-blur-sm print:static print:block print:bg-white print:p-0"
+      className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-2 backdrop-blur-sm sm:p-3 xl:p-4 print:static print:block print:bg-white print:p-0"
       onClick={(event) => event.stopPropagation()}
     >
       <style>{`
@@ -783,7 +783,7 @@ function GradeSheetModal({ open, onClose, data }) {
         }
       `}</style>
 
-      <div className="grade-sheet-shell flex h-[96vh] w-[min(96vw,1380px)] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F6F8FC] shadow-2xl">
+      <div className="grade-sheet-shell flex h-[calc(100dvh-1rem)] w-[min(96vw,1380px)] 2xl:h-[96dvh] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F6F8FC] shadow-2xl">
         <div className="grade-sheet-actions flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 py-3">
           <div>
             <p className="font-mono text-[10px] font-black uppercase tracking-[0.2em] text-blue-700">
@@ -2104,27 +2104,27 @@ function ReviewModalOverlay({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[2147483647] flex h-screen w-screen items-center justify-center overflow-hidden bg-slate-950/40 p-4 backdrop-blur-md sm:p-5"
+      className="fixed inset-0 z-[2147483647] flex min-h-0 min-w-0 items-end justify-center overflow-hidden bg-slate-950/40 p-0 backdrop-blur-md sm:items-center sm:p-3 2xl:p-5"
     >
 
       <div
-        className="relative z-10 flex h-[94vh] w-[min(96vw,1700px)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-[#FBF9F6] shadow-2xl animate-fade-in-up"
+        className="relative z-10 flex h-[100dvh] w-screen min-h-0 min-w-0 flex-col overflow-hidden border-0 bg-[#FBF9F6] shadow-2xl animate-fade-in-up sm:h-[calc(100dvh-1.5rem)] sm:w-[calc(100vw-1.5rem)] sm:rounded-xl sm:border sm:border-slate-200 2xl:h-[94dvh] 2xl:w-[min(96vw,1700px)] 2xl:rounded-2xl"
       >
         
         {/* TOP COMPACT PROFILE LINE HEADER */}
-        <div className="grid shrink-0 grid-cols-1 items-center gap-3 border-b border-slate-200 bg-white px-5 py-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="relative grid shrink-0 grid-cols-1 items-center gap-1.5 border-b border-slate-200 bg-white px-2.5 py-2 sm:gap-3 sm:px-5 sm:py-3 xl:grid-cols-[minmax(0,1fr)_auto]">
           
-          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex min-w-0 flex-col items-stretch gap-1.5 pr-9 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-4 sm:gap-y-2 sm:pr-0">
             <div>
-              <div className="flex items-center gap-2 whitespace-nowrap">
-                <h3 className="font-serif text-base font-bold text-slate-900 truncate">
+              <div className="flex min-w-0 items-center gap-2">
+                <h3 className="min-w-0 flex-1 truncate font-serif text-[14px] font-bold leading-tight text-slate-900 sm:text-base">
                   {selectedItem.studentName}
                 </h3>
-                <span className={`inline-flex min-w-[76px] items-center justify-center rounded-md border px-2 py-0.5 text-[10px] font-semibold leading-none ${getStatusStyles(selectedSubmissionStatus)}`}>
+                <span className={`inline-flex shrink-0 items-center justify-center rounded-md border px-2 py-1 text-[9px] font-semibold leading-none sm:min-w-[76px] sm:py-0.5 sm:text-[10px] ${getStatusStyles(selectedSubmissionStatus)}`}>
                   {selectedSubmissionStatus}
                 </span>
               </div>
-              <p className="mt-0.5 truncate text-xs text-slate-500">
+              <p className="mt-0.5 truncate text-[9px] leading-3 text-slate-500 sm:text-xs">
                 {selectedItem.studentEmail}
               </p>
             </div>
@@ -2132,26 +2132,36 @@ function ReviewModalOverlay({
             <div className="h-6 w-[1px] bg-slate-200 hidden sm:block" />
 
             {/* ATTEMPT DROPDOWN SELECTOR */}
-            <div className="relative inline-flex items-center">
-              <select
-                value={selectedAttemptId || ""}
-                onChange={(e) => setSelectedAttemptId(e.target.value)}
-                className="appearance-none bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-800 text-xs font-bold rounded-xl pl-3 pr-8 py-2 focus:outline-none cursor-pointer transition-colors"
-              >
-                {selectedAttempts.map((attempt) => (
-                  <option key={attempt.id} value={attempt.id}>
-                    Attempt {attempt.attemptNumber || 1}  -  {normalizeStatus(attempt.status)}
-                    {attempt.isCurrent ? " (Current)" : " (Previous)"}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown className="w-4 h-4 text-slate-500 absolute right-2.5 pointer-events-none" />
+            <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 sm:flex sm:w-auto sm:items-center sm:gap-2">
+              <div className="relative min-w-0">
+                <select
+                  value={selectedAttemptId || ""}
+                  onChange={(e) => setSelectedAttemptId(e.target.value)}
+                  className="h-8 w-full cursor-pointer appearance-none rounded-md border border-slate-200 bg-slate-50 pl-2.5 pr-7 text-[15px] font-bold text-slate-800 outline-none transition-colors hover:bg-slate-100 sm:h-auto sm:w-auto sm:rounded-xl sm:py-2 sm:pr-8 sm:text-xs"
+                >
+                  {selectedAttempts.map((attempt) => (
+                    <option key={attempt.id} value={attempt.id}>
+                      Attempt {attempt.attemptNumber || 1}
+                      {attempt.isCurrent ? " · Current" : " · Previous"}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-500 sm:right-2.5 sm:h-4 sm:w-4" />
+              </div>
+
+              <div className="md:hidden">
+                <CompactStatusActions
+                  selectedItem={selectedItem}
+                  selectedSubmission={selectedSubmission}
+                  onChangeStatus={onStatusChange}
+                />
+              </div>
             </div>
 
           </div>
 
           {/* Quick Right Side Window Actions & Page Turning Carousel */}
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="grid w-full grid-cols-[1fr_auto] items-center gap-1.5 sm:flex sm:w-auto sm:flex-wrap sm:justify-end sm:gap-2">
             <button
               type="button"
               disabled={!selectedSubmission}
@@ -2172,11 +2182,12 @@ function ReviewModalOverlay({
                 setGradeSheetData(report);
                 setGradeSheetOpen(true);
               }}
-              className="inline-flex h-10 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-blue-200 bg-blue-50 px-3.5 text-xs font-bold text-blue-800 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 items-center justify-center gap-1 whitespace-nowrap rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[9px] font-bold text-blue-800 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-40 sm:h-10 sm:gap-1.5 sm:rounded-xl sm:px-3.5 sm:text-xs"
               title="Open a detailed grade sheet for this student"
             >
               <Printer className="h-4 w-4" />
-              <span>View Grade Sheet</span>
+              <span className="sm:hidden">Grade sheet</span>
+              <span className="hidden sm:inline">View Grade Sheet</span>
             </button>
 
             <div className="hidden md:block">
@@ -2189,7 +2200,7 @@ function ReviewModalOverlay({
 
             <div className="h-6 w-[1px] bg-slate-200 hidden md:block" />
 
-            <div className="flex h-10 shrink-0 items-center gap-1 rounded-xl bg-slate-100 p-1">
+            <div className="flex h-8 shrink-0 items-center gap-0.5 rounded-lg bg-slate-100 p-0.5 sm:h-10 sm:gap-1 sm:rounded-xl sm:p-1">
               <button
                 type="button"
                 disabled={selectedIndex <= 0}
@@ -2198,7 +2209,7 @@ function ReviewModalOverlay({
               >
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <span className="text-[11px] font-mono font-bold text-slate-500 px-2 min-w-[55px] text-center">
+              <span className="min-w-[38px] px-0.5 text-center font-mono text-[9px] font-bold text-slate-500 sm:min-w-[55px] sm:px-2 sm:text-[11px]">
                 {selectedIndex + 1} / {rosterLength}
               </span>
               <button
@@ -2214,7 +2225,7 @@ function ReviewModalOverlay({
             <button
               type="button"
               onClick={closeReviewWorkspace}
-              className="inline-flex items-center justify-center w-8 h-8 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all"
+              className="absolute right-2.5 top-2.5 inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-all hover:bg-slate-100 hover:text-slate-600 sm:static sm:rounded-xl"
               title="Close Workspace"
             >
               <X className="w-5 h-5" />
@@ -2223,15 +2234,8 @@ function ReviewModalOverlay({
         </div>
 
         {/* Main Content Pane Viewport area */}
-        <div className="flex-1 min-h-0 overflow-y-auto px-3 pb-3 pt-0 sm:px-4 sm:pb-4 sm:pt-0">
-          <div className="block md:hidden bg-white border border-slate-200 p-2.5 rounded-xl mb-3">
-            <p className="mb-1.5 text-xs font-semibold text-slate-500">Quick status</p>
-            <CompactStatusActions
-                selectedItem={selectedItem}
-                selectedSubmission={selectedSubmission}
-                onChangeStatus={onStatusChange}
-              />
-          </div>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-0 sm:px-4 sm:pb-4 sm:pt-0">
+
 
           {isReopenedAttempt && (
             <div className="mb-3 flex shrink-0 items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sky-900">
@@ -3074,22 +3078,22 @@ export default function TeacherSubmissions({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3 sm:space-y-6">
       {/* Metrics Banner */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-3 sm:space-y-4 sm:rounded-2xl sm:p-5">
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <h2 className="font-serif text-xl font-bold text-slate-900">
+            <h2 className="line-clamp-2 font-serif text-[17px] font-bold leading-tight text-slate-900 sm:text-xl">
               {selectedAssignment.title || "Student Submissions"}
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="mt-0.5 hidden text-xs text-slate-400 sm:block">
               Review individual draft metrics, edit statuses, provide custom feedback, or print grade reports.
             </p>
           </div>
           <button
             type="button"
             onClick={refreshRoster}
-            className="inline-flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-white transition-all self-start sm:self-center"
+            className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[10px] font-bold text-slate-700 transition-all hover:bg-white sm:h-auto sm:gap-2 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-xs"
           >
             <RefreshCw className="w-4 h-4" />
             Refresh
@@ -3097,7 +3101,38 @@ export default function TeacherSubmissions({
         </div>
 
         {/* Dynamic Analytics Indicators */}
-        <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-4 gap-3">
+
+        <div className="grid grid-cols-4 divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-[#FBF9F6] md:hidden">
+          <div className="px-1.5 py-2 text-center">
+            <p className="text-sm font-black text-slate-900">{submissionStats.total}</p>
+            <p className="mt-0.5 text-[7px] font-bold uppercase tracking-wide text-slate-400">
+              Students
+            </p>
+          </div>
+
+          <div className="px-1.5 py-2 text-center">
+            <p className="text-sm font-black text-indigo-700">{submissionStats.submitted}</p>
+            <p className="mt-0.5 text-[7px] font-bold uppercase tracking-wide text-indigo-500">
+              Submitted
+            </p>
+          </div>
+
+          <div className="px-1.5 py-2 text-center">
+            <p className="text-sm font-black text-emerald-700">{submissionStats.graded}</p>
+            <p className="mt-0.5 text-[7px] font-bold uppercase tracking-wide text-emerald-600">
+              Graded
+            </p>
+          </div>
+
+          <div className="px-1.5 py-2 text-center">
+            <p className="text-sm font-black text-amber-700">{submissionStats.needsReview}</p>
+            <p className="mt-0.5 text-[7px] font-bold uppercase tracking-wide text-amber-600">
+              Review
+            </p>
+          </div>
+        </div>
+
+        <div className="hidden gap-3 md:grid md:grid-cols-2 xl:grid-cols-4">
           <div className="rounded-xl border border-slate-200 bg-[#FBF9F6] p-3">
             <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">Students</p>
             <p className="text-lg font-serif font-bold text-slate-900">{submissionStats.total}</p>
@@ -3118,38 +3153,40 @@ export default function TeacherSubmissions({
       </div>
 
       {/* Main Student List Table Container */}
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden">
-        <div className="p-5 border-b border-slate-100 space-y-4">
-          <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-2xl">
+        <div className="space-y-2.5 border-b border-slate-100 p-3 sm:space-y-4 sm:p-5">
+          <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between xl:gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <Layers className="w-4 h-4 text-slate-400" />
-                <h3 className="font-serif text-lg font-bold text-slate-900">Student Submission List</h3>
+                <h3 className="font-serif text-[16px] font-bold text-slate-900 sm:text-lg">
+                  Student Submission List
+                </h3>
               </div>
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="mt-0.5 truncate text-[10px] text-slate-400 sm:mt-1 sm:text-xs">
                 {selectedAssignment.title}
                 {selectedAssignment.classCode ? ` · ${selectedAssignment.classCode}` : ""}
               </p>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-2">
+            <div className="grid grid-cols-1 gap-1.5 sm:flex sm:flex-row sm:gap-2">
               <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:left-3 sm:h-4 sm:w-4" />
                 <input
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="Search student..."
-                  className="w-full sm:w-56 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-[#FBF9F6] pl-8 pr-3 text-[16px] text-slate-800 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10 sm:h-auto sm:w-56 sm:rounded-xl sm:py-2.5 sm:pl-9 sm:text-xs"
                 />
               </div>
 
               <div className="relative">
-                <Filter className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Filter className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:left-3 sm:h-4 sm:w-4" />
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="w-full sm:w-44 bg-[#FBF9F6] border border-slate-200 text-slate-800 text-xs font-bold rounded-xl pl-9 pr-3 py-2.5 focus:outline-none focus:border-slate-400"
+                  className="h-9 w-full rounded-lg border border-slate-200 bg-[#FBF9F6] pl-8 pr-8 text-[16px] font-bold text-slate-700 focus:border-blue-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/10 sm:h-auto sm:w-44 sm:rounded-xl sm:py-2.5 sm:pl-9 sm:pr-3 sm:text-xs"
                 >
                   <option value="All">All Statuses</option>
                   <option value="Pending">Pending Review</option>
@@ -3166,7 +3203,7 @@ export default function TeacherSubmissions({
         </div>
 
         {filteredRoster.length === 0 ? (
-          <div className="p-10 text-center">
+          <div className="p-6 text-center sm:p-10">
             <Users className="w-10 h-10 mx-auto text-slate-300 mb-3" />
             <h3 className="font-serif text-lg font-bold text-slate-900">No students found</h3>
             <p className="text-sm text-slate-400 mt-1">
@@ -3193,38 +3230,123 @@ export default function TeacherSubmissions({
               const hasActualSubmission = hasSubmissionEvidence(latestSubmission);
 
               return (
-                <div key={item.id} className="grid grid-cols-1 lg:grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] gap-3 lg:gap-4 px-5 py-4 items-center hover:bg-[#FBF9F6]/60 transition-colors">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-900 truncate">{item.studentName}</p>
-                    <p className="text-[11px] text-slate-400 font-mono truncate mt-0.5">{item.studentEmail}</p>
-                  </div>
-                  <div>
-                    <span className={`inline-flex text-[9px] font-mono font-bold uppercase border px-2 py-1 rounded ${getStatusStyles(status)}`}>
-                      {status}
-                    </span>
-                  </div>
-                  <div className="text-xs text-slate-500">{attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}</div>
-                  <div className="text-xs font-bold text-slate-700">
-                    {hasActualSubmission && latestSubmission?.score !== null && latestSubmission?.score !== undefined
-                      ? latestSubmission.score : " - "}
-                  </div>
-                  <div className="text-xs text-slate-500">
-                    {hasActualSubmission ? getReadableDate(latestSubmission) : " - "}
-                  </div>
-                  <div className="lg:text-right">
-                    <button
-                      type="button"
-                      disabled={!hasActualSubmission}
-                      onClick={() => openStudentReview(item)}
-                      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
-                        hasActualSubmission
-                          ? "bg-slate-900 text-white hover:bg-slate-800"
-                          : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
-                      }`}
-                    >
-                      <Eye className="w-4 h-4" />
-                      {hasActualSubmission ? "Review" : "No Submission"}
-                    </button>
+                <div key={item.id}>
+                  {/* Compact mobile record */}
+                  <button
+                    type="button"
+                    disabled={!hasActualSubmission}
+                    onClick={() => openStudentReview(item)}
+                    className={`group w-full p-3 text-left lg:hidden ${
+                      hasActualSubmission
+                        ? "cursor-pointer transition-colors active:bg-blue-50/70"
+                        : "cursor-not-allowed opacity-70"
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-bold text-slate-900">
+                          {item.studentName}
+                        </p>
+
+                        <p className="mt-0.5 truncate font-mono text-[9px] text-slate-400">
+                          {item.studentEmail}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span
+                          className={`inline-flex rounded border px-1.5 py-1 font-mono text-[8px] font-bold uppercase ${getStatusStyles(
+                            status
+                          )}`}
+                        >
+                          {status}
+                        </span>
+
+                        {hasActualSubmission && (
+                          <ChevronRight className="h-4 w-4 text-slate-300 transition-transform group-active:translate-x-0.5 group-active:text-blue-500" />
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-2 flex min-w-0 items-center justify-between gap-3 border-t border-slate-100 pt-2">
+                      <div className="min-w-0 truncate text-[10px] text-slate-500">
+                        <span className="font-semibold text-slate-600">
+                          {attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}
+                        </span>
+
+                        <span className="mx-1.5 text-slate-300">·</span>
+
+                        <span>
+                          {hasActualSubmission
+                            ? getReadableDate(latestSubmission)
+                            : "No activity"}
+                        </span>
+                      </div>
+
+                      <div className="shrink-0 text-[10px] font-bold text-slate-600">
+                        Score{" "}
+                        <span className="text-slate-900">
+                          {hasActualSubmission &&
+                          latestSubmission?.score !== null &&
+                          latestSubmission?.score !== undefined
+                            ? latestSubmission.score
+                            : "—"}
+                        </span>
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Desktop row unchanged */}
+                  <div className="hidden grid-cols-[1.4fr_1fr_0.8fr_0.7fr_0.8fr_0.7fr] items-center gap-4 px-5 py-4 transition-colors hover:bg-[#FBF9F6]/60 lg:grid">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-bold text-slate-900">
+                        {item.studentName}
+                      </p>
+
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-slate-400">
+                        {item.studentEmail}
+                      </p>
+                    </div>
+
+                    <div>
+                      <span className={`inline-flex rounded border px-2 py-1 font-mono text-[9px] font-bold uppercase ${getStatusStyles(status)}`}>
+                        {status}
+                      </span>
+                    </div>
+
+                    <div className="text-xs text-slate-500">
+                      {attemptsCount} attempt{attemptsCount === 1 ? "" : "s"}
+                    </div>
+
+                    <div className="text-xs font-bold text-slate-700">
+                      {hasActualSubmission &&
+                      latestSubmission?.score !== null &&
+                      latestSubmission?.score !== undefined
+                        ? latestSubmission.score
+                        : " - "}
+                    </div>
+
+                    <div className="text-xs text-slate-500">
+                      {hasActualSubmission
+                        ? getReadableDate(latestSubmission)
+                        : " - "}
+                    </div>
+
+                    <div className="text-right">
+                      <button
+                        type="button"
+                        disabled={!hasActualSubmission}
+                        onClick={() => openStudentReview(item)}
+                        className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-all ${
+                          hasActualSubmission
+                            ? "bg-slate-900 text-white hover:bg-slate-800"
+                            : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                        }`}
+                      >
+                        <Eye className="h-4 w-4" />
+                        {hasActualSubmission ? "Review" : "No Submission"}
+                      </button>
+                    </div>
                   </div>
                 </div>
               );

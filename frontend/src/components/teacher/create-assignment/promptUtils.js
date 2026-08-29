@@ -428,8 +428,9 @@ Important rules:
 - Infer sensible classroom defaults for omitted details.
 - Use the instructor's wording as the source of truth.
 - Keep student instructions clear, concise, and appropriate for the inferred CEFR level.
-- Select only a course from the provided available-course list.
-- If no course is mentioned, select the first available course.
+- The course is selected separately by the instructor in the Praxis interface.
+- Never choose, infer, replace, or change the course.
+- If the response format contains course/class fields, leave those fields empty unless required by the response schema.
 - If no due date is mentioned, set it seven days after the provided current date at 23:59 local time.
 - Interpret yearless numeric dates as DD/MM. Infer the current year when the date is still upcoming; otherwise use the next year. Example: after July 14, "14/07" means July 14 of the next year.
 - If no assignment type is clear, use "Response".

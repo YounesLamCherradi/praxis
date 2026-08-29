@@ -1022,7 +1022,7 @@ export default function TeacherCommunication() {
       )}
 
       {showSendPreview && createPortal(
-        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-2 sm:p-3 xl:p-4">
           <div aria-hidden="true" className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm" />
           <section
             role="dialog"
@@ -1050,7 +1050,7 @@ export default function TeacherCommunication() {
               </button>
             </div>
 
-            <div className="max-h-[65vh] space-y-4 overflow-y-auto p-5">
+            <div className="max-h-[65dvh] space-y-4 overflow-y-auto p-5">
               <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
                 <MessageDetail label="Course" value={selectedCourse ? `${selectedCourse.code || ""} - ${selectedCourse.name}` : ""} />
                 <MessageDetail
@@ -1095,7 +1095,7 @@ export default function TeacherCommunication() {
       )}
 
       {detailMessage && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-3 xl:p-4">
           <button
             type="button"
             aria-label="Close message details"
@@ -1128,7 +1128,7 @@ export default function TeacherCommunication() {
               </button>
             </div>
 
-            <div className="max-h-[70vh] space-y-5 overflow-y-auto p-5">
+            <div className="max-h-[70dvh] space-y-5 overflow-y-auto p-5">
               <div className="grid grid-cols-1 gap-4 rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4 sm:grid-cols-2">
                 <MessageDetail label="Course" value={`${detailMessage.courseCode || ""} - ${detailMessage.courseName || ""}`} />
                 <MessageDetail

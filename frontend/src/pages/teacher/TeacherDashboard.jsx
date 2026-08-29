@@ -20,6 +20,7 @@ import {
   deleteTeacherCourse,
   getTeacherCourses,
   removeStudentFromCourse,
+  renameStudentInCourse,
   updateTeacherCourse,
 } from "../../services/courseApi";
 import { createBugReport } from "../../services/reportApi";
@@ -1649,6 +1650,53 @@ export default function TeacherDashboard() {
     showManagerSuccess(`${cleanEmail} added to ${managedClass.code}.`);
   }
 
+  async function renameStudentInManagedCourse(
+    enrollmentId,
+    nextName
+  ) {
+    if (!managedClass) return false;
+
+    const enrollment = getClassEnrollments(managedClass).find(
+      (entry) => String(entry.id) === String(enrollmentId)
+    );
+
+    const studentId = enrollment?.studentId;
+    const cleanName = String(nextName || "").trim();
+
+    if (!studentId) {
+      setManagerError(
+        "The student record is missing its account ID. Refresh and try again."
+      );
+      return false;
+    }
+
+    if (!cleanName) {
+      setManagerError("Please enter a student name.");
+      return false;
+    }
+
+    setManagerError("");
+    setManagerSuccess("");
+
+    try {
+      await renameStudentInCourse(
+        managedClass.backendId || managedClass.id,
+        studentId,
+        cleanName
+      );
+
+      await refreshEnrollments();
+    } catch (error) {
+      setManagerError(
+        error?.message || "The student name could not be updated."
+      );
+      return false;
+    }
+
+    showManagerSuccess(`Student renamed to ${cleanName}.`);
+    return true;
+  }
+
   async function removeStudentFromManagedCourse(enrollmentId) {
     if (!managedClass) return;
     const enrollment = getClassEnrollments(managedClass).find(
@@ -1680,7 +1728,7 @@ export default function TeacherDashboard() {
   };
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
+    <div className="relative h-[100dvh] w-screen overflow-hidden bg-[#F8FAFC] font-sans antialiased text-slate-950 selection:bg-blue-100 selection:text-blue-900 md:flex">
       <style>{`
         .blueprint-grid {
           background-image: linear-gradient(to right, rgba(37, 99, 235, 0.045) 1px, transparent 1px),
@@ -1725,39 +1773,39 @@ export default function TeacherDashboard() {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 h-full w-64 shrink-0 border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-64 md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 h-full w-[min(78vw,260px)] shrink-0 border-r border-blue-100 bg-[#F6F9FF] text-slate-700 shadow-xl transition-transform duration-200 md:relative md:z-20 md:w-56 xl:w-60 2xl:w-64 md:translate-x-0 ${
           isSidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex h-full flex-col justify-between">
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex items-center gap-3 border-b border-blue-100/80 px-5 py-5">
-            <div className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+          <div className="flex items-center gap-2.5 border-b border-blue-100/80 px-3.5 py-3 sm:px-5 sm:py-5">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-blue-100 bg-white shadow-sm sm:h-11 sm:w-11 sm:rounded-2xl">
               <img
                 src="/praxis-logo.png"
                 alt="Praxis logo"
-                className="w-9 h-9 object-contain"
+                className="h-7 w-7 object-contain sm:h-9 sm:w-9"
               />
             </div>
 
             <div>
-              <h1 className="text-xl font-bold tracking-tight leading-none">
+              <h1 className="text-lg font-bold leading-none tracking-tight sm:text-xl">
                 <span className="text-slate-900">pr</span>
-                <span className="text-blue-600">a</span>
+                <span className="text-blue-700">a</span>
                 <span className="text-slate-900">x</span>
-                <span className="text-blue-600">i</span>
+                <span className="text-blue-700">i</span>
                 <span className="text-slate-900">s</span>
               </h1>
 
-              <p className="mt-1 text-[10px] font-medium text-slate-500">
+              <p className="mt-0.5 text-[9px] font-medium text-slate-500 sm:mt-1 sm:text-[10px]">
                 Your teaching space
               </p>
             </div>
           </div>
 
-          <div className="flex-1 space-y-7 overflow-y-auto p-4">
+          <div className="flex-1 space-y-4 overflow-y-auto overscroll-contain px-2.5 py-3 sm:space-y-7 sm:p-4">
             <div className="space-y-1.5">
-              <div className="mb-2 flex items-center px-2">
+              <div className="mb-1 flex items-center px-2 sm:mb-2">
                 <span className="text-xs font-semibold text-slate-600">
                   Teaching
                 </span>
@@ -1784,7 +1832,7 @@ export default function TeacherDashboard() {
             </div>
 
             <div className="space-y-1.5">
-              <span className="mb-2 block px-2 text-xs font-semibold text-slate-600">
+              <span className="mb-1 block px-2 text-[11px] font-semibold text-slate-600 sm:mb-2 sm:text-xs">
                 Connect
               </span>
 
@@ -1796,12 +1844,12 @@ export default function TeacherDashboard() {
               />
             </div>
 
-            <div className="space-y-2 border-t border-blue-100 pt-5">
+            <div className="space-y-1.5 border-t border-blue-100 pt-3 sm:space-y-2 sm:pt-5">
               <button
                 type="button"
                 onClick={openPendingReviews}
                 disabled={sidebarNotifications.length === 0}
-                className="group flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-left transition-colors hover:bg-blue-50 disabled:cursor-default disabled:hover:bg-transparent"
+                className="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-blue-50 disabled:cursor-default disabled:hover:bg-transparent sm:rounded-xl"
               >
                 <div className="flex items-center gap-2">
                   <Bell className={`h-4 w-4 ${sidebarNotifications.length > 0 ? "text-blue-600" : "text-slate-400"}`} />
@@ -1871,7 +1919,7 @@ export default function TeacherDashboard() {
                             onClick={() =>
                               openSidebarNotification(notification)
                             }
-                            className="group relative flex w-full items-start gap-2.5 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 px-3 py-2.5 text-left transition-all hover:-translate-y-px hover:border-blue-100 hover:bg-blue-50/60 hover:shadow-sm"
+                            className="group relative flex w-full items-start gap-2 overflow-hidden rounded-lg border border-slate-100 bg-slate-50/70 px-2.5 py-2 text-left transition-all hover:border-blue-100 hover:bg-blue-50/60 sm:gap-2.5 sm:rounded-xl sm:px-3 sm:py-2.5 sm:hover:-translate-y-px sm:hover:shadow-sm"
                           >
                             <span
                               className={`absolute bottom-2 left-0 top-2 w-0.5 rounded-r-full ${tone.line}`}
@@ -1932,12 +1980,12 @@ export default function TeacherDashboard() {
           </div>
         </div>
 
-        <div className="relative border-t border-blue-100 bg-white/60 p-4">
+        <div className="relative border-t border-blue-100 bg-white/60 p-2.5 sm:p-4">
           {isAccountMenuOpen && (
             <div className="absolute bottom-[calc(100%+0.5rem)] left-4 right-4 z-50 overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-xl">
               <div className="border-b border-slate-100 px-3.5 py-3">
                 <div className="flex items-center gap-2.5">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 font-mono text-[10px] font-black text-white shadow-md shadow-blue-600/20 sm:h-9 sm:w-9 sm:rounded-xl sm:text-xs">
                     {teacherIdentity.initials}
                   </div>
 
@@ -1978,7 +2026,7 @@ export default function TeacherDashboard() {
           <button
             type="button"
             onClick={openBugReportForm}
-            className="mb-2 flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700"
+            className="mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] font-medium text-slate-500 transition-all hover:bg-white hover:text-blue-700 sm:mb-2 sm:gap-2.5 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs"
             aria-label="Report a bug"
           >
             <Megaphone className="h-4 w-4 text-slate-400" />
@@ -1988,7 +2036,7 @@ export default function TeacherDashboard() {
           <button
             type="button"
             onClick={toggleAccountMenu}
-            className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-all ${
+            className={`flex w-full items-center gap-2.5 rounded-xl border px-2.5 py-2 text-left transition-all sm:gap-3 sm:rounded-2xl sm:px-3 sm:py-3 ${
               isAccountMenuOpen
                 ? "border-blue-200 bg-white shadow-sm"
                 : "border-transparent hover:border-blue-100 hover:bg-white"
@@ -1996,7 +2044,7 @@ export default function TeacherDashboard() {
             aria-expanded={isAccountMenuOpen}
             aria-label="Open instructor account menu"
           >
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 text-xs font-mono font-black text-white shadow-md shadow-blue-600/20">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 font-mono text-[10px] font-black text-white shadow-md shadow-blue-600/20 sm:h-9 sm:w-9 sm:rounded-xl sm:text-xs">
               {teacherIdentity.initials}
             </div>
 
@@ -2023,12 +2071,12 @@ export default function TeacherDashboard() {
       </aside>
 
       <main className="relative flex h-full min-w-0 w-full flex-1 flex-col overflow-hidden">
-        <header className="relative z-10 flex h-16 shrink-0 items-center justify-between border-b border-slate-200/80 bg-white px-4 sm:px-5 md:px-8">
+        <header className="relative z-10 flex h-14 shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-white px-2.5 sm:h-16 sm:px-4 md:px-5 xl:px-6 2xl:px-8">
           <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500">
             <button
               type="button"
               onClick={() => setIsSidebarOpen((current) => !current)}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 md:hidden"
               aria-label="Open instructor menu"
               aria-expanded={isSidebarOpen}
             >
@@ -2051,7 +2099,7 @@ export default function TeacherDashboard() {
               type="button"
               onClick={handleOpenStudentInvites}
               disabled={!classes.some((course) => course?.archived !== true)}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-blue-200 bg-white px-3 py-2 text-xs font-bold text-blue-700 shadow-sm transition-all hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-white px-2.5 text-[11px] font-bold text-blue-700 shadow-sm transition-all hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 sm:h-auto sm:rounded-xl sm:px-4 sm:py-2 sm:text-xs"
               title={
                 classes.some((course) => course?.archived !== true)
                   ? "Invite students to a course"
@@ -2068,7 +2116,7 @@ export default function TeacherDashboard() {
               onClick={() => {
                 openCreateCourse();
               }}
-              className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98]"
+              className="flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-blue-600 px-2.5 text-[11px] font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 active:scale-[0.98] sm:h-auto sm:rounded-xl sm:px-4 sm:py-2 sm:text-xs"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Create course</span>
@@ -2077,8 +2125,8 @@ export default function TeacherDashboard() {
           </div>}
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 relative blueprint-grid">
-          <div className="max-w-7xl mx-auto h-full flex flex-col relative z-10 space-y-8">
+        <div className="relative flex-1 overflow-y-auto overscroll-contain p-2.5 sm:p-4 lg:p-5 xl:p-6 2xl:p-8 blueprint-grid">
+          <div className="relative z-10 mx-auto flex min-h-full w-full max-w-7xl min-w-0 flex-col space-y-3 sm:space-y-4 lg:space-y-5 xl:space-y-6 2xl:space-y-8">
             {activeTab === "overview" && (
               <OverviewPanel
                 classes={classes}
@@ -2149,7 +2197,7 @@ export default function TeacherDashboard() {
       )}
 
       {isInviteCoursePickerOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-0 sm:items-center sm:p-3 xl:p-4">
           <button
             type="button"
             aria-label="Close course selection"
@@ -2157,7 +2205,7 @@ export default function TeacherDashboard() {
             className="absolute inset-0 bg-slate-950/40 backdrop-blur-sm"
           />
 
-          <div className="relative z-10 w-full max-w-md rounded-3xl border border-blue-100 bg-white p-6 shadow-2xl animate-fade-in-up">
+          <div className="relative z-10 max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl border border-blue-100 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-2xl animate-fade-in-up sm:max-w-md sm:rounded-3xl sm:p-6">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
@@ -2207,7 +2255,49 @@ export default function TeacherDashboard() {
                         {course.name || "Course"} · {course.code}
                       </option>
                     ))}
+
                 </select>
+
+                {inviteCourseId && (() => {
+                  const selectedInviteCourse = classes.find(
+                    (course) =>
+                      String(course.id) === String(inviteCourseId) ||
+                      String(course.backendId || "") === String(inviteCourseId)
+                  );
+
+                  const selectedInviteCode =
+                    selectedInviteCourse?.code ||
+                    selectedInviteCourse?.accessCode ||
+                    selectedInviteCourse?.joinCode ||
+                    selectedInviteCourse?.inviteCode ||
+                    "";
+
+                  if (!selectedInviteCode) return null;
+
+                  return (
+                    <div className="mt-3 space-y-1.5">
+                      <label
+                        htmlFor="invite-course-code"
+                        className="block text-[10px] font-bold text-slate-500"
+                      >
+                        Course code
+                      </label>
+
+                      <input
+                        id="invite-course-code"
+                        type="text"
+                        value={selectedInviteCode}
+                        readOnly
+                        spellCheck={false}
+                        onFocus={(event) => event.target.select()}
+                        onClick={(event) => event.target.select()}
+                        aria-label="Selectable course invitation code"
+                        className="w-full cursor-text select-all rounded-xl border border-blue-200 bg-blue-50/60 px-4 py-3 font-mono text-[16px] font-bold tracking-[0.12em] text-blue-900 outline-none selection:bg-blue-200 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10 sm:text-sm"
+                      />
+                    </div>
+                  );
+                })()}
+
               </div>
 
               <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3.5 py-3 text-[11px] leading-relaxed text-slate-600">
@@ -2274,6 +2364,7 @@ export default function TeacherDashboard() {
           handleUpdateManagedCourse={handleUpdateManagedCourse}
           handleAddStudentToManagedCourse={handleAddStudentToManagedCourse}
           removeStudentFromManagedCourse={removeStudentFromManagedCourse}
+          renameStudentInManagedCourse={renameStudentInManagedCourse}
           computeCourseStatus={computeCourseStatus}
           getClassEnrollments={getClassEnrollments}
         />
@@ -2359,13 +2450,13 @@ function OverviewPanel({
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5 sm:space-y-8">
       {classes.length === 0 ? (
-        <section className="flex justify-center pt-10 animate-fade-in-up sm:pt-14 lg:pt-16">
+        <section className="flex justify-center pt-5 animate-fade-in-up sm:pt-14 lg:pt-16">
           <button
             type="button"
             onClick={onCreateCourse}
-            className="group flex w-full max-w-2xl flex-col items-center justify-center rounded-3xl border border-blue-100 bg-white px-6 py-10 text-center shadow-xl shadow-blue-950/5 transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-2xl sm:px-10 sm:py-12"
+            className="group flex w-full max-w-2xl flex-col items-center justify-center rounded-2xl border border-blue-100 bg-white px-4 py-7 text-center shadow-md shadow-blue-950/5 transition-all hover:border-blue-200 sm:rounded-3xl sm:px-10 sm:py-12 sm:shadow-xl sm:hover:-translate-y-0.5 sm:hover:shadow-2xl"
           >
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 shadow-sm transition-transform group-hover:scale-105">
               <Plus className="h-7 w-7" />
@@ -2386,31 +2477,31 @@ function OverviewPanel({
           </button>
         </section>
       ) : (
-      <section className="overflow-hidden rounded-3xl border border-blue-200 bg-white shadow-sm animate-fade-in-up">
-        <div className="flex flex-col gap-6 bg-gradient-to-br from-blue-50 via-white to-white p-6 sm:p-7 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-start gap-4">
-            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
+      <section className="overflow-hidden rounded-2xl border border-blue-200 bg-white shadow-sm animate-fade-in-up sm:rounded-3xl">
+        <div className="flex flex-col gap-3 bg-gradient-to-br from-blue-50 via-white to-white p-3.5 sm:gap-6 sm:p-7 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl sm:h-12 sm:w-12 sm:rounded-2xl ${
               pendingReviewsCount > 0
                 ? "bg-blue-600 text-white shadow-md shadow-blue-600/20"
                 : "border border-emerald-100 bg-emerald-50 text-emerald-600"
             }`}>
               {pendingReviewsCount > 0 ? (
-                <FileCheck2 className="h-6 w-6" />
+                <FileCheck2 className="h-5 w-5 sm:h-6 sm:w-6" />
               ) : (
-                <CheckSquare className="h-6 w-6" />
+                <CheckSquare className="h-5 w-5 sm:h-6 sm:w-6" />
               )}
             </div>
 
             <div>
-              <p className="text-xs font-semibold text-blue-600">
+              <p className="text-[10px] font-semibold text-blue-600 sm:text-xs">
                 Today
               </p>
-              <h2 className="mt-1 text-xl font-bold text-slate-950 sm:text-2xl">
+              <h2 className="mt-0.5 text-[17px] font-bold leading-snug text-slate-950 sm:mt-1 sm:text-2xl">
                 {pendingReviewsCount > 0
                   ? `${pendingReviewsCount} ${pendingReviewsCount === 1 ? "submission needs" : "submissions need"} your feedback`
                   : "You’re all caught up"}
               </h2>
-              <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-slate-500">
+              <p className="mt-1 max-w-xl text-[12px] leading-5 text-slate-500 sm:mt-1.5 sm:text-sm sm:leading-relaxed">
                 {pendingReviewsCount > 0
                   ? "Review student writing and send feedback while the work is fresh."
                   : "No student submissions are waiting for review. You can start something new when you’re ready."}
@@ -2418,7 +2509,7 @@ function OverviewPanel({
             </div>
           </div>
 
-          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+          <div className="grid w-full shrink-0 grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-row">
             <button
               type="button"
               onClick={onOpenReviews}
@@ -2428,7 +2519,7 @@ function OverviewPanel({
                   ? `Review ${pendingReviewsCount} pending ${pendingReviewsCount === 1 ? "submission" : "submissions"}`
                   : "Nothing to grade; no submissions are waiting"
               }
-              className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
+              className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold transition-all sm:h-auto sm:gap-2 sm:rounded-xl sm:px-5 sm:py-3 sm:text-xs ${
                 pendingReviewsCount > 0
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:-translate-y-0.5 hover:bg-blue-700"
                   : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
@@ -2439,19 +2530,19 @@ function OverviewPanel({
               ) : (
                 <Lock className="h-4 w-4" />
               )}
-              {pendingReviewsCount > 0 ? "Review submissions" : "Nothing to grade"}
+              {pendingReviewsCount > 0 ? "Review" : "Nothing to grade"}
             </button>
             <button
               type="button"
               onClick={onCreateAssignment}
-              className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all hover:-translate-y-0.5 ${
+              className={`inline-flex h-10 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold transition-all sm:h-auto sm:gap-2 sm:rounded-xl sm:px-5 sm:py-3 sm:text-xs sm:hover:-translate-y-0.5 ${
                 pendingReviewsCount > 0
                   ? "border border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:text-blue-700"
                   : "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
               }`}
             >
               <Plus className="h-4 w-4" />
-              Create assignment
+              New assignment
             </button>
           </div>
         </div>
@@ -2459,20 +2550,20 @@ function OverviewPanel({
       )}
 
       {classes.length > 0 && (
-      <div className="bg-white border border-slate-200/80 rounded-2xl p-6 space-y-4 animate-fade-in-up [animation-delay:150ms]">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+      <div className="space-y-3 rounded-2xl border border-slate-200/80 bg-white p-3 animate-fade-in-up [animation-delay:150ms] sm:space-y-4 sm:p-6">
+        <div className="flex flex-col gap-2.5 sm:gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900">
+            <h3 className="text-base font-semibold text-slate-900 sm:text-lg">
               Your courses
             </h3>
 
-            <p className="mt-0.5 text-sm text-slate-500">
+            <p className="mt-0.5 text-[12px] leading-5 text-slate-500 sm:text-sm sm:leading-normal">
               Open a course to manage students, assignments, and its access code.
             </p>
           </div>
 
           <div
-            className="inline-flex w-fit items-center rounded-xl border border-slate-200 bg-slate-50 p-1"
+            className="grid w-full grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1 sm:w-fit sm:inline-flex sm:rounded-xl"
             role="group"
             aria-label="Filter courses"
           >
@@ -2480,7 +2571,7 @@ function OverviewPanel({
               type="button"
               onClick={() => setCourseFilter("current")}
               aria-pressed={courseFilter === "current"}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
+              className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all sm:min-h-0 sm:gap-2 sm:rounded-lg sm:px-3 sm:py-2 sm:text-xs ${
                 courseFilter === "current"
                   ? "bg-white text-blue-700 shadow-sm ring-1 ring-slate-200"
                   : "text-slate-500 hover:text-slate-900"
@@ -2502,7 +2593,7 @@ function OverviewPanel({
               type="button"
               onClick={() => setCourseFilter("past")}
               aria-pressed={courseFilter === "past"}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-semibold transition-all ${
+              className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-semibold transition-all sm:min-h-0 sm:gap-2 sm:rounded-lg sm:px-3 sm:py-2 sm:text-xs ${
                 courseFilter === "past"
                   ? "bg-white text-amber-700 shadow-sm ring-1 ring-slate-200"
                   : "text-slate-500 hover:text-slate-900"
@@ -2529,7 +2620,7 @@ function OverviewPanel({
               : "No past courses yet. Archived courses will appear here."}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:gap-4 md:grid-cols-2 xl:grid-cols-3">
             {displayedCourses.map((cls) => {
               const status = computeCourseStatus(cls);
               const classEnrollments = getClassEnrollments(cls);
@@ -2541,7 +2632,7 @@ function OverviewPanel({
               return (
                 <div
                   key={cls.id}
-                  className={`p-5 border rounded-2xl flex flex-col justify-between space-y-4 transition-all hover:bg-white hover:shadow-md group ${
+                  className={`group flex flex-col justify-between space-y-2.5 rounded-xl border p-3 transition-all hover:bg-white sm:space-y-4 sm:rounded-2xl sm:p-5 sm:hover:shadow-md ${
                     cls.archived === true
                       ? "bg-amber-50/40 border-amber-200/80"
                       : "bg-[#F8FAFC] border-slate-200/80"
@@ -2562,21 +2653,21 @@ function OverviewPanel({
                           </span>
                         </div>
 
-                        <h5 className="mt-1.5 truncate text-base font-semibold text-slate-900">
+                        <h5 className="mt-1 truncate text-sm font-semibold text-slate-900 sm:mt-1.5 sm:text-base">
                           {cls.name}
                         </h5>
                       </div>
 
-                      <span className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-xs font-bold text-blue-700">
+                      <span className="shrink-0 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[11px] font-bold text-blue-700 sm:rounded-lg sm:text-xs">
                         {cls.code}
                       </span>
                     </div>
 
-                    <p className="line-clamp-2 text-xs leading-relaxed text-slate-500">
+                    <p className="line-clamp-2 text-[11px] leading-5 text-slate-500 sm:text-xs sm:leading-relaxed">
                       {cls.description}
                     </p>
 
-                    <div className="flex flex-wrap items-center gap-2 pt-1 text-xs font-medium text-slate-500">
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px] font-medium text-slate-500 sm:gap-2 sm:text-xs">
                       <span className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
                         {classEnrollments.length} {classEnrollments.length === 1 ? "student" : "students"}
                       </span>
@@ -2588,14 +2679,14 @@ function OverviewPanel({
                   </div>
 
                   <div className="space-y-3 pt-2 border-t border-slate-200/50">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={() => openCourseManager(cls)}
-                        className="flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-3 py-2.5 text-xs font-semibold text-white shadow-sm shadow-blue-600/15 transition-all hover:bg-blue-700"
+                        className="flex h-10 w-full items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-2 text-[11px] font-bold text-white shadow-sm shadow-blue-600/15 transition-all hover:bg-blue-700 sm:h-auto sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
-                        Manage course
+                        Manage
                       </button>
 
                       <button
@@ -2603,10 +2694,10 @@ function OverviewPanel({
                         onClick={() =>
                           setExpandedClassId(isRosterOpen ? null : cls.id)
                         }
-                        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs font-semibold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                        className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 text-[11px] font-bold text-slate-600 transition-all hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 sm:h-auto sm:justify-between sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-xs"
                       >
                         <span>Students</span>
-                        <span>{isRosterOpen ? "Hide" : "Show"}</span>
+                        <span className="hidden sm:inline">{isRosterOpen ? "Hide" : "Show"}</span>
                       </button>
                     </div>
 
@@ -2667,13 +2758,13 @@ function CreateCourseModal({
   const canCreateCourse = Boolean(classNameInput.trim());
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto p-0 sm:items-center sm:p-3 xl:p-4">
       <div
         onClick={onClose}
         className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs transition-opacity"
       />
 
-      <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-lg p-7 relative z-10 shadow-2xl flex flex-col gap-5 font-sans animate-fade-in-up my-8">
+      <div className="relative z-10 flex max-h-[92dvh] w-full flex-col gap-4 overflow-y-auto rounded-t-2xl border border-slate-200 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] font-sans shadow-2xl animate-fade-in-up sm:my-8 sm:max-w-lg sm:gap-5 sm:rounded-3xl sm:p-7">
         <div className="flex justify-between items-start gap-4">
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 text-blue-600 font-mono font-bold text-[10px] tracking-widest uppercase bg-blue-600/5 px-2 py-0.5 rounded border border-blue-600/10">
@@ -2811,6 +2902,7 @@ function CourseManagerModal({
   handleUpdateManagedCourse,
   handleAddStudentToManagedCourse,
   removeStudentFromManagedCourse,
+  renameStudentInManagedCourse,
   computeCourseStatus,
   getClassEnrollments,
 }) {
@@ -2819,6 +2911,10 @@ function CourseManagerModal({
   const [isChangingArchiveState, setIsChangingArchiveState] = useState(false);
   const [studentRemovalTarget, setStudentRemovalTarget] = useState(null);
   const [isRemovingStudent, setIsRemovingStudent] = useState(false);
+
+  const [studentRenameTarget, setStudentRenameTarget] = useState(null);
+  const [studentRenameValue, setStudentRenameValue] = useState("");
+  const [isRenamingStudent, setIsRenamingStudent] = useState(false);
   const inviteText = buildCourseInviteMessage(
     managedClass,
     undefined,
@@ -2834,35 +2930,35 @@ function CourseManagerModal({
       : "Hide the course from students. Existing work is kept.";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+    <div className="fixed inset-0 z-50 flex items-stretch justify-center overflow-hidden p-0 sm:items-center sm:overflow-y-auto sm:p-3 xl:p-4">
       <div
         className="absolute inset-0 bg-slate-950/40 backdrop-blur-xs transition-opacity"
       />
 
-      <div className="bg-white border border-slate-200 rounded-3xl w-full max-w-5xl relative z-10 shadow-2xl font-sans animate-fade-in-up my-8 overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-          <div>
-            <div className="inline-flex items-center gap-1.5 text-blue-600 font-mono font-bold text-[10px] tracking-widest uppercase bg-blue-600/5 px-2 py-0.5 rounded border border-blue-600/10">
+      <div className="relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden border-0 bg-white font-sans shadow-2xl animate-fade-in-up sm:my-8 sm:h-auto sm:max-h-[92dvh] sm:max-w-5xl sm:rounded-3xl sm:border sm:border-slate-200">
+        <div className="relative flex shrink-0 flex-col gap-1.5 border-b border-slate-100 px-2.5 pb-2 pt-2.5 sm:gap-4 sm:p-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="min-w-0 pr-10 lg:pr-0">
+            <div className="inline-flex items-center gap-1 rounded-md border border-blue-600/10 bg-blue-600/5 px-1.5 py-0.5 font-mono text-[7px] font-bold uppercase tracking-[0.12em] text-blue-600 sm:gap-1.5 sm:px-2 sm:text-[10px] sm:tracking-widest">
               <Settings className="w-3 h-3" />
               Course Manager
             </div>
 
-            <h3 className="font-serif text-2xl font-black text-slate-900 mt-2">
+            <h3 className="mt-1 line-clamp-1 font-serif text-[16px] font-black leading-tight text-slate-900 sm:mt-2 sm:line-clamp-2 sm:text-2xl">
               {managedClass.name}
             </h3>
 
-            <p className="text-xs text-slate-400 font-mono mt-1">
+            <p className="mt-0.5 font-mono text-[9px] text-slate-400 sm:mt-1 sm:text-xs">
               {managedClass.code} · {managedClass.semester || "Course"}
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid w-full grid-cols-3 gap-1 lg:flex lg:w-auto lg:flex-wrap lg:items-center lg:justify-end lg:gap-2">
             <div className="relative group">
               <button
                 type="button"
                 disabled={managedClass.archived === true}
                 onClick={toggleManagedCoursePublication}
-                className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                className={`inline-flex h-8 w-full items-center justify-center gap-1 rounded-md border px-1 text-[8px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-40 sm:h-auto sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-xs lg:w-auto lg:py-2.5 ${
                   managedClass.isPublished === false
                     ? "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100"
                     : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-white"
@@ -2874,9 +2970,17 @@ function CourseManagerModal({
                   <EyeOff className="w-4 h-4" />
                 )}
 
-                {managedClass.isPublished === false
-                  ? "Publish Course"
-                  : "Unpublish Course"}
+                {managedClass.isPublished === false ? (
+                  <>
+                    <span className="sm:hidden">Publish</span>
+                    <span className="hidden sm:inline">Publish Course</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="sm:hidden">Unpublish</span>
+                    <span className="hidden sm:inline">Unpublish Course</span>
+                  </>
+                )}
               </button>
 
               <div className="pointer-events-none absolute right-0 top-full mt-2 w-72 rounded-xl border border-slate-200 bg-white p-3 text-[11px] leading-relaxed text-slate-600 shadow-xl opacity-0 translate-y-1 transition-all group-hover:opacity-100 group-hover:translate-y-0 z-30">
@@ -2894,16 +2998,24 @@ function CourseManagerModal({
                   managedClass.archived === true ? "restore" : "archive"
                 )
               }
-              className={`inline-flex items-center gap-2 border text-xs font-bold px-4 py-2.5 rounded-xl transition-all ${
+              className={`inline-flex h-8 w-full items-center justify-center gap-1 rounded-md border px-1 text-[8px] font-bold transition-all sm:h-auto sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-xs lg:w-auto lg:py-2.5 ${
                 managedClass.archived === true
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                   : "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
               }`}
             >
               <Archive className="w-4 h-4" />
-              {managedClass.archived === true
-                ? "Restore Course"
-                : "Archive Course"}
+              {managedClass.archived === true ? (
+                <>
+                  <span className="sm:hidden">Restore</span>
+                  <span className="hidden sm:inline">Restore Course</span>
+                </>
+              ) : (
+                <>
+                  <span className="sm:hidden">Archive</span>
+                  <span className="hidden sm:inline">Archive Course</span>
+                </>
+              )}
             </button>
 
             <button
@@ -2913,16 +3025,23 @@ function CourseManagerModal({
                 setIsRemoveCourseConfirmOpen(true);
               }}
               disabled={isRemovingCourse}
-              className="inline-flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 text-xs font-bold px-4 py-2.5 rounded-xl hover:bg-red-100 transition-all disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex h-8 w-full items-center justify-center gap-1 rounded-md border border-red-200 bg-red-50 px-1 text-[8px] font-bold text-red-700 transition-all hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60 sm:h-auto sm:min-h-10 sm:gap-2 sm:rounded-xl sm:px-4 sm:text-xs lg:w-auto lg:py-2.5"
             >
               <Trash2 className="w-4 h-4" />
-              {isRemovingCourse ? "Removing..." : "Remove Course"}
+              {isRemovingCourse ? (
+                "Removing..."
+              ) : (
+                <>
+                  <span className="sm:hidden">Remove</span>
+                  <span className="hidden sm:inline">Remove Course</span>
+                </>
+              )}
             </button>
 
             <button
               type="button"
               onClick={closeCourseManager}
-              className="text-slate-400 hover:text-slate-600 p-2 rounded-xl hover:bg-slate-50 cursor-pointer"
+              className="absolute right-2.5 top-2.5 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-50 hover:text-slate-600 sm:right-5 sm:top-5 sm:h-9 sm:w-9 lg:static lg:h-auto lg:w-auto lg:rounded-xl lg:p-2"
             >
               <X className="w-5 h-5" />
             </button>
@@ -2964,38 +3083,38 @@ function CourseManagerModal({
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-0">
-          <div className="p-6 border-r border-slate-100">
-            <div className="flex gap-2 mb-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain lg:grid lg:grid-cols-[1fr_340px] lg:overflow-visible">
+          <div className="border-r border-slate-100 px-2.5 py-2.5 sm:p-6">
+            <div className="mb-2 grid grid-cols-2 gap-1 sm:mb-5 sm:flex sm:gap-2">
               <button
                 type="button"
                 onClick={() => setManagerMode("details")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+                className={`h-8 rounded-md border px-2 text-center text-[9px] font-bold transition-all sm:h-auto sm:rounded-xl sm:px-4 sm:py-2 sm:text-xs ${
                   managerMode === "details"
                     ? "bg-slate-900 text-white border-slate-900"
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                 }`}
               >
-                Course Details
+                <span className="sm:hidden">Details</span><span className="hidden sm:inline">Course Details</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setManagerMode("students")}
-                className={`px-4 py-2 rounded-xl text-xs font-bold border transition-all ${
+                className={`h-8 rounded-md border px-2 text-center text-[9px] font-bold transition-all sm:h-auto sm:rounded-xl sm:px-4 sm:py-2 sm:text-xs ${
                   managerMode === "students"
                     ? "bg-slate-900 text-white border-slate-900"
                     : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
                 }`}
               >
-                View/Add Students
+                <span className="sm:hidden">Students</span><span className="hidden sm:inline">View/Add Students</span>
               </button>
             </div>
 
             {managerMode === "details" ? (
-              <form onSubmit={handleUpdateManagedCourse} className="space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+              <form onSubmit={handleUpdateManagedCourse} className="space-y-2 sm:space-y-4">
+                <div className="space-y-0.5 sm:space-y-1.5">
+                  <label className="text-[8px] font-mono font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]">
                     Course Name
                   </label>
 
@@ -3007,12 +3126,12 @@ function CourseManagerModal({
                         name: e.target.value,
                       }))
                     }
-                    className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 uppercase font-mono rounded-xl px-4 py-3 text-xs focus:outline-none transition-all shadow-inner"
+                    className="h-9 w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 font-mono text-[16px] uppercase text-slate-900 shadow-inner outline-none transition-all focus:border-slate-400 focus:bg-white sm:h-auto sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs"
                   />
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                <div className="space-y-0.5 sm:space-y-1.5">
+                  <label className="text-[8px] font-mono font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]">
                     Semester
                   </label>
 
@@ -3024,7 +3143,7 @@ function CourseManagerModal({
                         semester: e.target.value,
                       }))
                     }
-                    className="w-full bg-[#F8FAFC] border border-slate-200 text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none focus:bg-white focus:border-slate-400 cursor-pointer shadow-inner font-mono font-bold uppercase"
+                    className="h-9 w-full cursor-pointer rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 font-mono text-[16px] font-bold uppercase text-slate-900 shadow-inner outline-none focus:border-slate-400 focus:bg-white sm:h-auto sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs"
                   >
                     {manageCourseForm.semester &&
                       !UPCOMING_ACADEMIC_SEMESTERS.includes(manageCourseForm.semester) && (
@@ -3040,13 +3159,13 @@ function CourseManagerModal({
                   </select>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
+                <div className="space-y-0.5 sm:space-y-1.5">
+                  <label className="text-[8px] font-mono font-bold uppercase tracking-wider text-slate-400 sm:text-[10px]">
                     Course Description
                   </label>
 
                   <textarea
-                    rows={3}
+                    rows={2}
                     value={manageCourseForm.description}
                     onChange={(e) =>
                       setManageCourseForm((prev) => ({
@@ -3054,14 +3173,14 @@ function CourseManagerModal({
                         description: e.target.value,
                       }))
                     }
-                    className="w-full bg-[#F8FAFC] border border-slate-200 focus:border-slate-400 focus:bg-white text-slate-900 text-xs rounded-xl px-4 py-3 focus:outline-none transition-all resize-none shadow-inner"
+                    className="min-h-[56px] w-full resize-none rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-2 text-[16px] leading-5 text-slate-900 shadow-inner outline-none transition-all focus:border-slate-400 focus:bg-white sm:min-h-0 sm:rounded-xl sm:px-4 sm:py-3 sm:text-xs sm:leading-6"
                   />
                 </div>
 
                 <button
                   type="submit"
                   disabled={!hasUnsavedChanges}
-                  className={`w-full font-sans text-xs font-bold py-3.5 rounded-xl shadow-md transition-all ${
+                  className={`h-9 w-full rounded-lg font-sans text-[9px] font-bold shadow-md transition-all sm:h-auto sm:rounded-xl sm:py-3.5 sm:text-xs ${
                     hasUnsavedChanges
                       ? "bg-slate-950 text-white hover:bg-slate-800 hover:scale-[1.01]"
                       : "cursor-not-allowed bg-slate-100 text-slate-400 shadow-none"
@@ -3074,7 +3193,7 @@ function CourseManagerModal({
               <div className="space-y-5">
                 <form
                   onSubmit={handleAddStudentToManagedCourse}
-                  className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4 space-y-3"
+                  className="space-y-3 rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 sm:rounded-2xl sm:p-4"
                 >
                   <div className="flex items-center gap-2">
                     <UserPlus className="w-4 h-4 text-blue-600" />
@@ -3115,7 +3234,7 @@ function CourseManagerModal({
                     getClassEnrollments(managedClass).map((enrollment) => (
                       <div
                         key={enrollment.id}
-                        className="flex items-center justify-between gap-3 bg-[#F8FAFC] border border-slate-200 rounded-xl px-4 py-3"
+                        className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-4 sm:py-3"
                       >
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-slate-900 truncate">
@@ -3127,14 +3246,31 @@ function CourseManagerModal({
                           </p>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setStudentRemovalTarget(enrollment)}
-                          className="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 text-red-700 text-[10px] font-bold px-3 py-2 rounded-xl hover:bg-red-100"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          Remove
-                        </button>
+                        <div className="grid w-full shrink-0 grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center sm:gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setManagerError("");
+                              setStudentRenameTarget(enrollment);
+                              setStudentRenameValue(
+                                enrollment.studentName || ""
+                              );
+                            }}
+                            className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2 py-2 text-[10px] font-bold text-blue-700 transition-colors hover:bg-blue-100 sm:rounded-xl sm:px-3"
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                            Rename
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setStudentRemovalTarget(enrollment)}
+                            className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2 py-2 text-[10px] font-bold text-red-700 hover:bg-red-100 sm:rounded-xl sm:px-3"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     ))
                   )}
@@ -3143,8 +3279,8 @@ function CourseManagerModal({
             )}
           </div>
 
-          <div className="bg-[#F8FAFC] p-6">
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+          <div className="bg-[#F8FAFC] p-2 sm:p-6">
+            <div className="rounded-lg border border-slate-200 bg-white p-2.5 sm:rounded-2xl sm:p-5">
               <div className="flex items-center justify-between gap-3">
                 <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400">
                   Course Access
@@ -3159,8 +3295,8 @@ function CourseManagerModal({
                 </span>
               </div>
 
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <p className="text-3xl font-mono font-black tracking-wide text-blue-700">
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:mt-4 sm:gap-2">
+                <p className="font-mono text-[16px] font-black tracking-wide text-blue-700 sm:text-3xl">
                   {managedClass.code}
                 </p>
 
@@ -3171,7 +3307,7 @@ function CourseManagerModal({
                     setIsInviteVisible(true);
                     await copyCourseInvite(managedClass);
                   }}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[9px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-40 sm:gap-1.5 sm:px-3 sm:py-1.5 sm:text-[10px] ${
                     managerSuccess === "Course invitation copied to your clipboard."
                       ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                       : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
@@ -3188,7 +3324,7 @@ function CourseManagerModal({
                 </button>
               </div>
 
-              <p className="mt-2 text-xs leading-relaxed text-slate-500">
+              <p className="mt-1 text-[9px] leading-4 text-slate-500 sm:mt-2 sm:text-xs sm:leading-relaxed">
                 {managedClass.archived === true
                   ? "Archived courses are kept for records but hidden from assignment and message course selectors."
                   : "Students enter this code in Praxis to join the course."}
@@ -3206,7 +3342,7 @@ function CourseManagerModal({
                 type="button"
                 disabled={managedClass.archived === true}
                 onClick={() => onCreateFirstAssignment(managedClass)}
-                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3 text-xs font-bold text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                className="mt-2 inline-flex h-9 w-full items-center justify-center gap-1 rounded-lg bg-blue-600 px-3 text-[9px] font-bold text-white shadow-sm transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40 sm:mt-5 sm:h-auto sm:gap-2 sm:rounded-full sm:px-4 sm:py-3 sm:text-xs"
               >
                 <Plus className="h-4 w-4" />
                 Create First Assignment
@@ -3225,7 +3361,7 @@ function CourseManagerModal({
 
       {archiveConfirmation && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-2 sm:p-3 xl:p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="archive-course-title"
@@ -3340,9 +3476,155 @@ function CourseManagerModal({
         </div>
       )}
 
+      {studentRenameTarget && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="rename-student-title"
+        >
+          <button
+            type="button"
+            className="absolute inset-0"
+            aria-label="Close rename student"
+            onClick={() => {
+              if (isRenamingStudent) return;
+              setStudentRenameTarget(null);
+              setStudentRenameValue("");
+            }}
+          />
+
+          <div className="relative z-10 w-full max-w-md overflow-hidden rounded-t-2xl border border-slate-200 bg-white pb-[env(safe-area-inset-bottom)] shadow-2xl sm:rounded-3xl sm:pb-0">
+            <div className="px-4 py-4 sm:p-6">
+              <div className="flex items-start gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700 sm:h-11 sm:w-11">
+                  <Edit3 className="h-4 w-4" />
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-[9px] font-bold uppercase tracking-widest text-blue-600">
+                    Course roster
+                  </p>
+
+                  <h3
+                    id="rename-student-title"
+                    className="mt-1 font-serif text-lg font-black text-slate-950 sm:text-xl"
+                  >
+                    Rename student
+                  </h3>
+
+                  <p className="mt-1 text-[11px] leading-5 text-slate-500 sm:text-sm">
+                    Update the student's displayed name. Their email, account,
+                    enrollment, and submitted work will stay unchanged.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <label
+                  htmlFor="teacher-rename-student"
+                  className="mb-1.5 block text-[10px] font-bold text-slate-600"
+                >
+                  Student name
+                </label>
+
+                <input
+                  id="teacher-rename-student"
+                  type="text"
+                  autoFocus
+                  value={studentRenameValue}
+                  disabled={isRenamingStudent}
+                  onChange={(event) =>
+                    setStudentRenameValue(event.target.value)
+                  }
+                  onKeyDown={async (event) => {
+                    if (event.key !== "Enter") return;
+
+                    event.preventDefault();
+
+                    const cleanName = studentRenameValue.trim();
+
+                    if (!cleanName || isRenamingStudent) return;
+
+                    setIsRenamingStudent(true);
+
+                    const renamed = await renameStudentInManagedCourse(
+                      studentRenameTarget.id,
+                      cleanName
+                    );
+
+                    setIsRenamingStudent(false);
+
+                    if (renamed) {
+                      setStudentRenameTarget(null);
+                      setStudentRenameValue("");
+                    }
+                  }}
+                  className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 py-3 text-[16px] text-slate-900 outline-none transition focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10 sm:text-xs"
+                  placeholder="Student name"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 border-t border-slate-100 bg-slate-50 px-4 py-3 sm:px-6 sm:py-4">
+              <button
+                type="button"
+                disabled={isRenamingStudent}
+                onClick={() => {
+                  setStudentRenameTarget(null);
+                  setStudentRenameValue("");
+                }}
+                className="min-h-10 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-50 sm:text-xs"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  isRenamingStudent ||
+                  !studentRenameValue.trim() ||
+                  studentRenameValue.trim() ===
+                    String(studentRenameTarget.studentName || "").trim()
+                }
+                onClick={async () => {
+                  const cleanName = studentRenameValue.trim();
+
+                  if (!cleanName) return;
+
+                  setIsRenamingStudent(true);
+
+                  const renamed = await renameStudentInManagedCourse(
+                    studentRenameTarget.id,
+                    cleanName
+                  );
+
+                  setIsRenamingStudent(false);
+
+                  if (renamed) {
+                    setStudentRenameTarget(null);
+                    setStudentRenameValue("");
+                  }
+                }}
+                className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-xl bg-blue-600 px-3 py-2 text-[11px] font-bold text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400 sm:text-xs"
+              >
+                {isRenamingStudent ? (
+                  "Saving…"
+                ) : (
+                  <>
+                    <Edit3 className="h-3.5 w-3.5" />
+                    Save Name
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {studentRemovalTarget && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-2 sm:p-3 xl:p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="remove-student-title"
@@ -3402,7 +3684,7 @@ function CourseManagerModal({
 
       {isRemoveCourseConfirmOpen && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/55 p-2 sm:p-3 xl:p-4 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="remove-course-title"
@@ -3477,7 +3759,7 @@ function TeacherPasswordModal({
   onClose,
 }) {
   return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-2 sm:p-3 xl:p-4 backdrop-blur-sm">
       <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-7">
         <button
           type="button"
@@ -3642,29 +3924,29 @@ function TeacherBugReportModal({
   onClose,
 }) {
   return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-      <div className="relative max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl sm:p-8">
+    <div className="fixed inset-0 z-[2147483647] flex items-end justify-center bg-slate-950/60 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4">
+      <div className="relative flex max-h-[88dvh] w-full flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[92dvh] sm:max-w-xl sm:overflow-y-auto sm:rounded-3xl sm:p-8">
         <button
           type="button"
           onClick={onClose}
           disabled={isSubmitting}
-          className="absolute right-5 top-5 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40"
+          className="absolute right-3 top-3 z-20 flex h-8 w-8 items-center justify-center rounded-lg bg-slate-50 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 disabled:cursor-not-allowed disabled:opacity-40 sm:right-5 sm:top-5"
           aria-label="Close bug-report form"
         >
           <X className="h-5 w-5" />
         </button>
 
-        <div className="space-y-5">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-600">
-            <Bug className="h-6 w-6" />
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-4 sm:space-y-5 sm:overflow-visible sm:p-0">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-100 bg-rose-50 text-rose-600 sm:h-12 sm:w-12 sm:rounded-2xl">
+            <Bug className="h-4 w-4 sm:h-6 sm:w-6" />
           </div>
 
           <div className="space-y-1">
-            <h3 className="text-lg font-bold text-slate-900">
+            <h3 className="text-base font-bold text-slate-900 sm:text-lg">
               Report a Bug
             </h3>
 
-            <p className="max-w-lg text-xs leading-relaxed text-slate-500">
+            <p className="max-w-lg pr-8 text-[11px] leading-5 text-slate-500 sm:pr-0 sm:text-xs sm:leading-relaxed">
               Describe what happened. Praxis automatically includes your current instructor workspace and assignment context.
             </p>
           </div>
@@ -3687,10 +3969,10 @@ function TeacherBugReportModal({
                   if (bugReportError) setBugReportError("");
                   if (bugReportSuccess) setBugReportSuccess("");
                 }}
-                rows={5}
+                rows={4}
                 maxLength={1500}
                 placeholder="Example: I clicked Review, but the submission workspace did not open."
-                className="w-full resize-y rounded-2xl border border-slate-200 bg-[#F8FAFC] px-4 py-3.5 text-sm leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                className="min-h-28 w-full resize-y rounded-xl border border-slate-200 bg-[#F8FAFC] px-3.5 py-3 text-[16px] leading-6 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0 sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-sm"
               />
 
               <div className="flex items-center justify-between text-[10px] text-slate-400">
@@ -3716,7 +3998,7 @@ function TeacherBugReportModal({
               </div>
 
               {!bugScreenshot ? (
-                <label className="group flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 px-5 py-7 text-center transition-all hover:border-blue-300 hover:bg-blue-50/50">
+                <label className="group flex cursor-pointer items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50 px-3.5 py-3 text-left transition-all hover:border-blue-300 hover:bg-blue-50/50 sm:flex-col sm:justify-center sm:rounded-2xl sm:px-5 sm:py-7 sm:text-center">
                   <input
                     key={bugFileInputKey}
                     type="file"
@@ -3726,11 +4008,11 @@ function TeacherBugReportModal({
                     className="sr-only"
                   />
 
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-blue-100 bg-white text-blue-600 shadow-sm transition-transform group-hover:-translate-y-0.5">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-white text-blue-600 shadow-sm transition-transform sm:h-11 sm:w-11 sm:rounded-2xl sm:group-hover:-translate-y-0.5">
                     <ImagePlus className="h-5 w-5" />
                   </div>
 
-                  <p className="mt-3 text-xs font-bold text-slate-700">
+                  <p className="text-[11px] font-bold text-slate-700 sm:mt-3 sm:text-xs">
                     Upload a picture
                   </p>
 
@@ -3744,7 +4026,7 @@ function TeacherBugReportModal({
                     <img
                       src={bugScreenshot.dataUrl}
                       alt="Bug screenshot preview"
-                      className="max-h-64 w-full rounded-xl border border-slate-200 bg-white object-contain"
+                      className="max-h-40 w-full rounded-lg border border-slate-200 bg-white object-contain sm:max-h-64 sm:rounded-xl"
                     />
 
                     <button

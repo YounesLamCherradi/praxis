@@ -78,7 +78,7 @@ export default function WhatWeOffer() {
     <section
       ref={containerRef}
       id="toolkit"
-      className="relative overflow-hidden bg-slate-950 py-16 lg:py-20"
+      className="relative overflow-hidden bg-slate-950 py-12 sm:py-16 lg:py-20"
       style={{ perspective: "1200px" }}
     >
       <style>{`
@@ -113,14 +113,14 @@ export default function WhatWeOffer() {
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[420px] bg-blue-500/15 rounded-full blur-[140px] pointer-events-none" />
       <div className="absolute bottom-0 right-0 w-[520px] h-[360px] bg-indigo-500/10 rounded-full blur-[120px] pointer-events-none" />
 
-      <div className="relative z-10 max-w-7xl mx-auto px-6 lg:px-8">
-        <div className="max-w-3xl mx-auto text-center mb-12 offer-slide">
+      <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="offer-slide mx-auto mb-8 max-w-3xl text-center sm:mb-12">
           <span className="inline-flex items-center gap-2 rounded-full border border-blue-400/20 bg-blue-500/10 px-3.5 py-1.5 text-xs font-semibold text-blue-300">
             <Sparkles className="w-3.5 h-3.5" />
             Key features
           </span>
 
-          <h2 className="mt-4 text-3xl font-bold tracking-tight text-white sm:text-5xl">
+          <h2 className="mt-3 text-2xl font-bold tracking-tight text-white sm:mt-4 sm:text-5xl">
             What Praxis offers
           </h2>
 
@@ -138,14 +138,14 @@ export default function WhatWeOffer() {
             opacity: scrollEffect.opacity,
           }}
         >
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6">
+          <div className="grid grid-cols-1 gap-3 sm:gap-5 md:grid-cols-3 lg:gap-6">
             {offers.map((item) => {
               const Icon = item.icon;
 
               return (
                 <div
                   key={item.title}
-                  className="group relative overflow-hidden rounded-[28px] border border-slate-800 bg-slate-900/70 backdrop-blur-md p-6 shadow-xl transition-all duration-300 hover:-translate-y-1 hover:border-blue-400/40 hover:shadow-[0_24px_70px_rgba(37,99,235,0.12)]"
+                  className="group relative overflow-hidden rounded-[18px] border border-slate-800 bg-slate-900/70 p-4 shadow-md backdrop-blur-md transition-all duration-300 hover:border-blue-400/40 sm:rounded-[28px] sm:p-6 sm:shadow-xl sm:hover:-translate-y-1 sm:hover:shadow-[0_24px_70px_rgba(37,99,235,0.12)]"
                 >
                   <div
                     className={`absolute top-0 right-0 w-40 h-40 bg-gradient-to-bl ${item.gradient} opacity-0 group-hover:opacity-[0.14] blur-3xl transition-opacity duration-500 pointer-events-none`}

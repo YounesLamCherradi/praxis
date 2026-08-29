@@ -67,7 +67,7 @@ export default function PlatformDemo() {
   return (
     <section
       id="platform-view"
-      className="relative overflow-hidden border-y border-slate-200 bg-[#F8FAFC] py-10 lg:py-12"
+      className="relative overflow-hidden border-y border-slate-200 bg-[#F8FAFC] py-8 sm:py-10 lg:py-12"
     >
       <style>{`
         @keyframes praxisSlide {
@@ -98,7 +98,7 @@ export default function PlatformDemo() {
             Platform experience
           </span>
 
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
+          <h2 className="mt-3 text-2xl font-bold tracking-tight text-slate-950 sm:text-4xl">
             Writing, review, and responsible AI in one workspace.
           </h2>
 
@@ -110,8 +110,8 @@ export default function PlatformDemo() {
         </div>
 
         <div className="praxis-slide [animation-delay:100ms]">
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl">
-            <div className="flex flex-col gap-3 border-b border-slate-100 bg-white p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="overflow-hidden rounded-[18px] border border-slate-200 bg-white shadow-md sm:rounded-3xl sm:shadow-xl">
+            <div className="flex flex-col gap-2 border-b border-slate-100 bg-white p-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-5">
               <div>
                 <p className="text-xs font-semibold text-slate-500">
                   Role-based platform features
@@ -135,7 +135,7 @@ export default function PlatformDemo() {
               </div>
             </div>
 
-            <div className="grid gap-4 p-5 md:grid-cols-2">
+            <div className="grid gap-3 p-3.5 sm:p-5 md:grid-cols-2">
               <FeatureColumn
                 title="Instructor Features"
                 subtitle="Course management, review, grading, and feedback"

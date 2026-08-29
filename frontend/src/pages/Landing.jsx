@@ -1,27 +1,20 @@
 import Navbar from "../components/landing/Navbar";
 import Hero from "../components/landing/Hero";
-import TrustedBy from "../components/landing/TrustedBy";
-import PlatformDemo from "../components/landing/PlatformDemo";
-import WhatWeOffer from "../components/landing/WhatWeOffer"; // 🌟 Imported cleanly right here!
-import Toolkit from "../components/landing/Toolkit";
-import Philosophy from "../components/landing/Philosophy";
+import RoleJourney from "../components/landing/RoleJourney";
+import AssignmentFlow from "../components/landing/AssignmentFlow";
+import AIApproach from "../components/landing/AIApproach";
 import CTA from "../components/landing/CTA";
 import Footer from "../components/landing/Footer";
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans selection:bg-emerald-100 selection:text-emerald-900 overflow-x-hidden">
+    <div className="min-h-[100dvh] overflow-x-hidden bg-[#F8FAFC] font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900">
       <Navbar />
       <Hero />
-      <TrustedBy />
-      <PlatformDemo />
-      
-      {/* 🌟 New Immersive 3D Scroll Section */}
-      <WhatWeOffer /> 
-      
-      <Toolkit />
-      <Philosophy />
-      
+      <RoleJourney />
+      <AssignmentFlow />
+      <AIApproach />
+      <CTA />
       <Footer />
     </div>
   );

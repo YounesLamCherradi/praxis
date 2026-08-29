@@ -997,13 +997,13 @@ function RubricModal({ record, assignments, isSaving, saveError, onClose, onSave
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden p-3 sm:p-5">
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden p-2 sm:p-3 xl:p-4 2xl:p-5">
       <div
         className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
         onClick={onClose}
       />
 
-      <div className="relative flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl animate-fade-in-up">
+      <div className="relative flex max-h-[92dvh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl animate-fade-in-up">
         <div className="sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-5 py-4 sm:px-6 sm:py-5">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1">
@@ -1534,13 +1534,13 @@ function RubricPreviewModal({ record, onClose, onEdit }) {
   }, []);
 
   return createPortal(
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden p-3 sm:p-5">
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden p-2 sm:p-3 xl:p-4 2xl:p-5">
       <div
         className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
         onClick={onClose}
       />
 
-      <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl animate-fade-in-up">
+      <div className="relative flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl animate-fade-in-up">
         <div className="sticky top-0 z-20 shrink-0 border-b border-slate-200 bg-white px-5 py-4 sm:px-6 sm:py-5">
           <div className="flex items-start justify-between gap-4">
             <div>

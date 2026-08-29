@@ -46,8 +46,8 @@ export default function CompactRubricPreview({
         </div>
       )}
 
-      <div className="p-4 space-y-2">
-        <div className="grid grid-cols-12 gap-2 px-3 py-2 text-[10px] font-mono font-black uppercase tracking-wider text-slate-400">
+      <div className="space-y-2 p-2 sm:p-4">
+        <div className="hidden grid-cols-12 gap-2 px-3 py-2 text-[10px] font-mono font-black uppercase tracking-wider text-slate-400 sm:grid">
           <span className="col-span-10">Criterion</span>
           <span className="col-span-2 text-center">Points</span>
         </div>
@@ -58,23 +58,23 @@ export default function CompactRubricPreview({
           return (
             <div
               key={criterion.id}
-              className="rounded-2xl border border-blue-200 bg-white shadow-sm"
+              className="rounded-xl border border-blue-200 bg-white shadow-sm sm:rounded-2xl"
             >
-              <div className="grid grid-cols-12 items-center gap-2 p-3">
-                <div className="col-span-10 min-w-0">
-                  <p className="text-xs font-black text-slate-950">
+              <div className="grid grid-cols-12 items-center gap-2 p-2.5 sm:p-3">
+                <div className="col-span-9 min-w-0 sm:col-span-10">
+                  <p className="text-[12px] font-black leading-tight text-slate-950 sm:text-xs">
                     {criterion.name}
                   </p>
 
                   {criterion.description && (
-                    <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                    <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-slate-500 sm:line-clamp-none sm:text-[11px] sm:leading-relaxed">
                       {criterion.description}
                     </p>
                   )}
                 </div>
 
-                <div className="col-span-2 flex justify-center">
-                  <span className="bg-slate-100 text-slate-700 border border-slate-200 font-mono text-[10px] font-bold px-2 py-1 rounded-lg">
+                <div className="col-span-3 flex justify-end sm:col-span-2 sm:justify-center">
+                  <span className="whitespace-nowrap rounded-md border border-slate-200 bg-slate-100 px-1.5 py-1 font-mono text-[9px] font-bold text-slate-700 sm:rounded-lg sm:px-2 sm:text-[10px]">
                     {criterion.points || criterion.maxScore || 0} pts
                   </span>
                 </div>
@@ -116,7 +116,7 @@ export default function CompactRubricPreview({
           );
         })}
 
-        <div className="flex items-center justify-end pt-2 text-[11px] text-slate-500">
+        <div className="flex items-center justify-end pt-1 text-[10px] text-slate-500 sm:pt-2 sm:text-[11px]">
           <span className="font-mono font-bold">
             Total: {rubricTotal} pts
           </span>

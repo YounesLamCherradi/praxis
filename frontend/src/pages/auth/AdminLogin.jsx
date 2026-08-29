@@ -11,7 +11,7 @@ import {
   Shield,
 } from "lucide-react";
 
-const ADMIN_EMAIL = "admin@aui.ma";
+const ADMIN_EMAIL = "praxis@aui.ma";
 
 export default function AdminLogin() {
   const [showAdminLoginPassword, setShowAdminLoginPassword] = useState(false);
@@ -44,7 +44,12 @@ export default function AdminLogin() {
     }
 
     try {
-      const profile = await signIn(cleanEmail, password, stayLoggedIn);
+      const profile = await signIn(
+        cleanEmail,
+        password,
+        stayLoggedIn,
+        "admin"
+      );
 
       if (profile.role !== "admin") {
         setError("This account is not configured as an admin.");
@@ -61,7 +66,7 @@ export default function AdminLogin() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F8FAFC] text-slate-900">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#F8FAFC] text-slate-900">
       <div className="absolute inset-0 bg-[linear-gradient(to_right,rgba(37,99,235,0.045)_1px,transparent_1px),linear-gradient(to_bottom,rgba(37,99,235,0.045)_1px,transparent_1px)] bg-[size:3rem_3rem] opacity-80" />
       <div className="absolute -top-40 left-1/4 h-[560px] w-[560px] rounded-full bg-blue-500/15 blur-[130px] pointer-events-none" />
       <div className="absolute -bottom-40 right-0 h-[520px] w-[520px] rounded-full bg-cyan-400/15 blur-[130px] pointer-events-none" />
@@ -87,7 +92,7 @@ export default function AdminLogin() {
         </button>
       </div>
 
-      <div className="relative z-10 flex min-h-screen items-center justify-center px-4 py-28 sm:px-6 lg:px-10">
+      <div className="relative z-10 flex min-h-[100dvh] items-center justify-center px-4 py-10 sm:px-6 sm:py-14 lg:px-10 lg:py-16 2xl:py-28">
         <div className="w-full max-w-md">
           <div className="rounded-3xl border border-slate-200 bg-white/90 p-6 shadow-2xl shadow-blue-950/10 backdrop-blur-xl sm:p-8">
             <div className="mb-7 text-center">

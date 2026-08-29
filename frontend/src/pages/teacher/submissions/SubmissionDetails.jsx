@@ -2044,6 +2044,73 @@ These are instructor-only review signals and are not automatic grades.`;
             rubric: currentRubric,
             rubricCriteria,
             rubricTotal,
+
+            // Writing-process evidence is supplied separately from the final
+            // product so rubric criteria such as "Process" can be evaluated
+            // from the student's actual work in Praxis.
+            processEvidence: {
+              planningChat: getPlanningChatMessages(submission)
+                .slice(-40)
+                .map((message) => ({
+                  role: message.role,
+                  content: String(message.content || "").slice(0, 1800),
+                  createdAt: message.createdAt || null,
+                })),
+
+              outline:
+                submission.outline ||
+                submission.planningOutline ||
+                submission.generatedOutline ||
+                {},
+
+              aiFeedbackHistory: getStudentAiFeedbackHistory(submission)
+                .slice(-12)
+                .map((item) => ({
+                  overall: String(item.overall || "").slice(0, 1800),
+                  strengths: safeArray(item.strengths).slice(0, 8),
+                  issues: safeArray(item.issues).slice(0, 12),
+                  nextSteps: safeArray(item.nextSteps).slice(0, 8),
+                  request: String(item.request || "").slice(0, 1200),
+                  used: item.used,
+                  createdAt: item.createdAt || null,
+                  draftWordCount: item.draftWordCount,
+                })),
+
+              reflection:
+                submission.reflections ||
+                submission.reflectionText ||
+                submission.reflection ||
+                {},
+
+              // Send a compact revision trail rather than the entire replay.
+              writingHistory: getWritingReplayEvents(submission)
+                .slice(-120)
+                .map((event) => ({
+                  timestamp:
+                    event.timestamp ||
+                    event.createdAt ||
+                    event.savedAt ||
+                    null,
+                  phase: event.phase || "",
+                  type:
+                    event.type ||
+                    event.eventType ||
+                    event.action ||
+                    event.operation ||
+                    "",
+                  insertedText: String(
+                    event.insertedText || ""
+                  ).slice(0, 600),
+                  deletedText: String(
+                    event.deletedText || ""
+                  ).slice(0, 300),
+                  wordCount:
+                    event.wordCount ??
+                    event.words ??
+                    null,
+                })),
+            },
+
             existingAnnotations: annotations,
             integritySignals: {
               pasteAttemptCount,
@@ -2661,7 +2728,7 @@ These are instructor-only review signals and are not automatic grades.`;
 
   return (
     <div className="min-h-full animate-fade-in-up">
-      <div className="flex min-h-full flex-col gap-3">
+      <div className="flex min-h-full flex-col gap-2 sm:gap-3">
         {readOnly && (
           <div className="shrink-0 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-semibold text-slate-600">
             Previous attempt  -  read-only. Grades, feedback, annotations, and AI review actions cannot be changed.
@@ -2669,7 +2736,7 @@ These are instructor-only review signals and are not automatic grades.`;
         )}
         
 
-        <div className="sticky top-0 z-40 -mx-3 shrink-0 border-b border-slate-200/70 bg-[#F8FAFC]/95 px-3 pb-2 pt-2 shadow-[0_6px_14px_-14px_rgba(15,23,42,0.45)] backdrop-blur-md sm:-mx-4 sm:px-4">
+        <div className="sticky top-0 z-40 -mx-3 shrink-0 border-b border-slate-200/70 bg-[#F8FAFC]/95 px-2.5 py-1.5 shadow-[0_6px_14px_-14px_rgba(15,23,42,0.45)] backdrop-blur-md sm:-mx-4 sm:px-4 sm:pb-2 sm:pt-2">
           <ReviewModeSwitch
             reviewMode={reviewMode}
             setReviewMode={setReviewMode}
@@ -2683,6 +2750,8 @@ These are instructor-only review signals and are not automatic grades.`;
             <PlanningAndAiFeedbackWorkspace
               planningMessages={planningChatMessages}
               aiFeedbackHistory={studentAiFeedbackHistory}
+              studentText={submissionText}
+              writingEvents={writingReplayEvents}
               selfAssessmentSummary={selfAssessmentSummary}
               rubricScore={gradedCriteriaCount > 0 ? rubricScoreTotal : null}
               rubricTotal={rubricTotal}
@@ -2701,7 +2770,7 @@ These are instructor-only review signals and are not automatic grades.`;
             />
           ) : (
             <div className="space-y-3">
-              <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+              <div className="grid grid-cols-1 items-start gap-2.5 sm:gap-4 xl:grid-cols-2">
                 <fieldset
                   disabled={readOnly}
                   className={`m-0 min-w-0 border-0 p-0 ${
@@ -2733,17 +2802,21 @@ These are instructor-only review signals and are not automatic grades.`;
                 </fieldset>
 
                 <div className="min-w-0">
-                  <section className="min-w-0 rounded-2xl border border-blue-200 bg-white shadow-sm">
-                    <div className="border-b border-blue-100 bg-blue-50/50 px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <ClipboardList className="h-4 w-4 shrink-0 text-blue-700" />
+                  <section className="min-w-0 rounded-xl border border-blue-200 bg-white shadow-sm sm:rounded-2xl">
+                    <div className="border-b border-blue-100 bg-blue-50/50 px-2 py-1 sm:px-4 sm:py-3">
+                      <div className="flex items-center gap-1 sm:gap-2">
+                        <ClipboardList className="h-3 w-3 shrink-0 text-blue-700 sm:h-4 sm:w-4" />
                         <div className="min-w-0">
-                          <h2 className="truncate text-base font-semibold text-slate-950">Grade with rubric</h2>
-                          <p className="mt-0.5 text-xs text-slate-500">Read the student text on the left and score each criterion here.</p>
+                          <h2 className="truncate text-[11px] font-semibold leading-tight text-slate-950 sm:text-base">
+                            Grade with rubric
+                          </h2>
+                          <p className="hidden sm:mt-0.5 sm:block sm:text-xs sm:leading-normal sm:text-slate-500">
+                            Read the student text on the left and score each criterion here.
+                          </p>
                         </div>
                       </div>
                     </div>
-                    <div className="bg-[#F8FAFC] p-2.5">
+                    <div className="bg-[#F8FAFC] p-1 sm:p-2.5">
                       <fieldset
                         disabled={readOnly}
                         className={`m-0 min-w-0 border-0 p-0 ${
@@ -2849,14 +2922,14 @@ function StudentTextReviewPanel({
   clearSelectionState,
 }) {
   return (
-    <section className="flex h-[calc(100vh-330px)] min-h-[520px] max-h-[720px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-200 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="flex h-auto min-h-0 max-h-none min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:h-[calc(100dvh-340px)] xl:min-h-[380px] xl:max-h-[600px] 2xl:h-[calc(100dvh-330px)] 2xl:min-h-[520px] 2xl:max-h-[720px] 2xl:rounded-2xl">
+      <div className="shrink-0 border-b border-slate-200 px-3 py-2.5 sm:px-4 sm:py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div className="flex min-w-0 items-center gap-2">
             <FileText className="h-4 w-4 shrink-0 text-blue-700" />
             <div>
-              <h2 className="text-base font-semibold text-slate-950">Student text</h2>
-              <p className="mt-0.5 text-xs text-slate-500">Select text to add a comment or correction.</p>
+              <h2 className="text-[14px] font-semibold leading-tight text-slate-950 sm:text-base">Student text</h2>
+              <p className="mt-0.5 text-[10px] leading-4 text-slate-500 sm:text-xs">Select text to add a comment or correction.</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -2888,7 +2961,17 @@ function StudentTextReviewPanel({
       <div
         ref={studentTextRef}
         onMouseUp={captureSelectedText}
-        className="min-h-0 flex-1 scroll-smooth overflow-y-auto overscroll-contain bg-[#F8FAFC] px-5 py-5 pb-12 text-[13px] font-mono leading-7 text-slate-700 whitespace-pre-wrap select-text cursor-text [scrollbar-gutter:stable] [scrollbar-width:thin]"
+        onTouchEnd={() => {
+          window.setTimeout(() => {
+            captureSelectedText();
+          }, 80);
+        }}
+        onTouchEnd={() => {
+          window.setTimeout(() => {
+            captureSelectedText();
+          }, 80);
+        }}
+        className="scroll-smooth overflow-visible bg-[#F8FAFC] px-3 py-3 pb-5 text-[13px] font-mono leading-6 text-slate-700 whitespace-pre-wrap select-text cursor-text xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:px-5 xl:py-5 xl:pb-12 xl:leading-7 xl:[scrollbar-gutter:stable] xl:[scrollbar-width:thin]"
       >
         {renderAnnotatedText(submissionText, annotations, deleteAnnotation)}
       </div>
@@ -3000,43 +3083,52 @@ function CombinedFeedbackWorkspace({
   submitPending,
 }) {
   return (
-    <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+    <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-1.5 border-b border-slate-200 px-2 py-1.5 sm:flex sm:flex-wrap sm:justify-between sm:gap-3 sm:px-4 sm:py-3">
+        <div className="flex min-w-0 items-center gap-1 sm:gap-2.5">
+          <div className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-blue-700 sm:flex sm:h-8 sm:w-8 sm:rounded-xl">
             <Pencil className="h-3.5 w-3.5" />
           </div>
+
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-slate-950">
+            <h2 className="truncate text-[11px] font-bold leading-tight text-slate-950 sm:text-sm sm:font-semibold">
               Instructor Feedback
             </h2>
-            <p className="mt-0.5 text-[10px] text-slate-500">
+
+            <p className="mt-0.5 hidden text-[10px] text-slate-500 sm:block">
               Write the final comment and optionally use AI as a second opinion.
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2">
-            <p className="text-[10px] font-medium text-blue-600">Assigned grade</p>
-            <p className="mt-0.5 text-sm font-bold text-blue-800">
+        <div className="flex shrink-0 items-center gap-1 sm:flex-wrap sm:gap-2">
+          <div className="rounded-md border border-blue-100 bg-blue-50 px-1.5 py-0.5 sm:rounded-xl sm:px-3 sm:py-2">
+            <p className="hidden text-[10px] font-medium text-blue-600 sm:block">
+              Assigned grade
+            </p>
+            <p className="whitespace-nowrap text-[9px] font-black text-blue-800 sm:mt-0.5 sm:text-sm">
               {assignedScore !== "" && assignedScore !== null && assignedScore !== undefined
-                ? `${assignedScore} / ${scoreTotal || "–"}`
+                ? `${assignedScore}/${scoreTotal || "–"}`
                 : "Not graded"}
             </p>
           </div>
 
           {supportsOverride && (
-            <label className="flex min-h-[52px] cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+            <label className="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-slate-200 bg-slate-50 px-1.5 sm:h-auto sm:min-h-[52px] sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2">
               <input
                 type="checkbox"
                 checked={finalOverrideEnabled}
                 onChange={(event) => setFinalOverrideEnabled(event.target.checked)}
-                className="accent-blue-600"
+                className="h-3.5 w-3.5 shrink-0 accent-blue-600 sm:h-auto sm:w-auto"
               />
-              <span className="text-[11px] font-semibold text-slate-700">Final override</span>
+
+              <span className="whitespace-nowrap text-[8px] font-bold text-slate-600 sm:text-[11px] sm:font-semibold sm:text-slate-700">
+                <span className="sm:hidden">Override</span>
+                <span className="hidden sm:inline">Final override</span>
+              </span>
+
               {finalOverrideEnabled && (
-                <span className="flex items-center gap-1">
+                <span className="flex items-center gap-0.5 sm:gap-1">
                   <input
                     type="number"
                     min="0"
@@ -3046,9 +3138,11 @@ function CombinedFeedbackWorkspace({
                     onClick={(event) => event.stopPropagation()}
                     placeholder="Score"
                     aria-label="Final override score"
-                    className="h-8 w-20 rounded-lg border border-slate-200 bg-white px-2 text-center text-xs font-bold text-slate-800 outline-none focus:border-blue-400"
+                    className="h-6 w-11 rounded-md border border-slate-200 bg-white px-0.5 text-center text-[16px] font-bold text-slate-800 outline-none placeholder:text-[8px] placeholder:font-medium placeholder:text-slate-400 focus:border-blue-400 sm:h-8 sm:w-20 sm:rounded-lg sm:px-2 sm:text-xs sm:placeholder:text-xs"
                   />
-                  <span className="text-[11px] text-slate-400">/ {scoreTotal || "–"}</span>
+                  <span className="text-[8px] text-slate-400 sm:text-[11px]">
+                    / {scoreTotal || "–"}
+                  </span>
                 </span>
               )}
             </label>
@@ -3057,17 +3151,17 @@ function CombinedFeedbackWorkspace({
       </div>
 
       <div className="grid grid-cols-1 divide-y divide-slate-200 xl:grid-cols-[minmax(0,3fr)_minmax(340px,2fr)] xl:divide-x xl:divide-y-0">
-        <div className="min-w-0 p-4">
+        <div className="min-w-0 p-2.5 sm:p-4">
           <FeedbackPanel feedback={feedback} setFeedback={setFeedback} />
         </div>
 
-        <aside className="min-w-0 bg-violet-50/30 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="flex min-w-0 items-start gap-2">
-              <BrainCircuit className="mt-0.5 h-4 w-4 shrink-0 text-violet-700" />
+        <aside className="min-w-0 bg-violet-50/30 p-2.5 sm:p-4">
+          <div className="flex items-center justify-between gap-2 sm:flex-wrap sm:items-start sm:gap-3">
+            <div className="flex min-w-0 items-center gap-1.5 sm:items-start sm:gap-2">
+              <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-violet-700 sm:mt-0.5 sm:h-4 sm:w-4" />
               <div>
-                <h3 className="text-xs font-bold text-slate-900">Optional AI suggestions</h3>
-                <p className="mt-0.5 text-[10px] leading-4 text-slate-500">
+                <h3 className="text-[11px] font-bold text-slate-900 sm:text-xs">Optional AI suggestions</h3>
+                <p className="mt-0.5 hidden text-[10px] leading-4 text-slate-500 sm:block">
                   Compare suggestions before choosing what to use.
                 </p>
               </div>
@@ -3076,7 +3170,7 @@ function CombinedFeedbackWorkspace({
               type="button"
               onClick={onRunAiCheck}
               disabled={aiReviewLoading}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-violet-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-violet-800 hover:bg-violet-100 disabled:opacity-60"
+              className="inline-flex h-8 shrink-0 items-center gap-1 rounded-lg border border-violet-200 bg-white px-2 text-[9px] font-bold text-violet-800 hover:bg-violet-100 disabled:opacity-60 sm:h-auto sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:text-[10px]"
             >
               {aiReviewLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               {aiReviewLoading ? "Generating" : aiSuggestion ? "Regenerate" : "Generate"}
@@ -3092,9 +3186,9 @@ function CombinedFeedbackWorkspace({
             )}
 
             {!aiSuggestion && !aiReviewLoading && !aiReviewError && (
-              <div className="rounded-xl border border-dashed border-violet-200 bg-white/80 p-4 text-center">
-                <Bot className="mx-auto h-5 w-5 text-violet-500" />
-                <p className="mt-2 text-[10px] leading-4 text-slate-500">
+              <div className="rounded-lg border border-dashed border-violet-200 bg-white/80 px-2.5 py-2 text-center sm:rounded-xl sm:p-4">
+                <Bot className="mx-auto h-4 w-4 text-violet-500 sm:h-5 sm:w-5" />
+                <p className="mt-1 text-[9px] leading-3 text-slate-500 sm:mt-2 sm:text-[10px] sm:leading-4">
                   Nothing is applied or saved automatically.
                 </p>
               </div>
@@ -3133,7 +3227,7 @@ function CombinedFeedbackWorkspace({
         </aside>
       </div>
 
-      <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50/70 p-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:p-4">
         <div className="min-w-0 flex-1" aria-live="polite">
           <ReviewActionBar saveMessage={saveMessage} compact />
         </div>
@@ -3141,7 +3235,7 @@ function CombinedFeedbackWorkspace({
           type="button"
           onClick={onSubmitGrade}
           disabled={submitDisabled}
-          className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
+          className="inline-flex h-10 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 text-[11px] font-bold text-white shadow-md shadow-blue-600/20 transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none sm:h-11 sm:w-auto sm:gap-2 sm:rounded-xl sm:px-5 sm:text-xs"
           title={
             submitDisabled
               ? "This attempt cannot be graded until the student resubmits"
@@ -3189,6 +3283,8 @@ function EmptyEvidenceState({ title, description }) {
 function PlanningAndAiFeedbackWorkspace({
   planningMessages,
   aiFeedbackHistory,
+  studentText = "",
+  writingEvents = [],
   selfAssessmentSummary,
   rubricScore,
   rubricTotal,
@@ -3201,42 +3297,72 @@ function PlanningAndAiFeedbackWorkspace({
     .split("·")
     .map((part) => part.trim());
 
+  const feedbackResolutionItems = safeArray(aiFeedbackHistory)
+    .flatMap((item, index) =>
+      buildAiFeedbackResolutionForItem(
+        item,
+        index,
+        studentText,
+        writingEvents
+      )
+    );
+
+  const feedbackResolutionCounts =
+    feedbackResolutionItems.reduce(
+      (counts, item) => {
+        if (item.status === "addressed") {
+          counts.addressed += 1;
+        } else if (item.status === "not_addressed") {
+          counts.notAddressed += 1;
+        } else {
+          counts.needsReview += 1;
+        }
+
+        return counts;
+      },
+      {
+        addressed: 0,
+        notAddressed: 0,
+        needsReview: 0,
+      }
+    );
+
   return (
-    <section className="flex h-[calc(100vh-260px)] min-h-[420px] max-h-[680px] min-w-0 flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="w-4 h-4 text-cyan-700 shrink-0" />
+    <section className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm sm:rounded-xl 2xl:rounded-2xl">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-2.5 py-2 sm:px-4 sm:py-3">
+        <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-1.5 sm:items-center sm:gap-2">
+            <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cyan-700 sm:mt-0 sm:h-4 sm:w-4" />
             <div>
-              <h2 className="text-base font-semibold text-slate-950">Planning chat and student AI feedback</h2>
-              <p className="text-[11px] text-slate-500 mt-0.5">Review the student’s planning conversation and the AI feedback available during drafting.</p>
+              <h2 className="text-[13px] font-bold leading-tight text-slate-950 sm:text-base sm:font-semibold">Planning chat and student AI feedback</h2>
+              <p className="mt-0.5 text-[9px] leading-3 text-slate-500 sm:text-[11px] sm:leading-normal">Review the student’s planning conversation and the AI feedback available during drafting.</p>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="min-w-[150px] rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <p className="text-[10px] font-semibold text-slate-500">
+          <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
+            <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 sm:min-w-[150px] sm:rounded-xl sm:px-3 sm:py-2">
+              <p className="text-[8px] font-semibold leading-3 text-slate-500 sm:text-[10px]">
                 Student self-assessment
               </p>
-              <div className="mt-1 flex items-center justify-between gap-3">
-                <p className="text-sm font-bold text-slate-900">{selfScore}</p>
+              <div className="mt-0.5 flex items-center justify-between gap-1 sm:mt-1 sm:gap-3">
+                <p className="text-[12px] font-black text-slate-900 sm:text-sm">{selfScore}</p>
                 {selfPercentage && (
-                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-slate-200">
+                  <span className="rounded-full bg-white px-1.5 py-0.5 text-[8px] font-bold text-slate-600 ring-1 ring-slate-200 sm:px-2 sm:text-[10px]">
                     {selfPercentage}
                   </span>
                 )}
               </div>
             </div>
-            <div className="min-w-[170px] rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2">
-              <p className="text-[10px] font-semibold text-indigo-600">
+            <div className="min-w-0 rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-1.5 sm:min-w-[170px] sm:rounded-xl sm:px-3 sm:py-2">
+              <p className="text-[8px] font-semibold leading-3 text-indigo-600 sm:text-[10px]">
                 Instructor grade
               </p>
               {rubricScore !== null ? (
-                <div className="mt-1 flex items-end justify-between gap-3">
-                  <p className="text-sm font-bold text-indigo-800">
+                <div className="mt-0.5 flex items-end justify-between gap-1 sm:mt-1 sm:gap-3">
+                  <p className="text-[12px] font-black text-indigo-800 sm:text-sm">
                     {rubricScore} / {rubricTotal || "–"}
                   </p>
-                  <p className="pb-0.5 text-[9px] font-semibold text-indigo-600">
+                  <p className="pb-0.5 text-[7px] font-semibold leading-3 text-indigo-600 sm:text-[9px]">
                     {gradedCriteriaCount} of {rubricCriteriaCount} criteria
                   </p>
                 </div>
@@ -3248,20 +3374,20 @@ function PlanningAndAiFeedbackWorkspace({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 bg-[#F8FAFC] p-4">
-        <div className="grid min-h-0 w-full flex-1 grid-cols-1 gap-4 2xl:grid-cols-2">
-          <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
+      <div className="flex min-h-0 flex-1 bg-[#F8FAFC] p-1.5 sm:p-4">
+        <div className="grid min-h-0 w-full flex-1 grid-cols-1 gap-2 sm:gap-4 xl:grid-cols-2">
+          <div className="flex min-h-0 self-start flex-col overflow-hidden rounded-lg border border-slate-200 bg-white sm:rounded-2xl">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2.5 py-2 sm:gap-3 sm:px-4 sm:py-3">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">Planning chat</h3>
-                <p className="mt-0.5 text-xs text-slate-500">Conversation used to plan and brainstorm the assignment.</p>
+                <h3 className="text-[12px] font-bold leading-tight text-slate-900 sm:text-sm sm:font-semibold">Planning chat</h3>
+                <p className="mt-0.5 text-[9px] leading-3 text-slate-500 sm:text-xs sm:leading-normal">Conversation used to plan and brainstorm the assignment.</p>
               </div>
-              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
+              <span className="rounded-full border border-cyan-200 bg-cyan-50 px-1.5 py-0.5 text-[8px] font-bold text-cyan-700 sm:px-2 sm:py-1 sm:text-[10px]">
                 {planningMessages.length} {planningMessages.length === 1 ? "message" : "messages"}
               </span>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            <div className="space-y-2 overflow-visible p-2 sm:max-h-[calc(100dvh-360px)] sm:space-y-3 sm:overflow-y-auto sm:p-4">
               {planningMessages.length === 0 ? (
                 <EmptyEvidenceState title="No planning chat saved" description="No planning or brainstorming conversation was attached to this submission." />
               ) : (
@@ -3270,12 +3396,12 @@ function PlanningAndAiFeedbackWorkspace({
                   const isStudent = ["student", "user", "learner"].includes(role);
                   return (
                     <div key={message.id || index} className={`flex ${isStudent ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[88%] rounded-2xl border px-3 py-2.5 ${isStudent ? "border-blue-200 bg-blue-50 text-blue-950" : "border-slate-200 bg-[#F8FAFC] text-slate-800"}`}>
-                        <div className="flex items-center justify-between gap-3 mb-1">
-                          <span className="text-[10px] font-semibold opacity-70">{isStudent ? "Student" : "AI coach"}</span>
-                          {message.createdAt && <span className="text-[9px] font-mono opacity-50">{formatDateTime(message.createdAt)}</span>}
+                      <div className={`max-w-[92%] rounded-lg border px-2.5 py-2 sm:max-w-[88%] sm:rounded-2xl sm:px-3 sm:py-2.5 ${isStudent ? "border-blue-200 bg-blue-50 text-blue-950" : "border-slate-200 bg-[#F8FAFC] text-slate-800"}`}>
+                        <div className="mb-0.5 flex items-center justify-between gap-2 sm:mb-1 sm:gap-3">
+                          <span className="text-[9px] font-semibold opacity-70 sm:text-[10px]">{isStudent ? "Student" : "AI coach"}</span>
+                          {message.createdAt && <span className="text-[8px] font-mono opacity-50 sm:text-[9px]">{formatDateTime(message.createdAt)}</span>}
                         </div>
-                        <p className="text-xs leading-relaxed whitespace-pre-wrap">{message.content}</p>
+                        <p className="whitespace-pre-wrap text-[11px] leading-4 sm:text-xs sm:leading-relaxed">{message.content}</p>
                       </div>
                     </div>
                   );
@@ -3284,18 +3410,43 @@ function PlanningAndAiFeedbackWorkspace({
             </div>
           </div>
 
-          <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
-            <div className="border-b border-slate-100 px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white sm:rounded-2xl">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2.5 py-2 sm:gap-3 sm:px-4 sm:py-3">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">AI feedback received</h3>
-                <p className="mt-0.5 text-xs text-slate-500">Feedback the student received from AI while reviewing the draft.</p>
+                <h3 className="text-[12px] font-bold leading-tight text-slate-900 sm:text-sm sm:font-semibold">AI feedback received</h3>
+                <p className="mt-0.5 text-[9px] leading-3 text-slate-500 sm:text-xs sm:leading-normal">Feedback the student received from AI while reviewing the draft.</p>
               </div>
-              <span className="rounded-full border border-violet-200 bg-violet-50 px-2 py-1 text-[10px] font-semibold text-violet-700">
+              <span className="rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[8px] font-bold text-violet-700 sm:px-2 sm:py-1 sm:text-[10px]">
                 {aiFeedbackHistory.length} {aiFeedbackHistory.length === 1 ? "check" : "checks"}
               </span>
             </div>
 
-            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+            <div className="min-h-0 flex-1 space-y-2 overflow-visible p-2 sm:space-y-3 sm:overflow-y-auto sm:p-4">
+
+              {feedbackResolutionItems.length > 0 && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-2 sm:rounded-xl sm:p-3">
+                  <p className="text-[10px] leading-4 text-slate-500">
+                    Addressed means the student made a relevant attempt to respond to the feedback. It does not mean the revision is perfect.
+                  </p>
+
+                  <div className="mt-1.5 flex flex-wrap gap-1.5 sm:mt-2 sm:gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[8px] font-bold text-emerald-700 sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-[9px]">
+                      <CheckSquare className="h-3 w-3" />
+                      {feedbackResolutionCounts.addressed} Addressed
+                    </span>
+
+                    <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[8px] font-bold text-rose-700 sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-[9px]">
+                      <X className="h-3 w-3" />
+                      {feedbackResolutionCounts.notAddressed} Not addressed
+                    </span>
+
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[8px] font-bold text-amber-700 sm:gap-1.5 sm:px-2.5 sm:py-1 sm:text-[9px]">
+                      <AlertTriangle className="h-3 w-3" />
+                      {feedbackResolutionCounts.needsReview} Needs review
+                    </span>
+                  </div>
+                </div>
+              )}
               {aiFeedbackHistory.length === 0 ? (
                 <EmptyEvidenceState title="No AI feedback history" description="The student did not request AI draft feedback, or no feedback history was saved." />
               ) : (
@@ -3304,6 +3455,8 @@ function PlanningAndAiFeedbackWorkspace({
                     key={item.id || index}
                     item={item}
                     index={index}
+                    studentText={studentText}
+                    writingEvents={writingEvents}
                   />
                 ))
               )}
@@ -3507,55 +3660,944 @@ function CompactAiIssue({
   );
 }
 
-function StudentAiFeedbackCard({ item, index }) {
-  const overall = String(item.overall || "").trim();
-  const genericOverall = /^AI identified \d+ revision point/i.test(overall);
+function normalizeAiFeedbackEvidenceText(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[“”"'`]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  const feedbackLines = [
-    ...(!genericOverall && overall ? [overall] : []),
-    ...safeArray(item.strengths).map((strength) => String(strength || "").trim()),
-    ...safeArray(item.issues).map((issue) => {
-      const problem = String(issue?.problem || "").trim();
-      const suggestion = String(issue?.suggestion || "").trim();
-      return [problem, suggestion].filter(Boolean).join(" ");
-    }),
-    ...safeArray(item.nextSteps).map((step) => String(step || "").trim()),
-  ].filter(Boolean);
+function getAiFeedbackEvidenceTokens(value = "") {
+  return new Set(
+    normalizeAiFeedbackEvidenceText(value)
+      .split(" ")
+      .filter((word) => word.length >= 3)
+  );
+}
 
-  if (feedbackLines.length === 0) {
-    const rawText = String(item.rawText || "").trim();
-    if (rawText && !looksLikeStructuredJsonText(rawText)) {
-      feedbackLines.push(rawText);
+function scoreAiFeedbackEvidenceSimilarity(left = "", right = "") {
+  const leftTokens = getAiFeedbackEvidenceTokens(left);
+  const rightTokens = getAiFeedbackEvidenceTokens(right);
+
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  let common = 0;
+
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) {
+      common += 1;
+    }
+  });
+
+  const union =
+    leftTokens.size +
+    rightTokens.size -
+    common;
+
+  const smaller =
+    Math.min(
+      leftTokens.size,
+      rightTokens.size
+    );
+
+  const overlap =
+    smaller > 0
+      ? common / smaller
+      : 0;
+
+  const jaccard =
+    union > 0
+      ? common / union
+      : 0;
+
+  return overlap * 0.65 + jaccard * 0.35;
+}
+
+function splitAiFeedbackEvidenceChunks(value = "") {
+  const text = String(value || "").trim();
+
+  if (!text) return [];
+
+  const paragraphs = text
+    .split(/\n+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const sentences =
+    text.match(/[^.!?\n]+[.!?]?/g) || [];
+
+  return Array.from(
+    new Set(
+      [...paragraphs, ...sentences]
+        .map((part) => part.trim())
+        .filter(
+          (part) =>
+            part.length >= 12 &&
+            part.length <= 900
+        )
+    )
+  );
+}
+
+function findAiFeedbackRevisionEvidence(
+  excerpt = "",
+  studentText = ""
+) {
+  const original =
+    String(excerpt || "").trim();
+
+  const finalText =
+    String(studentText || "").trim();
+
+  if (!original || !finalText) {
+    return {
+      text: "",
+      score: 0,
+      exact: false,
+      changed: false,
+    };
+  }
+
+  const originalNormalized =
+    normalizeAiFeedbackEvidenceText(
+      original
+    );
+
+  const finalNormalized =
+    normalizeAiFeedbackEvidenceText(
+      finalText
+    );
+
+  if (
+    originalNormalized &&
+    finalNormalized.includes(
+      originalNormalized
+    )
+  ) {
+    return {
+      text: original,
+      score: 1,
+      exact: true,
+      changed: false,
+    };
+  }
+
+  let bestText = "";
+  let bestScore = 0;
+
+  splitAiFeedbackEvidenceChunks(
+    finalText
+  ).forEach((chunk) => {
+    const score =
+      scoreAiFeedbackEvidenceSimilarity(
+        original,
+        chunk
+      );
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestText = chunk;
+    }
+  });
+
+  if (bestScore < 0.2) {
+    return {
+      text: "",
+      score: bestScore,
+      exact: false,
+      changed: false,
+    };
+  }
+
+  return {
+    text: bestText,
+    score: bestScore,
+    exact: false,
+    changed:
+      normalizeAiFeedbackEvidenceText(
+        bestText
+      ) !== originalNormalized,
+  };
+}
+
+function getAiFeedbackLaterEvents(
+  item,
+  writingEvents = []
+) {
+  const feedbackTime =
+    new Date(
+      item?.createdAt || ""
+    ).getTime();
+
+  if (!Number.isFinite(feedbackTime)) {
+    return [];
+  }
+
+  return safeArray(writingEvents)
+    .filter((event) => {
+      const eventTime =
+        getEventTimeMs(event);
+
+      return (
+        Number.isFinite(eventTime) &&
+        eventTime > feedbackTime
+      );
+    });
+}
+
+function getAiFeedbackResolutionMeta(status) {
+  if (status === "addressed") {
+    return {
+      label: "Addressed",
+      icon: CheckSquare,
+      chip:
+        "border-emerald-200 bg-emerald-50 text-emerald-700",
+      panel:
+        "border-emerald-100 bg-emerald-50/35",
+    };
+  }
+
+  if (status === "not_addressed") {
+    return {
+      label: "Not addressed",
+      icon: X,
+      chip:
+        "border-rose-200 bg-rose-50 text-rose-700",
+      panel:
+        "border-rose-100 bg-rose-50/25",
+    };
+  }
+
+  return {
+    label: "Needs review",
+    icon: AlertTriangle,
+    chip:
+      "border-amber-200 bg-amber-50 text-amber-700",
+    panel:
+      "border-amber-100 bg-amber-50/30",
+  };
+}
+
+function getAiFeedbackObjectiveType(feedback) {
+  const value = String(feedback || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!value) {
+    return "general";
+  }
+
+  // ------------------------------------------------------------
+  // REMOVE / DELETE / OMIT
+  // ------------------------------------------------------------
+
+  if (
+    /\b(remove|delete|omit|eliminate|cut|take out|get rid of)\b/.test(
+      value
+    )
+  ) {
+    return "removal";
+  }
+
+  // ------------------------------------------------------------
+  // LOCAL LANGUAGE / MECHANICS
+  //
+  // These usually require only a small targeted edit. They must be
+  // recognized before "add" / "change" because feedback such as
+  // "add an article" is still a mechanics correction.
+  // ------------------------------------------------------------
+
+  if (
+    /\b(grammar|grammatical|spelling|spell|punctuation|capitalization|capitalisation|subject[- ]verb|agreement|tense|typo|fragment|run[- ]on|apostrophe|comma|semicolon|word form|verb form|article|determiner|preposition|singular|plural|possessive|missing word|missing article|missing determiner|missing preposition)\b/.test(
+      value
+    )
+  ) {
+    return "mechanics";
+  }
+
+  if (
+    /\bmissing\b.{0,45}\b(word|article|a|an|the|preposition)\b/.test(
+      value
+    )
+  ) {
+    return "mechanics";
+  }
+
+  // ------------------------------------------------------------
+  // ADD / EXPAND / EXPLAIN / DEVELOP
+  // ------------------------------------------------------------
+
+  if (
+    /\b(add|include|provide|give|expand|develop|explain|elaborate|support|example|evidence|detail|justify|clarify why|clarify how|conclusion|concluding|closing sentence|reflection|reflect|reason)\b/.test(
+      value
+    )
+  ) {
+    return "development";
+  }
+
+  // ------------------------------------------------------------
+  // DIRECT REWRITE / REPHRASE / STRUCTURAL REVISION
+  // ------------------------------------------------------------
+
+  if (
+    /\b(rephrase|rewrite|revise|replace|change|correct|fix|improve the wording|awkward|wording|concise|clarity|sentence structure|connect|combine|transition|split the sentence|split this sentence)\b/.test(
+      value
+    )
+  ) {
+    return "direct_revision";
+  }
+
+  return "general";
+}
+
+
+/**
+ * Find writing activity after the feedback that occurred close to the
+ * highlighted excerpt.
+ *
+ * This is supporting evidence only. It is intentionally NOT required
+ * before current-text evidence can count.
+ */
+function getAiFeedbackLocalLaterActivity({
+  original,
+  studentText,
+  laterEvents,
+}) {
+  const sourceText = String(studentText || "");
+  const sourceLower = sourceText.toLowerCase();
+  const originalText = String(original || "").trim();
+  const originalLower = originalText.toLowerCase();
+
+  let excerptStart = -1;
+
+  if (originalLower) {
+    excerptStart = sourceLower.indexOf(originalLower);
+  }
+
+  if (excerptStart < 0) {
+    return {
+      hasEdit: false,
+      hasInsertion: false,
+      insertedChars: 0,
+      removedChars: 0,
+      eventCount: 0,
+    };
+  }
+
+  const excerptEnd =
+    excerptStart + originalText.length;
+
+  // A local window allows insertions immediately before/after the
+  // highlighted sentence to count as potentially related development.
+  const windowStart = Math.max(
+    0,
+    excerptStart - 180
+  );
+
+  const windowEnd = Math.min(
+    sourceText.length,
+    excerptEnd + 180
+  );
+
+  const localEvents = safeArray(laterEvents)
+    .filter((event) => {
+      const position = Number(
+        event?.start ??
+        event?.position
+      );
+
+      if (!Number.isFinite(position)) {
+        return false;
+      }
+
+      return (
+        position >= windowStart &&
+        position <= windowEnd
+      );
+    });
+
+  const insertedChars =
+    localEvents.reduce(
+      (sum, event) =>
+        sum +
+        String(
+          event?.insertedText || ""
+        ).length,
+      0
+    );
+
+  const removedChars =
+    localEvents.reduce(
+      (sum, event) =>
+        sum +
+        String(
+          event?.removedText || ""
+        ).length,
+      0
+    );
+
+  return {
+    hasEdit:
+      insertedChars > 0 ||
+      removedChars > 0,
+    hasInsertion:
+      insertedChars > 0,
+    insertedChars,
+    removedChars,
+    eventCount: localEvents.length,
+  };
+}
+
+
+function analyzeAiFeedbackResolution({
+  item,
+  issue,
+  issueIndex,
+  itemIndex,
+  studentText,
+  writingEvents,
+}) {
+  const original =
+    String(
+      issue?.excerpt || ""
+    ).trim();
+
+  const problem =
+    String(
+      issue?.problem || ""
+    ).trim();
+
+  const suggestion =
+    String(
+      issue?.suggestion || ""
+    ).trim();
+
+  const feedback =
+    [problem, suggestion]
+      .filter(Boolean)
+      .join(" ");
+
+  const objectiveType =
+    getAiFeedbackObjectiveType(
+      feedback
+    );
+
+  // Writing-event timing is useful supporting evidence, but it must
+  // not override clear evidence visible in the current student text.
+  const laterEvents =
+    getAiFeedbackLaterEvents(
+      item,
+      writingEvents
+    );
+
+  const revision =
+    findAiFeedbackRevisionEvidence(
+      original,
+      studentText
+    );
+
+  const currentWordCount =
+    countWords(
+      String(studentText || "")
+    );
+
+  const feedbackWordCount =
+    Number(item?.draftWordCount);
+
+  const hasWordGrowth =
+    Number.isFinite(feedbackWordCount) &&
+    currentWordCount >
+      feedbackWordCount;
+
+  const hasLaterEvidence =
+    laterEvents.length > 0 ||
+    hasWordGrowth;
+
+  const originalWordCount =
+    countWords(original);
+
+  const laterWordCount =
+    countWords(
+      String(revision.text || "")
+    );
+
+  const localWordGrowth =
+    laterWordCount -
+    originalWordCount;
+
+  const localActivity =
+    getAiFeedbackLocalLaterActivity({
+      original,
+      studentText,
+      laterEvents,
+    });
+
+  let status = "needs_review";
+
+  let reason =
+    "Praxis found some evidence of change, but cannot confidently connect it to this specific feedback.";
+
+  // ------------------------------------------------------------
+  // NO ORIGINAL EXCERPT
+  // ------------------------------------------------------------
+
+  if (!original) {
+    status = "needs_review";
+
+    reason =
+      "The feedback was saved without the original student excerpt, so Praxis cannot reliably compare the requested revision with the current writing.";
+  }
+
+  // ------------------------------------------------------------
+  // REMOVE / DELETE / OMIT
+  //
+  // The current text itself can prove that the requested content
+  // disappeared. A missing event timestamp must not block that.
+  // ------------------------------------------------------------
+
+  else if (
+    objectiveType === "removal"
+  ) {
+    if (revision.exact) {
+      status = "not_addressed";
+
+      reason =
+        "The text the feedback asked the student to remove is still present unchanged in the current writing.";
+    } else if (
+      revision.changed ||
+      !revision.text
+    ) {
+      status = "addressed";
+
+      reason =
+        "The requested content no longer remains unchanged in the current writing. Because the feedback asked for removal, this is clear evidence of a relevant attempt to respond.";
+    } else {
+      status = "needs_review";
+
+      reason =
+        "The passage differs from the feedback-time excerpt, but Praxis cannot confidently determine whether the requested removal was made.";
     }
   }
 
+  // ------------------------------------------------------------
+  // GRAMMAR / SPELLING / PUNCTUATION / ARTICLES / MECHANICS
+  //
+  // A tiny local edit is enough to count as Addressed. We are
+  // measuring engagement with feedback, not whether the correction
+  // is linguistically perfect.
+  // ------------------------------------------------------------
+
+  else if (
+    objectiveType === "mechanics"
+  ) {
+    if (revision.exact) {
+      status = "not_addressed";
+
+      reason =
+        "The passage containing the language or mechanics issue still appears unchanged in the current writing.";
+    } else if (
+      revision.changed &&
+      revision.score >= 0.2
+    ) {
+      status = "addressed";
+
+      reason =
+        "Praxis found a changed version of the same local passage. Because this feedback targets a language or mechanics issue, that targeted change counts as a relevant attempt to respond.";
+    } else if (
+      revision.text &&
+      !revision.changed
+    ) {
+      status = "not_addressed";
+
+      reason =
+        "Praxis found the same passage without a meaningful local change related to the feedback.";
+    } else {
+      status = "needs_review";
+
+      reason =
+        "The original passage is no longer present unchanged, but the rewrite is too different for Praxis to verify the specific language correction automatically.";
+    }
+  }
+
+  // ------------------------------------------------------------
+  // ADD / EXPAND / EXPLAIN / EXAMPLE / EVIDENCE / CONCLUSION
+  //
+  // Global word growth is no longer enough. We prefer a changed
+  // matching passage or a post-feedback insertion near the target.
+  // ------------------------------------------------------------
+
+  else if (
+    objectiveType === "development"
+  ) {
+    if (
+      revision.changed &&
+      revision.score >= 0.2 &&
+      localWordGrowth >= 1
+    ) {
+      status = "addressed";
+
+      reason =
+        "The same passage was expanded or developed in the current writing, which is a relevant attempt to respond to the request for additional content.";
+    } else if (
+      revision.exact &&
+      localActivity.hasInsertion &&
+      localActivity.insertedChars >= 3
+    ) {
+      status = "addressed";
+
+      reason =
+        "The original excerpt remains, but Praxis recorded new writing close to that excerpt after the feedback. This counts as a relevant attempt to add the requested development.";
+    } else if (
+      revision.exact
+    ) {
+      status = "not_addressed";
+
+      reason =
+        "The highlighted passage remains unchanged and Praxis found no local post-feedback addition around it that clearly responds to the request.";
+    } else if (
+      revision.changed
+    ) {
+      status = "needs_review";
+
+      reason =
+        "The passage changed, but Praxis cannot confidently determine whether the rewrite added the explanation, evidence, example, conclusion, or development that was requested.";
+    } else if (
+      !revision.text &&
+      hasLaterEvidence
+    ) {
+      status = "needs_review";
+
+      reason =
+        "Writing continued after the feedback, but Praxis could not identify a sufficiently close revised passage to determine whether this development request was addressed.";
+    } else {
+      status = "not_addressed";
+
+      reason =
+        "Praxis found no clear local attempt to add the explanation, evidence, example, conclusion, or detail requested by this feedback.";
+    }
+  }
+
+  // ------------------------------------------------------------
+  // DIRECT REWRITE / REPHRASE / CORRECTION
+  // ------------------------------------------------------------
+
+  else if (
+    objectiveType ===
+    "direct_revision"
+  ) {
+    if (revision.exact) {
+      status = "not_addressed";
+
+      reason =
+        "The passage the student was asked to revise still appears unchanged.";
+    } else if (
+      revision.changed &&
+      revision.score >= 0.25
+    ) {
+      status = "addressed";
+
+      reason =
+        "Praxis found a changed version of the same passage, which counts as a relevant attempt to respond to the requested rewrite or correction.";
+    } else {
+      status = "needs_review";
+
+      reason =
+        "The original passage is no longer clearly unchanged, but Praxis cannot connect the current wording to the requested revision with enough confidence.";
+    }
+  }
+
+  // ------------------------------------------------------------
+  // GENERAL / SEMANTIC FEEDBACK
+  //
+  // Use Needs review only when the relationship is genuinely
+  // ambiguous. An unchanged target with no local activity is
+  // explicitly Not addressed.
+  // ------------------------------------------------------------
+
+  else if (revision.exact) {
+    if (localActivity.hasEdit) {
+      status = "needs_review";
+
+      reason =
+        "The original excerpt remains, but related writing activity occurred nearby after the feedback. An instructor should check whether the surrounding change addressed the broader feedback.";
+    } else {
+      status = "not_addressed";
+
+      reason =
+        "The highlighted passage remains unchanged and Praxis found no local revision that clearly responds to this feedback.";
+    }
+  } else if (
+    revision.changed &&
+    revision.score >= 0.35
+  ) {
+    status = "needs_review";
+
+    reason =
+      "Praxis found a revision of the same passage, but the feedback is broad enough that an instructor should confirm whether the change actually addresses it.";
+  } else {
+    status = "needs_review";
+
+    reason =
+      "The current writing differs from the feedback-time excerpt, but Praxis cannot determine the relationship to this broader feedback with sufficient confidence.";
+  }
+
+  return {
+    id:
+      `${item?.id || itemIndex}_issue_${issueIndex}`,
+    original,
+    feedback,
+    problem,
+    suggestion,
+    laterText:
+      revision.text || "",
+    status,
+    reason,
+    revisionScore:
+      revision.score,
+    exact:
+      revision.exact,
+
+    // Useful diagnostics for future testing/debugging.
+    objectiveType,
+    hasLaterEvidence,
+    localLaterActivity:
+      localActivity.hasEdit,
+  };
+}
+
+
+function buildAiFeedbackResolutionForItem(
+  item,
+  itemIndex,
+  studentText,
+  writingEvents
+) {
+  const issues =
+    safeArray(item?.issues);
+
+  if (issues.length > 0) {
+    return issues.map(
+      (issue, issueIndex) =>
+        analyzeAiFeedbackResolution({
+          item,
+          issue,
+          issueIndex,
+          itemIndex,
+          studentText,
+          writingEvents,
+        })
+    );
+  }
+
+  const overall =
+    String(
+      item?.overall ||
+      item?.rawText ||
+      ""
+    ).trim();
+
+  if (!overall) return [];
+
+  return [
+    {
+      id:
+        `${item?.id || itemIndex}_fallback`,
+      original: "",
+      feedback: overall,
+      problem: "",
+      suggestion: overall,
+      laterText: "",
+      status: "needs_review",
+      reason:
+        "This older feedback record does not contain the original excerpt needed for automatic revision matching.",
+      revisionScore: 0,
+      exact: false,
+    },
+  ];
+}
+
+function StudentAiFeedbackCard({
+  item,
+  index,
+  studentText = "",
+  writingEvents = [],
+}) {
+  const [openEvidenceId, setOpenEvidenceId] =
+    useState(null);
+
+  const resolutions =
+    buildAiFeedbackResolutionForItem(
+      item,
+      index,
+      studentText,
+      writingEvents
+    );
+
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-bold text-slate-900">
-          {item.createdAt ? formatDateTime(item.createdAt) : `Draft feedback check ${index + 1}`}
-        </h4>
-        {item.draftWordCount !== null && item.draftWordCount !== undefined && (
-          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[9px] font-mono font-bold text-slate-500">
-            {item.draftWordCount} words
-          </span>
-        )}
+    <article className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm sm:rounded-2xl">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/70 px-2.5 py-2 sm:flex-wrap sm:px-4 sm:py-3">
+        <div>
+          <p className="text-[8px] font-mono font-black uppercase tracking-wider text-slate-400 sm:text-[9px]">
+            Feedback check {index + 1}
+          </p>
+
+          <h4 className="mt-0.5 text-[11px] font-bold text-slate-900 sm:text-xs">
+            {item.createdAt
+              ? formatDateTime(
+                  item.createdAt
+                )
+              : `Draft feedback check ${index + 1}`}
+          </h4>
+        </div>
+
+        {item.draftWordCount !== null &&
+          item.draftWordCount !==
+            undefined && (
+            <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[8px] font-mono font-bold text-slate-500 sm:px-2 sm:py-1 sm:text-[9px]">
+              {item.draftWordCount} words
+            </span>
+          )}
       </div>
 
-      <div className="mt-3 space-y-2">
-        {feedbackLines.length > 0 ? (
-          feedbackLines.map((line, lineIndex) => (
-            <p
-              key={`${item.id || index}_feedback_${lineIndex}`}
-              className="border-l-2 border-blue-500 pl-3 text-xs leading-5 text-slate-700"
-            >
-              {line}
-            </p>
-          ))
-        ) : (
-          <p className="text-xs italic text-slate-500">
-            No readable feedback text was saved for this check.
+      <div className="space-y-2 p-2 sm:space-y-3 sm:p-3">
+        {resolutions.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs italic text-slate-500">
+            No readable feedback items were saved for this check.
           </p>
+        ) : (
+          resolutions.map(
+            (resolution, resolutionIndex) => {
+              const meta =
+                getAiFeedbackResolutionMeta(
+                  resolution.status
+                );
+
+              const StatusIcon =
+                meta.icon;
+
+              const open =
+                openEvidenceId ===
+                resolution.id;
+
+              return (
+                <div
+                  key={resolution.id}
+                  className={`overflow-hidden rounded-xl border ${meta.panel}`}
+                >
+                  <div className="p-2 sm:p-3">
+                    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)_auto] sm:gap-3">
+                      <div className="min-w-0">
+                        <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
+                          Error / original excerpt
+                        </p>
+
+                        <p className="mt-1 text-[10px] font-semibold leading-4 text-slate-700 sm:text-[11px] sm:leading-5">
+                          {resolution.original
+                            ? `“${resolution.original}”`
+                            : "Original excerpt was not saved for this feedback item."}
+                        </p>
+                      </div>
+
+                      <div className="min-w-0 sm:border-l sm:border-slate-200 sm:pl-3">
+                        <p className="font-mono text-[7px] font-black uppercase tracking-wider text-blue-600 sm:text-[8px]">
+                          AI feedback
+                        </p>
+
+                        <p className="mt-1 text-[10px] leading-4 text-slate-700 sm:text-[11px] sm:leading-5">
+                          {resolution.feedback ||
+                            "No readable AI feedback text was saved."}
+                        </p>
+                      </div>
+
+                      <div className="sm:border-l sm:border-slate-200 sm:pl-3">
+                        <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
+                          Status
+                        </p>
+
+                        <span
+                          className={`mt-1 inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-1 text-[9px] font-bold ${meta.chip}`}
+                        >
+                          <StatusIcon className="h-3 w-3" />
+                          {meta.label}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() =>
+                        setOpenEvidenceId(
+                          open
+                            ? null
+                            : resolution.id
+                        )
+                      }
+                      className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[9px] font-bold text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    >
+                      <Eye className="h-3 w-3" />
+                      {open
+                        ? "Hide revision evidence"
+                        : "View revision evidence"}
+
+                      <ChevronDown
+                        className={`h-3 w-3 transition-transform ${
+                          open
+                            ? "rotate-180"
+                            : ""
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {open && (
+                    <div className="border-t border-slate-200 bg-white/85 p-3">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+                          <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
+                            Original
+                          </p>
+
+                          <p className="mt-1 text-[10px] leading-4 text-slate-700">
+                            {resolution.original
+                              ? `“${resolution.original}”`
+                              : "Original excerpt unavailable."}
+                          </p>
+                        </div>
+
+                        <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-2.5">
+                          <p className="font-mono text-[7px] font-black uppercase tracking-wider text-blue-600 sm:text-[8px]">
+                            Later / current writing
+                          </p>
+
+                          <p className="mt-1 text-[10px] leading-4 text-slate-700">
+                            {resolution.laterText
+                              ? `“${resolution.laterText}”`
+                              : "No clear matching revised excerpt could be identified automatically."}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2.5">
+                        <p className="font-mono text-[7px] font-black uppercase tracking-wider text-slate-400 sm:text-[8px]">
+                          Why this status
+                        </p>
+
+                        <p className="mt-1 text-[10px] leading-4 text-slate-600">
+                          {resolution.reason}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+          )
         )}
       </div>
     </article>
@@ -5367,27 +6409,50 @@ function WritingBehaviourWorkspace({
 
   function jumpToTimelineBucket(bucket) {
     const exactPasteEvent = safeArray(bucket?.pasteEvents).at(-1);
+
     if (exactPasteEvent) {
       jumpToEvent(exactPasteEvent);
       return;
     }
 
-    const targetMs =
-      (Number(bucket?.startMs || 0) +
-        Number(bucket?.endMs || 0)) /
-      2;
+    const bucketStartMs = Number(bucket?.startMs || 0);
+    const bucketEndMs = Number(
+      bucket?.endMs ?? bucketStartMs
+    );
 
-    let closestIndex = 0;
+    const bucketMiddleMs =
+      (bucketStartMs + bucketEndMs) / 2;
+
+    const frameTimes = frames.map((frame, index) => ({
+      index,
+      absoluteMs:
+        replayStartMs +
+        Number(frame?.elapsedMs || 0),
+    }));
+
+    // Prefer a real frame that belongs to the bar the teacher tapped.
+    const framesInsideBucket = frameTimes.filter(
+      (item) =>
+        item.absoluteMs >= bucketStartMs &&
+        item.absoluteMs <= bucketEndMs
+    );
+
+    const candidates =
+      framesInsideBucket.length > 0
+        ? framesInsideBucket
+        : frameTimes;
+
+    let closestIndex = candidates[0]?.index || 0;
     let closestDistance = Number.POSITIVE_INFINITY;
 
-    frames.forEach((frame, index) => {
-      const frameAbsoluteMs =
-        replayStartMs + Number(frame?.elapsedMs || 0);
-      const distance = Math.abs(frameAbsoluteMs - targetMs);
+    candidates.forEach((item) => {
+      const distance = Math.abs(
+        item.absoluteMs - bucketMiddleMs
+      );
 
       if (distance < closestDistance) {
         closestDistance = distance;
-        closestIndex = index;
+        closestIndex = item.index;
       }
     });
 
@@ -5511,18 +6576,18 @@ function WritingBehaviourWorkspace({
   ];
 
   return (
-    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-start gap-2">
-            <Activity className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white shadow-sm sm:rounded-xl 2xl:rounded-2xl">
+      <div className="shrink-0 border-b border-slate-200 bg-white px-2 py-1.5 sm:px-3 sm:py-2 2xl:px-4 2xl:py-3">
+        <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-start gap-1.5 sm:gap-2">
+            <Activity className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700 sm:h-4 sm:w-4" />
 
             <div>
-              <h2 className="text-base font-semibold text-slate-950">
+              <h2 className="text-[13px] font-bold leading-tight text-slate-950 sm:text-base sm:font-semibold">
                 Writing journey and replay
               </h2>
 
-              <p className="mt-0.5 text-[11px] text-slate-500">
+              <p className="mt-0.5 text-[9px] leading-3 text-slate-500 sm:text-[11px] sm:leading-normal">
                 Exact assignment-specific writing operations recorded from the student draft.
               </p>
             </div>
@@ -5560,36 +6625,36 @@ function WritingBehaviourWorkspace({
         </div>
       </div>
 
-      <div className="bg-[#F8FAFC] p-4">
+      <div className="bg-[#F8FAFC] p-1.5 sm:p-3 2xl:p-4">
         {replayEvents.length === 0 ? (
           <EmptyEvidenceState
             title="No writing journey data"
             description="New student drafting activity will appear here after Step 2 saves structured writing events."
           />
         ) : (
-          <div className="w-full space-y-4">
-            <div className="grid grid-cols-1 items-start gap-4 2xl:grid-cols-[390px_minmax(0,1fr)]">
-              <div className="space-y-4 2xl:contents">
-                <div className="relative rounded-2xl border border-slate-200 bg-white 2xl:col-start-1 2xl:row-span-3 2xl:row-start-1 2xl:max-h-[660px] 2xl:overflow-y-auto">
-                  <div className="p-4 transition-colors hover:bg-slate-50">
+          <div className="w-full space-y-2 sm:space-y-3 2xl:space-y-4">
+            <div className="grid grid-cols-1 items-start gap-2 sm:gap-3 xl:grid-cols-[390px_minmax(0,1fr)] 2xl:gap-4">
+              <div className="space-y-2 sm:space-y-3 xl:contents 2xl:space-y-4">
+                <div className="relative rounded-lg border border-slate-200 bg-white sm:rounded-2xl xl:col-start-1 xl:row-span-3 xl:row-start-1 xl:max-h-[calc(100dvh-220px)] xl:overflow-y-auto 2xl:max-h-[660px]">
+                  <div className="p-2 transition-colors hover:bg-slate-50 sm:p-3 2xl:p-4">
                     <button
                       type="button"
                       aria-expanded={processCheckOpen}
                       onClick={() =>
                         setProcessCheckOpen((current) => !current)
                       }
-                      className="flex w-full min-w-0 items-start justify-between gap-3 text-left"
+                      className="flex w-full min-w-0 items-start justify-between gap-2 text-left sm:gap-3"
                     >
                       <div className="flex min-w-0 items-center gap-2.5">
-                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-blue-100 bg-blue-50 text-blue-700">
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-blue-100 bg-blue-50 text-blue-700 sm:h-8 sm:w-8 sm:rounded-lg 2xl:h-9 2xl:w-9 2xl:rounded-xl">
                           <Gauge className="h-4 w-4" />
                         </div>
 
                         <div className="min-w-0">
-                          <h3 className="text-sm font-bold text-slate-900">
+                          <h3 className="text-[12px] font-bold leading-tight text-slate-900 sm:text-sm">
                             Writing process check
                           </h3>
-                          <p className="mt-0.5 text-[10px] leading-4 text-slate-500">
+                          <p className="mt-0.5 text-[9px] leading-3 text-slate-500 sm:text-[10px] sm:leading-4">
                             Review the student’s writing activity.
                           </p>
                         </div>
@@ -5602,13 +6667,13 @@ function WritingBehaviourWorkspace({
                       )}
                     </button>
 
-                    <div className="mt-3 flex items-center justify-between gap-3 border-t border-slate-100 pt-3">
+                    <div className="mt-2 flex items-center justify-between gap-2 border-t border-slate-100 pt-2 sm:mt-3 sm:gap-3 sm:pt-3">
                       <div className="min-w-0">
-                        <p className="text-[10px] font-semibold text-slate-500">
+                        <p className="text-[9px] font-semibold text-slate-500 sm:text-[10px]">
                           Current result
                         </p>
                         <span
-                          className={`mt-1 inline-flex rounded-full border px-2.5 py-1 text-[9px] font-mono font-bold ${wpStatusPillClasses(
+                          className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[8px] font-mono font-bold sm:px-2.5 sm:py-1 sm:text-[9px] ${wpStatusPillClasses(
                             processAnalysis.status
                           )}`}
                         >
@@ -5622,7 +6687,7 @@ function WritingBehaviourWorkspace({
                         aria-label="What do these labels mean?"
                         aria-expanded={processHelpOpen}
                         onClick={() => setProcessHelpOpen((current) => !current)}
-                        className="flex h-8 w-8 items-center justify-center rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                        className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-[10px] font-bold text-slate-500 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 sm:h-8 sm:w-8 sm:rounded-xl sm:text-xs"
                         title="What do these labels mean?"
                       >
                         ?
@@ -5658,18 +6723,18 @@ function WritingBehaviourWorkspace({
                   </div>
 
                   {processCheckOpen && (
-                    <div className="space-y-4 border-t border-slate-100 p-4">
-                      <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-3">
-                        <p className="text-[10px] font-semibold text-blue-700">
+                    <div className="space-y-2 border-t border-slate-100 p-2 sm:space-y-3 sm:p-3 2xl:space-y-4 2xl:p-4">
+                      <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-2 sm:rounded-xl sm:p-2.5 2xl:p-3">
+                        <p className="text-[9px] font-semibold text-blue-700 sm:text-[10px]">
                           What the signals suggest
                         </p>
-                        <p className="mt-1 text-[10px] leading-relaxed text-slate-700">
+                        <p className="mt-1 text-[9px] leading-4 text-slate-700 sm:text-[10px] sm:leading-relaxed">
                         {
                           processAnalysis.reason
                         }
                         </p>
 
-                        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1 sm:mt-2 sm:gap-1.5">
                         {processAnalysis.evidence.length >
                         0 ? (
                           processAnalysis.evidence.map(
@@ -5682,7 +6747,7 @@ function WritingBehaviourWorkspace({
                                 title={
                                   evidence.detail
                                 }
-                                className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-700"
+                                className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[8px] font-semibold text-slate-700 sm:px-2 sm:py-1 sm:text-[10px]"
                               >
                                 {
                                   evidence.label
@@ -5724,8 +6789,8 @@ function WritingBehaviourWorkspace({
 
                       {visibleProcessTimeline.length >
                         0 && (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                          <div className="mb-2 flex items-center justify-between gap-2 text-[9px] text-slate-500">
+                        <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-2 sm:rounded-xl sm:p-2.5 2xl:p-3">
+                          <div className="mb-1.5 flex items-center justify-between gap-1.5 text-[8px] text-slate-500 sm:mb-2 sm:gap-2 sm:text-[9px]">
                             <span className="font-bold text-slate-700">
                               Writing activity
                             </span>
@@ -5774,7 +6839,7 @@ function WritingBehaviourWorkspace({
                                     aria-label={`Replay ${bucket.label}: ${bucket.typedChars} typed characters${hasPaste ? ` and ${bucket.pasteChars} pasted characters` : ""}`}
                                     aria-current={bucketActive ? "true" : undefined}
                                     onClick={() => jumpToTimelineBucket(bucket)}
-                                    className={`relative flex min-h-[72px] items-end justify-center rounded-md border px-0.5 pb-1 pt-2 transition hover:-translate-y-0.5 hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                                    className={`relative flex min-h-[42px] touch-manipulation cursor-pointer items-end justify-center rounded-md border px-0.5 pb-1 pt-1 transition hover:-translate-y-0.5 hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 sm:min-h-[56px] sm:pt-1.5 2xl:min-h-[72px] 2xl:pt-2 ${
                                       bucketActive
                                         ? "border-blue-500 bg-blue-50 ring-2 ring-blue-500/20"
                                         : "border-slate-200 bg-white"
@@ -5784,7 +6849,7 @@ function WritingBehaviourWorkspace({
                                       <span className="absolute left-1/2 top-0.5 h-1.5 w-1.5 -translate-x-1/2 rounded-full bg-rose-400" />
                                     )}
                                     <span
-                                      className="w-full rounded-sm bg-blue-500"
+                                      className="max-h-[30px] w-full rounded-sm bg-blue-500 sm:max-h-[42px] 2xl:max-h-[58px]"
                                       style={{ height: `${bucketHeight}px` }}
                                     />
                                   </button>
@@ -5796,7 +6861,7 @@ function WritingBehaviourWorkspace({
                       )}
 
                       <div>
-                        <p className="text-[10px] font-bold text-slate-800">
+                        <p className="text-[11px] font-bold leading-tight text-slate-800 sm:text-[10px]">
                           Writing-style detail
                         </p>
                         <p className="mt-0.5 text-[10px] text-slate-500">
@@ -5805,7 +6870,7 @@ function WritingBehaviourWorkspace({
                             ? "Peer comparison is paused until there is enough typed writing data."
                             : "Peer comparison for each measure. Deviations from peer range feed the check above."}
                         </p>
-                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <div className="mt-1.5 grid grid-cols-1 gap-1.5 sm:mt-2 sm:grid-cols-2 sm:gap-2">
                           {processMetricCards.map(
                             (metric) => {
                               const range =
@@ -5857,7 +6922,7 @@ function WritingBehaviourWorkspace({
                               return (
                                 <div
                                   key={metric.key}
-                                  className={`rounded-xl border border-blue-100 bg-blue-50/55 p-3 shadow-sm ${
+                                  className={`rounded-lg border border-blue-100 bg-blue-50/55 p-2 shadow-sm sm:rounded-xl sm:p-2.5 2xl:p-3 ${
                                     isOutsidePeerRange
                                       ? "border-l-[3px] border-l-blue-500"
                                       : "border-l-[3px] border-l-slate-400"
@@ -5865,12 +6930,12 @@ function WritingBehaviourWorkspace({
                                 >
                                   <div>
                                     <div>
-                                      <p className="text-[9px] font-mono font-black uppercase tracking-wider text-slate-400">
+                                      <p className="text-[8px] font-mono font-black uppercase tracking-wider text-slate-400 sm:text-[9px]">
                                         {
                                           definition?.label
                                         }
                                       </p>
-                                      <p className="mt-1 text-sm font-mono font-black text-slate-900">
+                                      <p className="mt-0.5 text-[12px] font-mono font-black text-slate-900 sm:mt-1 sm:text-sm">
                                         {wpFormatMetricValue(
                                           metric.key,
                                           metric.value
@@ -5880,12 +6945,12 @@ function WritingBehaviourWorkspace({
                                   </div>
 
                                   <div
-                                    className={`mt-2 flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-[10px] font-bold leading-none ${wpMetricTagClasses(metric.position)}`}
+                                    className={`mt-1.5 flex w-full items-center gap-1.5 rounded-md border px-2 py-1 text-[9px] font-bold leading-none sm:mt-2 sm:gap-2 sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px] 2xl:py-2 ${wpMetricTagClasses(metric.position)}`}
                                     title="Compared with similar student submissions"
                                   >
                                     <span
                                       aria-hidden="true"
-                                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-white/80 text-xs shadow-sm"
+                                      className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-white/80 text-[10px] shadow-sm sm:h-5 sm:w-5 sm:text-xs"
                                     >
                                       {wpMetricTagIcon(metric.position)}
                                     </span>
@@ -5919,10 +6984,10 @@ function WritingBehaviourWorkspace({
                                     </div>
                                   </div>
 
-                                  <p className="mt-2 text-[9px] font-medium leading-relaxed text-slate-700">
+                                  <p className="mt-1.5 text-[8px] font-medium leading-3 text-slate-700 sm:mt-2 sm:text-[9px] sm:leading-relaxed">
                                     {interpretation}
                                   </p>
-                                  <p className="mt-1 text-[9px] leading-relaxed text-slate-500">
+                                  <p className="mt-1 text-[8px] leading-3 text-slate-500 sm:text-[9px] sm:leading-relaxed">
                                     Coach/outline baseline:{" "}
                                     {metric.coachValue ===
                                       null ||
@@ -5941,7 +7006,7 @@ function WritingBehaviourWorkspace({
                         </div>
                       </div>
 
-                      <p className="mt-3 text-[9px] text-slate-500">
+                      <p className="mt-2 text-[8px] leading-3 text-slate-500 sm:mt-3 sm:text-[9px] sm:leading-normal">
                         Reference ranges are preliminary for{" "}
                         {
                           processAnalysis
@@ -5960,17 +7025,17 @@ function WritingBehaviourWorkspace({
                   )}
                 </div>
 
-                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white 2xl:col-start-2 2xl:row-start-2">
+                <div className="overflow-hidden rounded-lg border border-slate-200 bg-white sm:rounded-2xl xl:col-start-2 xl:row-start-2">
                   <button
                     type="button"
                     aria-expanded={timelineOpen}
                     onClick={() =>
                       setTimelineOpen((current) => !current)
                     }
-                    className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-slate-50"
+                    className="flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left transition-colors hover:bg-slate-50 sm:gap-3 sm:px-3 sm:py-2.5 2xl:px-4 2xl:py-3"
                   >
                     <div className="flex min-w-0 items-center gap-2.5">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-amber-100 bg-amber-50 text-amber-700">
+                      <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-100 bg-amber-50 text-amber-700 sm:h-8 sm:w-8 sm:rounded-xl">
                         <Activity className="h-4 w-4" />
                       </div>
 
@@ -5986,7 +7051,7 @@ function WritingBehaviourWorkspace({
                     </div>
 
                     <div className="flex shrink-0 items-center gap-2">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-semibold text-slate-600">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[8px] font-semibold text-slate-600 sm:px-2 sm:py-1 sm:text-[10px]">
                         {replayTimeline.length} paste {replayTimeline.length === 1 ? "event" : "events"}
                       </span>
 
@@ -5999,7 +7064,7 @@ function WritingBehaviourWorkspace({
                   </button>
 
                   {timelineOpen && (
-                    <div className="grid grid-cols-1 gap-1.5 border-t border-slate-100 p-3">
+                    <div className="grid grid-cols-1 gap-1 border-t border-slate-100 p-1.5 sm:gap-1.5 sm:p-2.5 2xl:p-3">
                       {replayTimeline.map(
                         (event, index) => {
                           const eventFrameIndex =
@@ -6024,7 +7089,7 @@ function WritingBehaviourWorkspace({
                               onClick={() =>
                                 jumpToEvent(event)
                               }
-                              className={`w-full rounded-xl border px-3 py-2.5 text-left transition-all ${
+                              className={`w-full rounded-lg border px-2 py-1.5 text-left transition-all sm:rounded-xl sm:px-3 sm:py-2.5 ${
                                 isActive
                                   ? isPaste
                                     ? "border-violet-300 bg-violet-50 ring-2 ring-violet-500/10"
@@ -6078,11 +7143,11 @@ function WritingBehaviourWorkspace({
                 </div>
               </div>
 
-              <div className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white 2xl:col-start-2 2xl:row-start-1">
-                <div className="border-b border-slate-100 px-4 py-3">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white sm:rounded-2xl xl:col-start-2 xl:row-start-1">
+                <div className="border-b border-slate-100 px-2 py-1.5 sm:px-3 sm:py-2.5 2xl:px-4 2xl:py-3">
+                  <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-900">
+                      <h3 className="text-[12px] font-bold leading-tight text-slate-900 sm:text-sm">
                         Character-by-character replay
                       </h3>
 
@@ -6098,7 +7163,7 @@ function WritingBehaviourWorkspace({
                           setFrameIndex(0);
                           setIsPlaying(false);
                         }}
-                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800 sm:h-8 sm:rounded-xl sm:px-3 sm:text-[10px] 2xl:h-9"
                         title="Start"
                       >
                         <SkipBack className="h-3.5 w-3.5" />
@@ -6109,7 +7174,7 @@ function WritingBehaviourWorkspace({
                         onClick={() =>
                           stepFrame(-1)
                         }
-                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800 sm:h-8 sm:rounded-xl sm:px-3 sm:text-[10px] 2xl:h-9"
                       >
                         Back
                       </button>
@@ -6131,7 +7196,7 @@ function WritingBehaviourWorkspace({
 
                           setIsPlaying(true);
                         }}
-                        className="inline-flex h-9 items-center justify-center gap-1.5 rounded-xl bg-amber-600 px-3 text-[10px] font-bold text-white hover:bg-amber-700"
+                        className="inline-flex h-7 items-center justify-center gap-1 rounded-lg bg-amber-600 px-2 text-[9px] font-bold text-white hover:bg-amber-700 sm:h-8 sm:gap-1.5 sm:rounded-xl sm:px-3 sm:text-[10px] 2xl:h-9"
                       >
                         {isPlaying ? (
                           <Pause className="h-3.5 w-3.5" />
@@ -6149,7 +7214,7 @@ function WritingBehaviourWorkspace({
                         onClick={() =>
                           stepFrame(1)
                         }
-                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800 sm:h-8 sm:rounded-xl sm:px-3 sm:text-[10px] 2xl:h-9"
                       >
                         Next
                       </button>
@@ -6162,13 +7227,13 @@ function WritingBehaviourWorkspace({
                           );
                           setIsPlaying(false);
                         }}
-                        className="inline-flex h-9 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800"
+                        className="inline-flex h-7 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-[9px] font-bold text-slate-600 hover:border-amber-200 hover:bg-amber-50 hover:text-amber-800 sm:h-8 sm:rounded-xl sm:px-3 sm:text-[10px] 2xl:h-9"
                         title="Final frame"
                       >
                         <SkipForward className="h-3.5 w-3.5" />
                       </button>
 
-                      <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
+                      <label className="flex items-center gap-1 text-[9px] font-bold text-slate-500 sm:gap-1.5 sm:text-[10px]">
                         Speed
 
                         <select
@@ -6180,7 +7245,7 @@ function WritingBehaviourWorkspace({
                               )
                             )
                           }
-                          className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[10px] text-slate-700 outline-none"
+                          className="rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[9px] text-slate-700 outline-none sm:rounded-lg sm:px-2 sm:py-1.5 sm:text-[10px]"
                         >
                           {[1, 2, 5, 10, 15].map(
                             (speed) => (
@@ -6197,7 +7262,7 @@ function WritingBehaviourWorkspace({
                     </div>
                   </div>
 
-                  <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-mono text-slate-500">
+                  <div className="mt-1.5 flex items-center justify-between gap-2 text-[8px] font-mono text-slate-500 sm:mt-2 sm:gap-3 sm:text-[10px] 2xl:mt-3">
                     <span>
                       Frame {frameIndex + 1} /{" "}
                       {frames.length}
@@ -6235,8 +7300,8 @@ function WritingBehaviourWorkspace({
                   />
                 </div>
 
-                <div className="flex min-h-0 flex-col p-4">
-                  <div className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-3 py-2.5">
+                <div className="flex min-h-0 flex-col p-1.5 sm:p-3 2xl:p-4">
+                  <div className="rounded-lg border border-slate-200 bg-[#F8FAFC] px-2 py-1.5 sm:rounded-xl sm:px-3 sm:py-2 2xl:py-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-[10px] font-mono font-black uppercase tracking-wider text-amber-700">
@@ -6269,7 +7334,7 @@ function WritingBehaviourWorkspace({
                     ref={replayTextRef}
                     tabIndex={-1}
                     aria-live="polite"
-                    className="mt-3 min-h-[300px] max-h-[480px] flex-1 overflow-y-auto whitespace-pre-wrap break-words rounded-xl border border-slate-200 bg-white p-5 font-mono text-[12px] leading-7 text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
+                    className="mt-1.5 min-h-[96px] max-h-[220px] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-slate-200 bg-white p-2 font-mono text-[11px] leading-5 text-slate-700 outline-none transition focus:border-blue-300 focus:ring-2 focus:ring-blue-100 sm:mt-2 sm:min-h-[210px] sm:max-h-[340px] sm:flex-1 sm:rounded-xl sm:p-3 sm:text-[12px] sm:leading-6 sm:focus:ring-4 2xl:mt-3 2xl:min-h-[300px] 2xl:max-h-[480px] 2xl:p-5 2xl:leading-7"
                   >
                     <PlaybackFrameText
                       frame={activeFrame}
@@ -6279,18 +7344,18 @@ function WritingBehaviourWorkspace({
                 </div>
               </div>
 
-            <div className={`rounded-2xl border p-4 2xl:col-start-2 2xl:row-start-3 ${
+            <div className={`rounded-lg border p-2 sm:rounded-xl sm:p-3 xl:col-start-2 xl:row-start-3 2xl:rounded-2xl 2xl:p-4 ${
               isExcludedFromAnalytics
                 ? "border-amber-200 bg-amber-50/70"
                 : "border-slate-200 bg-white"
             }`}>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-sm font-semibold text-slate-900">
+                    <h3 className="text-[12px] font-bold leading-tight text-slate-900 sm:text-sm sm:font-semibold">
                       Writing behaviour analytics
                     </h3>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                    <span className={`rounded-full border px-1.5 py-0.5 text-[8px] font-semibold sm:px-2 sm:text-[10px] ${
                       isExcludedFromAnalytics
                         ? "border-amber-200 bg-white text-amber-700"
                         : "border-blue-100 bg-blue-50 text-blue-700"
@@ -6298,7 +7363,7 @@ function WritingBehaviourWorkspace({
                       {isExcludedFromAnalytics ? "Excluded" : "Optional"}
                     </span>
                   </div>
-                  <p className="mt-1 max-w-3xl text-xs leading-relaxed text-slate-600">
+                  <p className="mt-1 max-w-3xl text-[9px] leading-4 text-slate-600 sm:text-xs sm:leading-relaxed">
                     {isExcludedFromAnalytics
                       ? "This submission will not influence future writing-pattern comparisons. This does not affect the student's grade."
                       : "Exclude this submission only when its writing data is unreliable or unsuitable for future comparisons. This does not affect the grade."}
@@ -6313,7 +7378,7 @@ function WritingBehaviourWorkspace({
                   type="button"
                   onClick={toggleAnalyticsExclusion}
                   disabled={readOnly || isUpdatingAnalyticsExclusion || typeof onToggleAnalyticsExclusion !== "function"}
-                  className="shrink-0 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-semibold text-slate-700 shadow-sm transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:rounded-xl sm:px-3.5 sm:py-2 sm:text-xs"
                 >
                   {isUpdatingAnalyticsExclusion
                     ? "Saving..."
@@ -6344,14 +7409,14 @@ function WritingBehaviourWorkspace({
 function EvidencePill({ icon: Icon, label, alert = false }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-semibold ${
+      className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[8px] font-semibold leading-none sm:gap-1.5 sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px] ${
         alert
           ? "border-amber-200 bg-amber-50 text-amber-800"
           : "border-slate-200 bg-[#F8FAFC] text-slate-600"
       }`}
     >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
+      <Icon className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+      <span className="whitespace-nowrap">{label}</span>
     </span>
   );
 }
@@ -6899,7 +7964,8 @@ function InlineAnnotationToolbar({
         )}
       </div>
 
-      <div className={`flex flex-wrap gap-1.5 ${selectedText ? "" : "pointer-events-none opacity-50"}`}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className={`contents ${selectedText ? "" : "[&>*]:pointer-events-none [&>*]:opacity-50"}`}>
         {markCodes.map((codeItem) => (
           <MiniAnnotationButton
             key={codeItem.code}
@@ -6931,6 +7997,7 @@ function InlineAnnotationToolbar({
         onCreate={onCreateAnnotationCode}
         onDelete={onDeleteAnnotationCode}
       />
+      </div>
 
       {showNoteInput && (
         <div className="mt-2 space-y-1.5 rounded-lg border border-sky-100 bg-sky-50/60 p-2">
@@ -7115,7 +8182,7 @@ function AnnotationCodeManager({
   }
 
   return (
-    <div className="mt-2">
+    <>
       <button
         type="button"
         onMouseDown={(event) =>
@@ -7123,205 +8190,281 @@ function AnnotationCodeManager({
         }
         onClick={() => {
           setLocalError("");
-          setOpen((value) => !value);
+          setOpen(true);
         }}
-        className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1.5 text-[10px] font-bold transition-all ${
-          open
-            ? "border-blue-200 bg-blue-50 text-blue-700"
-            : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
-        }`}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+        aria-label="Manage annotation codes"
+        title="Manage codes"
       >
-        <Plus className="h-3 w-3" />
-        Manage codes
+        <Plus className="h-3.5 w-3.5" />
       </button>
 
-      {open && (
-        <div className="mt-2 rounded-xl border border-blue-100 bg-[#F8FAFC] p-3">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <p className="text-[11px] font-bold text-slate-900">
-                Reusable annotation codes
-              </p>
-
-              <p className="mt-0.5 text-[10px] leading-4 text-slate-500">
-                Your custom codes are saved to your instructor account and can be reused across assignments.
-              </p>
-            </div>
-
-            <span className="rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-[9px] font-bold text-slate-500">
-              {customAnnotationCodes.length} custom
-            </span>
-          </div>
-
-          {loading && (
-            <div className="mt-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[10px] text-slate-500">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Loading reusable codes…
-            </div>
-          )}
-
-          {!loading &&
-            customAnnotationCodes.length >
-              0 && (
-              <div className="mt-3 space-y-1.5">
-                {customAnnotationCodes.map(
-                  (item) => (
-                    <div
-                      key={
-                        item.id ||
-                        item.code
-                      }
-                      className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded bg-blue-50 px-1.5 py-0.5 font-mono text-[9px] font-bold text-blue-700">
-                            {item.code}
-                          </span>
-
-                          <span className="text-[10px] font-semibold text-slate-800">
-                            {item.label}
-                          </span>
-                        </div>
-
-                        {item.explanation && (
-                          <p className="mt-1 text-[10px] leading-4 text-slate-500">
-                            {
-                              item.explanation
-                            }
-                          </p>
-                        )}
+      {open &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-slate-900/10 p-2 backdrop-blur-[3px] sm:p-3 2xl:p-4"
+            onMouseDown={(event) => {
+              if (
+                event.target ===
+                event.currentTarget
+              ) {
+                setOpen(false);
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Manage annotation codes"
+              className="flex max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-[620px] min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl sm:max-h-[88dvh] sm:w-full 2xl:rounded-3xl"
+              onMouseDown={(event) =>
+                event.stopPropagation()
+              }
+            >
+              <div className="border-b border-slate-200 px-6 py-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-700">
+                        <Plus className="h-4.5 w-4.5" />
                       </div>
 
-                      <button
-                        type="button"
-                        onMouseDown={(
-                          event
-                        ) =>
-                          event.preventDefault()
-                        }
-                        disabled={
-                          deletingCode ===
-                          item.code
-                        }
-                        onClick={() =>
-                          handleDelete(
-                            item.code
+                      <div className="min-w-0">
+                        <h3 className="text-base font-bold text-slate-900">
+                          Manage annotation codes
+                        </h3>
+
+                        <p className="mt-1 text-[12px] leading-5 text-slate-500">
+                          Create reusable grading shortcuts for this instructor account.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-mono text-[10px] font-bold text-slate-500">
+                      {customAnnotationCodes.length} custom
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpen(false)
+                      }
+                      className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition hover:bg-slate-50 hover:text-slate-900"
+                      aria-label="Close"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                <section>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-900">
+                        Your saved codes
+                      </h4>
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        These appear beside the built-in annotation shortcuts.
+                      </p>
+                    </div>
+                  </div>
+
+                  {loading && (
+                    <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-[11px] text-slate-500">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading reusable codes…
+                    </div>
+                  )}
+
+                  {!loading &&
+                    customAnnotationCodes.length > 0 && (
+                      <div className="space-y-3">
+                        {customAnnotationCodes.map(
+                          (item) => (
+                            <div
+                              key={
+                                item.id ||
+                                item.code
+                              }
+                              className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded-lg border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700">
+                                    {item.code}
+                                  </span>
+
+                                  <span className="text-[12px] font-semibold text-slate-800">
+                                    {item.label}
+                                  </span>
+                                </div>
+
+                                {item.explanation && (
+                                  <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                                    {item.explanation}
+                                  </p>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={
+                                  deletingCode ===
+                                  item.code
+                                }
+                                onClick={() =>
+                                  handleDelete(
+                                    item.code
+                                  )
+                                }
+                                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                aria-label={`Delete ${item.code}`}
+                                title={`Delete ${item.code}`}
+                              >
+                                {deletingCode ===
+                                item.code ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-4 w-4" />
+                                )}
+                              </button>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    )}
+
+                </section>
+
+                <section className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-4">
+                    <h4 className="text-sm font-bold text-slate-900">
+                      Create a new code
+                    </h4>
+                    <p className="mt-1 text-[11px] leading-5 text-slate-500">
+                      Use a short code and an optional explanation that will be inserted as the default annotation comment.
+                    </p>
+                  </div>
+
+                  <form
+                    onSubmit={handleSubmit}
+                    className="space-y-4"
+                  >
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[110px_minmax(0,1fr)]">
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-semibold text-slate-700">
+                          Code
+                        </label>
+
+                        <input
+                          type="text"
+                          maxLength={8}
+                          value={code}
+                          onChange={(event) =>
+                            setCode(
+                              event.target.value
+                                .toUpperCase()
+                                .replace(
+                                  /[^A-Z0-9]/g,
+                                  ""
+                                )
+                            )
+                          }
+                          placeholder="e.g. WW"
+                          className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-mono text-[11px] font-bold uppercase text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-semibold text-slate-700">
+                          Name
+                        </label>
+
+                        <input
+                          type="text"
+                          value={name}
+                          onChange={(event) =>
+                            setName(
+                              event.target.value
+                            )
+                          }
+                          placeholder="e.g. Wrong Word"
+                          className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-[11px] text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-semibold text-slate-700">
+                        Explanation <span className="font-normal text-slate-400">(optional)</span>
+                      </label>
+
+                      <textarea
+                        rows={4}
+                        value={explanation}
+                        onChange={(event) =>
+                          setExplanation(
+                            event.target.value
                           )
                         }
-                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-red-100 bg-red-50 text-red-600 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        aria-label={`Delete ${item.code}`}
-                        title={`Delete ${item.code}`}
+                        placeholder="Write the explanation that should appear when this code is used."
+                        className="w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-[11px] leading-5 text-slate-800 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-500/10"
+                      />
+                    </div>
+
+                    {(localError ||
+                      apiError) && (
+                      <p className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-[10px] font-medium text-red-600">
+                        {localError ||
+                          apiError}
+                      </p>
+                    )}
+
+                    <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpen(false)
+                        }
+                        className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-[11px] font-bold text-slate-600 transition hover:bg-slate-100"
                       >
-                        {deletingCode ===
-                        item.code ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                        Cancel
+                      </button>
+
+                      <button
+                        type="submit"
+                        disabled={
+                          saving ||
+                          !code.trim() ||
+                          !name.trim()
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-[11px] font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {saving ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
                         ) : (
-                          <Trash2 className="h-3 w-3" />
+                          <Plus className="h-3.5 w-3.5" />
                         )}
+
+                        {saving
+                          ? "Saving"
+                          : "Add code"}
                       </button>
                     </div>
-                  )
-                )}
+                  </form>
+                </section>
               </div>
-            )}
-
-          {!loading &&
-            customAnnotationCodes.length ===
-              0 && (
-              <p className="mt-3 rounded-lg border border-dashed border-slate-200 bg-white px-3 py-3 text-center text-[10px] text-slate-500">
-                You have not created any custom codes yet.
-              </p>
-            )}
-
-          <form
-            onSubmit={handleSubmit}
-            className="mt-3 space-y-2 border-t border-slate-200 pt-3"
-          >
-            <p className="text-[10px] font-bold text-slate-700">
-              Add a reusable code
-            </p>
-
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[100px_minmax(0,1fr)]">
-              <input
-                type="text"
-                maxLength={8}
-                value={code}
-                onChange={(event) =>
-                  setCode(
-                    event.target.value
-                      .toUpperCase()
-                      .replace(
-                        /[^A-Z0-9]/g,
-                        ""
-                      )
-                  )
-                }
-                placeholder="CODE"
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 font-mono text-[10px] font-bold uppercase text-slate-800 outline-none focus:border-blue-400"
-              />
-
-              <input
-                type="text"
-                value={name}
-                onChange={(event) =>
-                  setName(
-                    event.target.value
-                  )
-                }
-                placeholder="Name, e.g. Unclear argument"
-                className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] text-slate-800 outline-none focus:border-blue-400"
-              />
             </div>
-
-            <textarea
-              rows={2}
-              value={explanation}
-              onChange={(event) =>
-                setExplanation(
-                  event.target.value
-                )
-              }
-              placeholder="Explanation shown when this code is used (optional)"
-              className="max-h-24 w-full resize-none rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-[10px] leading-4 text-slate-800 outline-none focus:border-blue-400"
-            />
-
-            {(localError ||
-              apiError) && (
-              <p className="text-[10px] font-medium text-red-600">
-                {localError ||
-                  apiError}
-              </p>
-            )}
-
-            <div className="flex justify-end">
-              <button
-                type="submit"
-                disabled={
-                  saving ||
-                  !code.trim() ||
-                  !name.trim()
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-[10px] font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {saving ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Plus className="h-3 w-3" />
-                )}
-
-                {saving
-                  ? "Saving"
-                  : "Add code"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-    </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
-
 function MiniAnnotationButton({ codeItem, addAnnotation }) {
   const isPositive = codeItem.code === "GOOD";
   const isNote = codeItem.code === "NOTE";
@@ -7368,6 +8511,7 @@ function ReviewModeSwitch({
     {
       id: "grading",
       label: "Grade and feedback",
+      mobileLabel: "Grade",
       icon: BookOpen,
       summary: "Main view",
       tone: "blue",
@@ -7376,6 +8520,7 @@ function ReviewModeSwitch({
     {
       id: "planning",
       label: "Planning activity",
+      mobileLabel: "Planning",
       icon: MessageSquare,
       summary: planningMessageCount + studentAiFeedbackCount,
       tone: "cyan",
@@ -7384,6 +8529,7 @@ function ReviewModeSwitch({
     {
       id: "writing",
       label: "Writing activity",
+      mobileLabel: "Writing",
       icon: Activity,
       summary: writingReplayCount,
       tone: "amber",
@@ -7392,11 +8538,11 @@ function ReviewModeSwitch({
   ];
 
   return (
-    <nav aria-label="Submission views" className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm sm:flex-row sm:items-center">
-      <span className="shrink-0 px-2 text-xs font-semibold text-slate-500">
+    <nav aria-label="Submission views" className="rounded-lg border border-slate-200 bg-white p-1 shadow-sm sm:flex sm:flex-row sm:items-center sm:gap-2 sm:rounded-2xl sm:p-2">
+      <span className="hidden shrink-0 px-2 text-xs font-semibold text-slate-500 sm:block">
         Choose a view
       </span>
-      <div className="grid min-w-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-3">
+      <div className="grid min-w-0 flex-1 grid-cols-3 gap-1 sm:gap-2">
         {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = reviewMode === tab.id;
@@ -7407,26 +8553,27 @@ function ReviewModeSwitch({
             type="button"
             disabled={tab.disabled}
             onClick={tab.onClick}
-            className={`min-w-0 rounded-xl border px-3 py-2 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+            className={`min-w-0 rounded-md border px-1 py-1.5 text-center transition-all disabled:cursor-not-allowed disabled:opacity-60 sm:rounded-xl sm:px-3 sm:py-2 sm:text-left ${
               isActive
                 ? "border-blue-300 bg-blue-50 text-blue-800 shadow-sm ring-2 ring-blue-500/10"
                 : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50/40"
             }`}
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2">
+            <div className="flex items-center justify-center gap-1 sm:justify-between sm:gap-2">
+              <div className="flex min-w-0 items-center justify-center gap-1 sm:justify-start sm:gap-2">
                 <Icon
                   className={`h-3.5 w-3.5 shrink-0 ${
                     tab.spinning ? "animate-spin" : ""
                   }`}
                 />
 
-                <span className="truncate text-[11px] font-bold">
-                  {tab.label}
+                <span className="truncate text-[9px] font-bold sm:text-[11px]">
+                  <span className="sm:hidden">{tab.mobileLabel}</span>
+                  <span className="hidden sm:inline">{tab.label}</span>
                 </span>
               </div>
 
-              <span className="shrink-0 rounded-md bg-white/70 px-1 py-0.5 text-[8px] font-mono font-bold">
+              <span className="hidden shrink-0 rounded-md bg-white/70 px-1 py-0.5 text-[8px] font-mono font-bold sm:inline-flex">
                 {tab.summary}
               </span>
             </div>
@@ -7465,7 +8612,7 @@ function ReviewTabs({
   hasAiSuggestion,
 }) {
   return (
-    <div className="grid grid-cols-1 gap-2 mt-4">
+    <div className="mt-2.5 grid grid-cols-3 gap-1.5 sm:mt-4 sm:gap-2">
       {REVIEW_TABS.map((tab) => {
         const Icon = tab.icon;
         const isActive = activeReviewTab === tab.id;
@@ -7489,17 +8636,17 @@ function ReviewTabs({
             key={tab.id}
             type="button"
             onClick={() => setActiveReviewTab(tab.id)}
-            className={`rounded-xl border px-3 py-2.5 text-left transition-all ${
+            className={`min-w-0 rounded-lg border px-1.5 py-2 text-center transition-all sm:rounded-xl sm:px-3 sm:py-2.5 sm:text-left ${
               isActive
                 ? "bg-blue-50 border-blue-300 ring-4 ring-blue-500/10 text-blue-800"
                 : "bg-[#F8FAFC] border-slate-200 hover:bg-white hover:border-blue-200 text-slate-600"
             }`}
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
+            <div className="flex min-w-0 items-center justify-center gap-1 sm:justify-between sm:gap-2">
+              <div className="flex min-w-0 items-center justify-center gap-1 sm:justify-start sm:gap-2">
                 <Icon className="w-3.5 h-3.5 shrink-0" />
 
-                <span className="text-[11px] font-bold truncate">
+                <span className="truncate text-[9px] font-bold sm:text-[11px]">
                   {tab.label}
                 </span>
               </div>
@@ -7618,19 +8765,19 @@ function RubricScorePanel({
   }
 
   return (
-    <div className="w-full space-y-2">
-      <div className="rounded-xl border border-slate-200 bg-white p-2.5">
-        <div className="mb-2 flex flex-col gap-2 border-b border-slate-100 pb-2 sm:flex-row sm:items-center sm:justify-between">
+    <div className="w-full space-y-1.5 sm:space-y-2">
+      <div className="rounded-lg border border-slate-200 bg-white p-2 sm:rounded-xl sm:p-2.5">
+        <div className="mb-1.5 flex items-center justify-between gap-2 border-b border-slate-100 pb-1.5 sm:mb-2 sm:flex-row sm:pb-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <ClipboardList className="h-4 w-4 shrink-0 text-blue-600" />
+              <ClipboardList className="h-3.5 w-3.5 shrink-0 text-blue-600 sm:h-4 sm:w-4" />
 
-              <h3 className="truncate text-sm font-bold text-slate-900">
+              <h3 className="truncate text-[12px] font-bold leading-tight text-slate-900 sm:text-sm">
                 {rubric?.title || "Rubric Grading Workspace"}
               </h3>
             </div>
 
-            <p className="mt-1 text-[10px] text-slate-500">
+            <p className="mt-0.5 text-[9px] text-slate-500 sm:mt-1 sm:text-[10px]">
               {gradedCriteriaCount}/{rubricCriteria.length} graded
               <span className="mx-1.5 text-slate-300">·</span>
               {rubricScoreTotal}/{rubricTotal}
@@ -7649,13 +8796,13 @@ function RubricScorePanel({
               </button>
             )}
 
-            <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 font-mono text-xs font-black text-blue-700">
+            <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-1 font-mono text-[10px] font-black text-blue-700 sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-xs">
               {rubricScoreTotal}/{rubricTotal}
             </span>
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-2 sm:space-y-3">
           {rubricCriteria.map((criterion, index) => {
             const entry = getScoreEntry(rubricScores, criterion.id);
 
@@ -7690,23 +8837,23 @@ function CriterionAccordion({
   );
 
   return (
-    <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-white px-3 py-2.5">
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white sm:rounded-xl">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 bg-white px-2.5 py-2 sm:gap-3 sm:px-3 sm:py-2.5">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold text-blue-600">
+          <p className="text-[9px] font-semibold text-blue-600 sm:text-[11px]">
             Criterion {index + 1}
           </p>
-          <h3 className="truncate text-sm font-semibold text-slate-950">
+          <h3 className="truncate text-[12px] font-semibold leading-tight text-slate-950 sm:text-sm">
             {criterion.name}
           </h3>
         </div>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
           <button
             type="button"
             onClick={() => adjustCriterionScore(criterion, -0.5)}
             aria-label={`Decrease ${criterion.name} score`}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700 sm:rounded-lg"
           >
             <Minus className="h-3 w-3" />
           </button>
@@ -7718,23 +8865,23 @@ function CriterionAccordion({
             value={entry.score}
             onChange={(event) => updateCriterionScore(criterion, event.target.value)}
             aria-label={`${criterion.name} score`}
-            className="h-7 w-14 rounded-lg border border-blue-100 bg-blue-50 px-1 text-center font-mono text-xs font-black text-blue-700 focus:border-blue-500 focus:outline-none"
+            className="h-7 w-12 rounded-md border border-blue-100 bg-blue-50 px-1 text-center font-mono text-[16px] font-black text-blue-700 focus:border-blue-500 focus:outline-none sm:w-14 sm:rounded-lg sm:text-xs"
           />
-          <span className="text-[10px] font-bold text-slate-400">/{criterion.points}</span>
+          <span className="text-[9px] font-bold text-slate-400 sm:text-[10px]">/{criterion.points}</span>
           <button
             type="button"
             onClick={() => adjustCriterionScore(criterion, 0.5)}
             aria-label={`Increase ${criterion.name} score`}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700 sm:rounded-lg"
           >
             <Plus className="h-3 w-3" />
           </button>
         </div>
       </div>
 
-      <div className="p-2.5">
+      <div className="p-2 sm:p-2.5">
         <div
-          className="grid gap-1.5"
+          className="grid gap-1 sm:gap-1.5"
           style={{ gridTemplateColumns: `repeat(${Math.max(1, safeArray(criterion.bands).length)}, minmax(0, 1fr))` }}
         >
           {safeArray(criterion.bands).map((band) => {
@@ -7746,16 +8893,16 @@ function CriterionAccordion({
                 key={band.id}
                 type="button"
                 onClick={() => selectBand(criterion, band)}
-                className={`min-w-0 rounded-lg border px-2 py-1.5 text-center transition-all ${
+                className={`min-w-0 rounded-md border px-1 py-1 text-center transition-all sm:rounded-lg sm:px-2 sm:py-1.5 ${
                   isSelected
                     ? "border-blue-500 bg-blue-50 text-blue-800 ring-2 ring-blue-500/10"
                     : "border-slate-200 bg-white text-slate-600 hover:border-blue-200 hover:bg-blue-50/40"
                 }`}
               >
-                <span className="block truncate text-[11px] font-semibold">
+                <span className="block truncate text-[9px] font-semibold sm:text-[11px]">
                     {band.label}
                 </span>
-                <span className="mt-0.5 block font-mono text-[9px] font-bold opacity-75">
+                <span className="mt-0.5 block font-mono text-[8px] font-bold opacity-75 sm:text-[9px]">
                   {band.points} pts
                 </span>
               </button>
@@ -7764,7 +8911,7 @@ function CriterionAccordion({
         </div>
 
         {selectedBand?.description && (
-          <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/50 px-3 py-2 text-[11px] leading-5 text-slate-700">
+          <div className="mt-1.5 rounded-md border border-blue-100 bg-blue-50/50 px-2 py-1.5 text-[10px] leading-4 text-slate-700 sm:mt-2 sm:rounded-lg sm:px-3 sm:py-2 sm:text-[11px] sm:leading-5">
             <span className="font-bold text-slate-900">
               {selectedBand.label} — {selectedBand.points} pts.{" "}
             </span>
@@ -7823,13 +8970,13 @@ function FeedbackPanel({ feedback, setFeedback }) {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center justify-between gap-3">
-        <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-          <MessageSquare className="h-3.5 w-3.5 text-blue-600" />
+      <div className="flex items-center justify-between gap-2">
+        <label className="flex items-center gap-1 text-[10px] font-semibold text-slate-600 sm:gap-1.5 sm:text-xs">
+          <MessageSquare className="h-3 w-3 text-blue-600 sm:h-3.5 sm:w-3.5" />
           Overall feedback
         </label>
 
-        <span className="text-[10px] text-slate-400">
+        <span className="text-[9px] text-slate-400 sm:text-[10px]">
           {characterCount} characters
         </span>
       </div>
@@ -7838,7 +8985,7 @@ function FeedbackPanel({ feedback, setFeedback }) {
         value={feedback}
         onChange={(event) => setFeedback(event.target.value)}
         placeholder="Write clear, actionable feedback for the student..."
-        className="mt-2 min-h-[190px] w-full resize-y rounded-2xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs leading-6 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+        className="mt-1 min-h-[92px] w-full resize-y rounded-lg border border-slate-200 bg-[#F8FAFC] px-2.5 py-1.5 text-[16px] leading-[1.35] text-slate-900 outline-none transition-all placeholder:text-[10px] placeholder:leading-4 placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-500/10 sm:mt-2 sm:min-h-[190px] sm:rounded-2xl sm:p-3 sm:text-xs sm:leading-6 sm:placeholder:text-xs sm:focus:ring-4"
       />
 
     </div>

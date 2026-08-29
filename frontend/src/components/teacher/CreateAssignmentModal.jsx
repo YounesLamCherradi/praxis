@@ -61,6 +61,28 @@ function waitForRubricPoll() {
   });
 }
 
+function normalizePlainTextInstructions(value) {
+  let text = String(value ?? "")
+    .replace(/\r\n?/g, "\n");
+
+  // Student Instructions are edited/displayed as plain text,
+  // so remove common Markdown presentation markers.
+  text = text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/__([^_\n]+)__/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*\*\s+/gm, "- ");
+
+  // Keep readable paragraph spacing without excessive blank lines.
+  text = text
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  return text;
+}
+
 function normalizeStudentLevelOption(value) {
   const level = String(value || "").trim();
   return STUDENT_LEVELS.includes(level) ? level : "B1";
@@ -343,14 +365,13 @@ export default function CreateAssignmentModal({
   const selectedCourse = useMemo(() => {
     return (
       selectableClasses.find(
-        (cls) => cls.code === course || cls.name === course
-      ) ||
-      selectableClasses.find(
-        (cls) => String(cls.id) === String(defaultClassId)
-      ) ||
-      null
+        (cls) =>
+          String(cls.id) === String(course) ||
+          cls.code === course ||
+          cls.name === course
+      ) || null
     );
-  }, [selectableClasses, course, defaultClassId]);
+  }, [selectableClasses, course]);
 
   const rubricTotal = calculateTotal(criteria);
   const effectiveGradeScale =
@@ -512,7 +533,25 @@ export default function CreateAssignmentModal({
     setCreationMode(parsed.creationMode === "manual" ? "manual" : "ai");
     setTitle(String(parsed.title || ""));
     setDescription(String(parsed.description || ""));
-    setCourse(String(parsed.course || ""));
+    {
+      const restoredCourse =
+        String(parsed.course || "").trim();
+
+      const restoredCourseIsSelectable =
+        selectableClasses.some(
+          (cls) =>
+            String(cls.id) === restoredCourse ||
+            cls.code === restoredCourse ||
+            cls.name === restoredCourse
+        );
+
+      if (
+        restoredCourse &&
+        restoredCourseIsSelectable
+      ) {
+        setCourse(restoredCourse);
+      }
+    }
     setDueDate(String(parsed.dueDate || ""));
     const parsedType = String(parsed.assignmentType || "").trim();
     if (ASSIGNMENT_TYPES.includes(parsedType) && parsedType !== "Other") {
@@ -763,18 +802,36 @@ export default function CreateAssignmentModal({
     }
 
     setIsClosingDraft(true);
+
     try {
+      // Persist the unfinished builder as a real Draft assignment so it
+      // appears immediately in the teacher's existing Draft assignment list.
+      //
+      // The assignment-builder snapshot is still kept separately so opening
+      // the draft can recover the exact builder step and in-progress fields.
+      const persistedDraftId =
+        await persistDraftAssignmentRecord();
+
       await saveAssignmentBuilderDraft({
         ...draftSnapshot,
-        draftAssignmentId: draftAssignmentId || "",
+        draftAssignmentId:
+          persistedDraftId ||
+          draftAssignmentId ||
+          "",
       });
+
       setDraftConfirmation(null);
       onClose();
     } catch (error) {
-      console.error("Could not save the assignment draft before closing:", error);
+      console.error(
+        "Could not save the assignment draft before closing:",
+        error
+      );
+
       setGenerationError(
         "The draft could not be saved. Keep editing and try again."
       );
+
       setDraftConfirmation(null);
     } finally {
       setIsClosingDraft(false);
@@ -794,7 +851,7 @@ export default function CreateAssignmentModal({
           generatedDraft &&
             title.trim() &&
             description.trim() &&
-            course &&
+            selectedCourse &&
             dueDate &&
             aiBrief.trim() &&
             hasValidAssignmentType &&
@@ -803,7 +860,7 @@ export default function CreateAssignmentModal({
       : Boolean(
           title.trim() &&
             description.trim() &&
-            course &&
+            selectedCourse &&
             dueDate &&
             hasValidAssignmentType &&
             hasValidWordRange
@@ -812,7 +869,10 @@ export default function CreateAssignmentModal({
   useEffect(() => {
     if (!editingAssignment) {
       const courseIsSelectable = selectableClasses.some(
-        (cls) => cls.code === course || cls.name === course
+        (cls) =>
+          String(cls.id) === String(course) ||
+          cls.code === course ||
+          cls.name === course
       );
 
       if (!courseIsSelectable) {
@@ -831,7 +891,15 @@ export default function CreateAssignmentModal({
     setTitle(editingAssignment.title || "");
 
     setDescription(
-      editingAssignment.instructions || editingAssignment.description || ""
+      editingAssignment.creationMode === "ai"
+        ? normalizePlainTextInstructions(
+            editingAssignment.instructions ||
+              editingAssignment.description ||
+              ""
+          )
+        : editingAssignment.instructions ||
+            editingAssignment.description ||
+            ""
     );
 
     setCourse(editingAssignment.classCode || editingAssignment.className || "");
@@ -1541,19 +1609,135 @@ export default function CreateAssignmentModal({
 
     try {
       const generationStartedAt = new Date();
+
+      // Keep normal Student Instructions focused on the assignment itself.
+      // Rubric criteria must not be duplicated into the instructions.
+      //
+      // The only exception is a rubric criterion explicitly named as a
+      // Process criterion. In that case, give students one short notice
+      // explaining that their writing process is part of the assessment.
+      //
+      // Match the criterion NAME only. Other rubric descriptors may mention
+      // a "Process essay", which does not make them Process criteria.
+      const processCriteriaForInstructions = safeArray(criteria).filter(
+        (criterion) =>
+          /\bprocess\b/i.test(
+            String(criterion?.name || "").trim()
+          )
+      );
+
+      const processRubricContext =
+        processCriteriaForInstructions
+          .map((criterion) => {
+            const bands = safeArray(criterion?.bands)
+              .map((band) => {
+                const label =
+                  String(band?.label || "").trim();
+
+                const description =
+                  String(
+                    band?.description || ""
+                  ).trim();
+
+                if (!label && !description) {
+                  return "";
+                }
+
+                return [
+                  label || "Level",
+                  description,
+                ]
+                  .filter(Boolean)
+                  .join(": ");
+              })
+              .filter(Boolean)
+              .join(" | ");
+
+            return [
+              `Criterion: ${String(
+                criterion?.name || "Writing Process"
+              ).trim()}`,
+              String(
+                criterion?.description || ""
+              ).trim(),
+              bands
+                ? `Performance descriptors: ${bands}`
+                : "",
+            ]
+              .filter(Boolean)
+              .join("\n");
+          })
+          .filter(Boolean)
+          .join("\n\n");
+
+      const rubricAwareTeacherRequest = [
+        teacherRequest,
+        "",
+        "STUDENT INSTRUCTIONS FORMAT:",
+        "- Write the Student Instructions as clean plain text.",
+        "- Do not use Markdown formatting.",
+        "- Do not use **bold**, __bold__, # headings, backticks, or Markdown tables.",
+        "- Normal plain-text bullets beginning with - are allowed.",
+
+        processCriteriaForInstructions.length
+          ? ""
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "WRITING PROCESS NOTICE:"
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "- Keep the normal Student Instructions focused on the writing task, required structure, word range, level, and the instructor's request."
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "- Do NOT list, summarize, or explain the other rubric criteria in Student Instructions."
+          : "",
+
+        processCriteriaForInstructions.length
+          ? '- Do NOT create a section such as "Your essay will be assessed on five areas" or enumerate Task Response, Coherence, Vocabulary, Grammar, or other non-Process criteria.'
+          : "",
+
+        processCriteriaForInstructions.length
+          ? '- Add only ONE short student-facing section titled "Writing Process" near the end of the instructions.'
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "- In that short section, clearly tell the student that the writing process itself is part of the assessment."
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "- Mention only process actions actually supported by the Process criterion below, such as planning, outline use, drafting, feedback-driven revision, or reflection. Do not invent additional requirements."
+          : "",
+
+        processCriteriaForInstructions.length
+          ? "- Keep the Writing Process notice concise: normally 2-4 short sentences or bullets."
+          : "",
+
+        processCriteriaForInstructions.length
+          ? `Process criterion evidence:\n${processRubricContext}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
       const data = await runAiJob("generate", {
           system: buildAssignmentGenerationSystemPrompt(),
           messages: [
             {
               role: "user",
               content: buildAssignmentGenerationUserPrompt({
-                teacherRequest,
+                teacherRequest: rubricAwareTeacherRequest,
                 availableCourses: selectableClasses,
                 currentDate: generationStartedAt.toISOString(),
                 gradeScale,
-                rubricTitle,
-                criteria,
-                uploadedRubricText,
+                rubricTitle:
+                  processCriteriaForInstructions.length
+                    ? rubricTitle
+                    : "",
+                criteria: processCriteriaForInstructions,
+                uploadedRubricText: "",
               }),
             },
           ],
@@ -1567,9 +1751,11 @@ export default function CreateAssignmentModal({
         generated.title || "Generated Writing Assignment";
 
       const generatedInstructions =
-        generated.instructions ||
-        generated.description ||
-        "";
+        normalizePlainTextInstructions(
+          generated.instructions ||
+            generated.description ||
+            ""
+        );
 
       if (!generatedInstructions.trim()) {
         throw new Error(
@@ -1627,42 +1813,6 @@ export default function CreateAssignmentModal({
           generated.dueDate ||
           getDefaultDueDateValue(7)
       );
-
-      const requestedCourseKey = normalizeCourseKey(
-        generated.classCode ||
-          generated.courseCode ||
-          generated.className ||
-          generated.classId
-      );
-
-      const generatedCourse =
-        selectableClasses.find((item) => {
-          const keys = [
-            item?.id,
-            item?.code,
-            item?.name,
-            `${item?.code || ""}${item?.name || ""}`,
-          ].map(normalizeCourseKey);
-
-          return (
-            requestedCourseKey &&
-            keys.includes(requestedCourseKey)
-          );
-        }) ||
-        selectedCourse ||
-        (selectableClasses.length === 1
-          ? selectableClasses[0]
-          : null) ||
-        null;
-
-      if (generatedCourse) {
-        setCourse(
-          generatedCourse.code ||
-            generatedCourse.name ||
-            generatedCourse.id ||
-            ""
-        );
-      }
 
       const support = generated.aiSupport || {};
 
@@ -1925,20 +2075,20 @@ export default function CreateAssignmentModal({
   }
 
   const modalContent = (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-2 overflow-y-auto">
+    <div className="fixed inset-0 z-[2147483647] flex items-stretch justify-center overflow-hidden p-0 sm:items-center sm:overflow-y-auto sm:p-3">
       <div
         className="absolute inset-0 z-0 bg-slate-950/55 backdrop-blur-md"
       />
 
       <div
         ref={modalScrollRef}
-        className={`assignment-builder-readable relative z-10 my-6 max-h-[92vh] w-[calc(100vw-2rem)] overflow-y-auto rounded-3xl border border-slate-200 bg-white p-5 shadow-2xl animate-fade-in-up sm:p-6 ${
+        className={`assignment-builder-readable relative z-10 flex h-[100dvh] w-full flex-col overflow-hidden border-0 bg-white p-0 shadow-2xl animate-fade-in-up sm:my-3 sm:h-auto sm:max-h-[92dvh] sm:w-[calc(100vw-2rem)] sm:overflow-y-auto sm:rounded-3xl sm:border sm:border-slate-200 sm:p-6 ${
           pendingDraft && !editingAssignment ? "max-w-[760px]" : "max-w-[1500px]"
         }`}
       >
-        <div className="flex items-start justify-between gap-4 mb-6 pb-4 border-b border-slate-200">
-          <div className="space-y-1">
-            <h2 className="text-2xl font-serif font-black text-slate-950">
+        <div className="sticky top-0 z-20 flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2.5 sm:static sm:mb-6 sm:gap-4 sm:bg-transparent sm:px-0 sm:pb-4 sm:pt-0">
+          <div className="min-w-0 flex-1 space-y-0.5 sm:space-y-1">
+            <h2 className="truncate font-serif text-[18px] font-black leading-tight text-slate-950 sm:text-2xl">
               {editingAssignment
                 ? "Edit Assignment"
                 : pendingDraft
@@ -1946,7 +2096,7 @@ export default function CreateAssignmentModal({
                 : "Create Assignment"}
             </h2>
 
-            <p className="text-base text-slate-600 font-medium leading-relaxed lg:whitespace-nowrap">
+            <p className="line-clamp-2 max-w-[88%] text-[11px] font-medium leading-4 text-slate-500 sm:max-w-none sm:text-base sm:leading-relaxed lg:whitespace-nowrap">
               {pendingDraft && !editingAssignment
                 ? "Review the recovered draft before deciding how to continue."
                 : "Choose the creation mode first, then configure rubric, details, student support, and review the assignment before saving."}
@@ -1956,7 +2106,7 @@ export default function CreateAssignmentModal({
           <button
             type="button"
             onClick={closeModalAndKeepDraft}
-            className="p-2 rounded-xl hover:bg-[#F8FAFC] text-slate-400 border border-transparent hover:border-slate-200 transition-all"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-transparent p-0 text-slate-400 transition-all hover:border-slate-200 hover:bg-[#F8FAFC] sm:h-auto sm:w-auto sm:rounded-xl sm:p-2"
           >
             <X className="w-4 h-4 stroke-[2.5]" />
           </button>
@@ -2037,7 +2187,7 @@ export default function CreateAssignmentModal({
         )}
 
         <div
-          className={pendingDraft && !editingAssignment ? "hidden" : "space-y-6"}
+          className={pendingDraft && !editingAssignment ? "hidden" : "min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:block sm:overflow-visible sm:px-0 sm:pb-0 sm:pt-0 sm:space-y-6"}
           data-assignment-builder-step={step}
         >
           {step === 1 && (

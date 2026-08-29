@@ -175,8 +175,8 @@ export default function ForgotPasswordDialog({ open, onClose }) {
   }
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 backdrop-blur-sm p-4">
-      <div className="w-full max-w-md rounded-3xl bg-white border border-slate-200 shadow-2xl p-6">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/35 p-2 backdrop-blur-sm sm:p-3 xl:p-4">
+      <div className="max-h-[calc(100dvh-1rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl sm:max-h-[92dvh] sm:p-5 2xl:rounded-3xl 2xl:p-6">
         <h3 className="text-xl font-bold text-slate-950">Reset password</h3>
         <p className="text-xs text-blue-700 mt-1">Use your email verification code to set a new password.</p>
 

@@ -315,7 +315,7 @@ export default function AssignmentTray() {
     <div className="space-y-3">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">
+          <h2 className="text-xl font-semibold text-slate-900 sm:text-2xl">
             Your assignments
           </h2>
           <p
@@ -327,7 +327,7 @@ export default function AssignmentTray() {
         </div>
 
         <div
-          className="flex w-fit max-w-full flex-wrap gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
+          className="grid w-full grid-cols-2 gap-1 rounded-xl border border-slate-200 bg-white p-1 shadow-sm sm:flex sm:w-fit sm:max-w-full sm:flex-wrap"
           aria-label="Filter assignments by status"
         >
           {filters.map((filter) => (
@@ -336,7 +336,7 @@ export default function AssignmentTray() {
               type="button"
               onClick={() => setActiveFilter(filter.id)}
               aria-pressed={activeFilter === filter.id}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-semibold transition ${
+              className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg px-2 py-1.5 text-[10px] font-semibold transition sm:min-h-0 sm:px-2.5 sm:text-[11px] ${
                 activeFilter === filter.id
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                   : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
@@ -357,11 +357,11 @@ export default function AssignmentTray() {
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
       {filteredAssignments.length === 0 ? (
-        <div className="col-span-full border border-dashed border-slate-300 rounded-2xl p-12 text-center text-xs font-mono text-slate-400 uppercase tracking-widest bg-[#F8FAFC]/70">
+        <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-[#F8FAFC]/70 p-6 text-center font-mono text-[10px] uppercase tracking-wider text-slate-400 sm:p-12 sm:text-xs sm:tracking-widest">
           No assignments found for this course.
         </div>
       ) : displayedAssignments.length === 0 ? (
-        <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
+        <div className="col-span-full rounded-2xl border border-dashed border-slate-300 bg-white/70 p-6 text-center sm:p-8">
           <p className="text-sm font-semibold text-slate-700">Nothing here right now</p>
           <p className="mt-1 text-xs text-slate-500">Choose another tab to view your other assignments.</p>
         </div>
@@ -383,11 +383,11 @@ export default function AssignmentTray() {
           return (
             <div
               key={assignment.id}
-              className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 transition-all hover:border-blue-200 hover:shadow-md hover:shadow-blue-100/50"
+              className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-3.5 transition-all hover:border-blue-200 hover:shadow-md hover:shadow-blue-100/50 sm:p-4"
             >
               <div className="space-y-2.5">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="max-w-[48%] truncate rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                <div className="flex min-w-0 items-center justify-between gap-2">
+                  <span className="min-w-0 max-w-[55%] truncate rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700 sm:max-w-[48%]">
                     {getCourseName(assignment)}
                   </span>
 
@@ -411,15 +411,15 @@ export default function AssignmentTray() {
                 </div>
 
                 <div className="space-y-1">
-                  <h3 className="line-clamp-1 text-sm font-semibold text-slate-900">
+                  <h3 className="line-clamp-2 text-sm font-semibold leading-5 text-slate-900 sm:line-clamp-1">
                     {assignment.title}
                   </h3>
-                  <p className="line-clamp-1 text-xs text-slate-500">
+                  <p className="line-clamp-2 text-xs leading-5 text-slate-500 sm:line-clamp-1">
                     {assignment.description || assignment.prompt}
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between gap-3 text-[11px] font-medium text-slate-500">
+                <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5 text-[11px] font-medium text-slate-500">
                   <span className="inline-flex items-center gap-1.5 font-mono">
                     <FileText className="w-3.5 h-3.5 text-blue-400" />
                     {assignment.wordCountMin || assignment.minWords || 0}+ words

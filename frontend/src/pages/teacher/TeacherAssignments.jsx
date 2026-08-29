@@ -21,6 +21,10 @@ import {
 
 import { useTeacherWorkspace } from "../../hooks/useTeacherWorkspace";
 
+import {
+  getAssignmentBuilderDraft,
+} from "../../services/teacherApi";
+
 const ASSIGNMENTS_PER_PAGE = 8;
 
 function getPaginationItems(currentPage, totalPages) {
@@ -90,6 +94,49 @@ function normalizeAssignmentStatus(assignment) {
   return "Draft";
 }
 
+function getAssignmentLifecycleStatus(
+  assignment,
+  builderDraftAssignmentId = ""
+) {
+  const publicationStatus =
+    normalizeAssignmentStatus(
+      assignment
+    );
+
+  if (
+    publicationStatus ===
+    "Published"
+  ) {
+    return "Published";
+  }
+
+  const assignmentId =
+    String(
+      assignment?.id || ""
+    );
+
+  const recoveryAssignmentId =
+    String(
+      builderDraftAssignmentId || ""
+    );
+
+  /*
+   * The active builder recovery record is the authoritative
+   * signal that creation has not been completed yet.
+   */
+  if (
+    assignmentId &&
+    recoveryAssignmentId &&
+    assignmentId ===
+      recoveryAssignmentId
+  ) {
+    return "In progress";
+  }
+
+  return "Draft";
+}
+
+
 function getAssignmentCriteriaCount(assignment = {}) {
   const schemaCriteria = Array.isArray(assignment?.rubricSchema?.criteria)
     ? assignment.rubricSchema.criteria
@@ -156,6 +203,11 @@ function getStatusStyles(status) {
   if (status === "Published") {
     return "border-blue-200 bg-blue-50 text-blue-700";
   }
+
+  if (status === "In progress") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
   return "border-slate-200 bg-slate-50 text-slate-600";
 }
 
@@ -354,12 +406,72 @@ export default function TeacherAssignments({
   } = useTeacherWorkspace();
 
   const [selectedClassId, setSelectedClassId] = useState("");
+
+  useEffect(() => {
+    /*
+     * Do not re-fetch while the teacher is actively editing
+     * the builder. Refresh once the assignment list becomes
+     * active again.
+     */
+    if (
+      view === "create" ||
+      view === "edit"
+    ) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function refreshBuilderLifecycle() {
+      try {
+        const draft =
+          await getAssignmentBuilderDraft();
+
+        if (cancelled) {
+          return;
+        }
+
+        setBuilderDraftAssignmentId(
+          String(
+            draft?.draftAssignmentId ||
+              ""
+          )
+        );
+      } catch (error) {
+        console.warn(
+          "Could not determine assignment builder state:",
+          error
+        );
+
+        if (!cancelled) {
+          setBuilderDraftAssignmentId(
+            ""
+          );
+        }
+      }
+    }
+
+    refreshBuilderLifecycle();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    view,
+    assignments.length,
+  ]);
+
   const [pendingCreateCourseId, setPendingCreateCourseId] = useState("");
   const [selectedAssignmentId, setSelectedAssignmentId] = useState("");
   const [submissionStatusFilter, setSubmissionStatusFilter] = useState("All");
   const [assignmentSearch, setAssignmentSearch] = useState("");
   const [assignmentStatusFilter, setAssignmentStatusFilter] = useState("All");
   const [assignmentGradingFilter, setAssignmentGradingFilter] = useState("All");
+
+  const [
+    builderDraftAssignmentId,
+    setBuilderDraftAssignmentId,
+  ] = useState("");
   const [assignmentPage, setAssignmentPage] = useState(1);
   const [statusChangeAssignmentId, setStatusChangeAssignmentId] = useState("");
   const [statusChangeMessage, setStatusChangeMessage] = useState("");
@@ -614,23 +726,34 @@ export default function TeacherAssignments({
     setView("list");
   }, [workspaceRequest?.requestId]);
 
-  // Get cumulative global pending counts
+  // Pending-review shortcut follows the same course scope as the list.
+  //
+  // All courses:
+  //   -> count/search across every active assignment.
+  //
+  // Specific course:
+  //   -> count/search only inside that course.
+  const pendingScopeAssignments =
+    selectedClass ? courseAssignments : activeAssignments;
+
   const totalPendingSubmissions = useMemo(() => {
-    return activeAssignments.reduce(
+    return pendingScopeAssignments.reduce(
       (sum, assignment) =>
         sum + getPendingSubmissionCount(assignment, submissions),
       0
     );
-  }, [activeAssignments, submissions]);
+  }, [pendingScopeAssignments, submissions]);
 
-  // Select shortcut for the first assignment containing pending reviews
+  // Select the first assignment containing a pending review
+  // inside the current course scope.
   const firstPendingAssignment = useMemo(() => {
     return (
-      activeAssignments.find(
-        (assignment) => getPendingSubmissionCount(assignment, submissions) > 0
+      pendingScopeAssignments.find(
+        (assignment) =>
+          getPendingSubmissionCount(assignment, submissions) > 0
       ) || null
     );
-  }, [activeAssignments, submissions]);
+  }, [pendingScopeAssignments, submissions]);
 
   // Action: Review Pending Shortcut
   function handleReviewPending() {
@@ -651,6 +774,25 @@ export default function TeacherAssignments({
     setView("list");
   }
 
+  function handleCreateAssignmentFromList() {
+    if (activeClasses.length === 0) return;
+
+    setPendingCreateCourseId("");
+
+    setSelectedClassId(
+      activeClasses.length === 1
+        ? String(activeClasses[0].id)
+        : ""
+    );
+
+    setSelectedAssignmentId("");
+    setSubmissionStatusFilter("All");
+    setSelectedAssignment(null);
+    setSubmissionFilterAssignment(null);
+
+    setView("create");
+  }
+
   if (isWorkspaceLoading) {
     return <WorkspaceLoading />;
   }
@@ -659,10 +801,15 @@ export default function TeacherAssignments({
     workspaceRequest?.requestId &&
     appliedWorkspaceRequestRef.current !== workspaceRequest.requestId;
 
+  const explicitCreateCourseId =
+    workspaceRequest?.mode === "create"
+      ? workspaceRequest?.courseId
+      : null;
+
   const needsCourseSelectionForCreate =
     view === "create" &&
     activeClasses.length > 1 &&
-    !workspaceRequest?.courseId &&
+    !explicitCreateCourseId &&
     (isNewUnappliedCreateRequest || !selectedClassId);
 
   if (needsCourseSelectionForCreate) {
@@ -695,25 +842,30 @@ export default function TeacherAssignments({
 
     return createPortal(
       <div
-        className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+        className="fixed inset-0 z-[100] flex items-stretch justify-center overflow-hidden bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-3 xl:p-4"
         role="dialog"
         aria-modal="true"
         aria-labelledby="course-picker-title"
       >
-        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-[1.75rem] border border-slate-200 bg-white shadow-2xl">
+        <div className="flex h-[100dvh] w-full flex-col overflow-hidden border-0 bg-white shadow-2xl sm:h-auto sm:max-h-[88dvh] sm:max-w-3xl sm:rounded-[1.75rem] sm:border sm:border-slate-200">
 
-          <div className="flex shrink-0 items-start justify-between gap-5 px-6 py-5 sm:px-8">
+          <div className="sticky top-0 z-10 flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 bg-white px-3 py-2.5 sm:static sm:gap-5 sm:border-b-0 sm:px-8 sm:py-5">
             <div>
               <h2
                 id="course-picker-title"
-                className="font-serif text-xl font-black text-slate-950"
+                className="font-serif text-[18px] font-black leading-tight text-slate-950 sm:text-xl"
               >
                 Create Assignment
               </h2>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Choose the course first, then choose how you would
-                like to create the assignment.
+              <p className="mt-0.5 max-w-[290px] text-[11px] leading-4 text-slate-500 sm:mt-1 sm:max-w-none sm:text-sm sm:leading-relaxed">
+                <span className="sm:hidden">
+                  Choose a course to continue.
+                </span>
+                <span className="hidden sm:inline">
+                  Choose the course first, then choose how you would
+                  like to create the assignment.
+                </span>
               </p>
             </div>
 
@@ -721,29 +873,29 @@ export default function TeacherAssignments({
               type="button"
               onClick={cancelCourseSelection}
               aria-label="Close"
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
             >
               ×
             </button>
           </div>
 
-          <div className="border-t border-slate-200 px-6 py-6 sm:px-8">
-            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">
+          <div className="px-3 py-3 sm:border-t sm:border-slate-200 sm:px-8 sm:py-6">
+            <p className="font-mono text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500 sm:text-[10px] sm:tracking-[0.16em]">
               Course
             </p>
 
-            <h3 className="mt-1 font-serif text-2xl font-black text-slate-950">
+            <h3 className="mt-0.5 font-serif text-[17px] font-black leading-tight text-slate-950 sm:mt-1 sm:text-2xl">
               Which course is this assignment for?
             </h3>
 
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-1 text-[10px] leading-4 text-slate-500 sm:mt-2 sm:text-sm">
               Select one course to continue.
             </p>
           </div>
 
-          <div className="px-6 pb-7 sm:px-8">
+          <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 sm:px-8 sm:pb-7">
             <label className="block">
-              <span className="mb-2 block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-500 sm:mb-2 sm:text-[10px]">
                 Select course
               </span>
 
@@ -753,7 +905,7 @@ export default function TeacherAssignments({
                   onChange={(event) =>
                     setPendingCreateCourseId(event.target.value)
                   }
-                  className="w-full cursor-pointer appearance-none rounded-xl border border-slate-300 bg-white px-4 py-3.5 pr-11 text-sm font-semibold text-slate-900 outline-none transition-all hover:border-blue-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  className="h-10 w-full cursor-pointer appearance-none rounded-lg border border-slate-300 bg-white px-3 pr-10 text-[16px] font-semibold text-slate-900 outline-none transition-all hover:border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 sm:h-auto sm:rounded-xl sm:px-4 sm:py-3.5 sm:pr-11 sm:text-sm sm:focus:ring-4"
                 >
                   <option value="">
                     Choose a course
@@ -775,7 +927,7 @@ export default function TeacherAssignments({
                   ))}
                 </select>
 
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400">
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 sm:pr-4">
                   <svg
                     viewBox="0 0 24 24"
                     fill="none"
@@ -792,16 +944,16 @@ export default function TeacherAssignments({
               </div>
 
               {pendingCourse && (
-                <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600">
+                <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 sm:mt-3 sm:rounded-xl sm:px-4 sm:py-3">
+                  <p className="text-[8px] font-bold uppercase tracking-wider text-blue-600 sm:text-[10px]">
                     Selected course
                   </p>
 
-                  <p className="mt-1 text-sm font-bold text-slate-950">
+                  <p className="mt-0.5 truncate text-[12px] font-bold text-slate-950 sm:mt-1 sm:text-sm">
                     {pendingCourse.name || "Unnamed course"}
                   </p>
 
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                  <div className="mt-0.5 flex flex-wrap gap-1.5 text-[9px] text-slate-500 sm:mt-1 sm:gap-2 sm:text-[11px]">
                     {pendingCourse.code && (
                       <span>{pendingCourse.code}</span>
                     )}
@@ -815,11 +967,11 @@ export default function TeacherAssignments({
             </label>
           </div>
 
-          <div className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-200 bg-white px-6 py-4 sm:px-8">
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t border-slate-200 bg-white px-3 py-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))] sm:gap-3 sm:px-8 sm:py-4">
             <button
               type="button"
               onClick={cancelCourseSelection}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-colors hover:bg-slate-50"
+              className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-[10px] font-bold text-slate-600 transition-colors hover:bg-slate-50 sm:h-auto sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-xs"
             >
               Cancel
             </button>
@@ -828,7 +980,7 @@ export default function TeacherAssignments({
               type="button"
               disabled={!pendingCourse}
               onClick={continueWithSelectedCourse}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+              className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-4 text-[10px] font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none sm:h-auto sm:gap-2 sm:rounded-xl sm:px-5 sm:py-2.5 sm:text-xs"
             >
               Continue
               <span aria-hidden="true">→</span>
@@ -980,7 +1132,11 @@ export default function TeacherAssignments({
       return false;
     }
 
-    const status = normalizeAssignmentStatus(assignment);
+    const status =
+      getAssignmentLifecycleStatus(
+        assignment,
+        builderDraftAssignmentId
+      );
     if (assignmentStatusFilter !== "All" && status !== assignmentStatusFilter) {
       return false;
     }
@@ -999,6 +1155,15 @@ export default function TeacherAssignments({
       submissions,
       courseStudentCount
     );
+
+    if (
+      status === "In progress"
+    ) {
+      return (
+        assignmentGradingFilter ===
+        "All"
+      );
+    }
 
     if (assignmentGradingFilter === "Needs review") return metrics.pending > 0;
     if (assignmentGradingFilter === "Completed") {
@@ -1027,44 +1192,52 @@ export default function TeacherAssignments({
 
   return (
     <>
-      <div className="space-y-4">
-        <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className="space-y-3 sm:space-y-4">
+        <section className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm sm:rounded-2xl sm:p-4">
+          <div className="flex flex-col gap-2 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <div className="mb-1 inline-flex items-center gap-1.5 rounded border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">
+              <div className="mb-1 hidden items-center gap-1 rounded border border-blue-100 bg-blue-50 px-1.5 py-0.5 text-[8px] font-bold text-blue-700 sm:inline-flex sm:gap-1.5 sm:px-2 sm:text-[9px]">
                 <Layers className="h-3 w-3" />
                 Assignments
               </div>
-              <h2 className="text-xl font-bold text-slate-950">
+              <h2 className="text-[17px] font-bold leading-tight text-slate-950 sm:text-xl">
                 Your assignments
               </h2>
-              <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-slate-500">
+              <p className="mt-0.5 hidden max-w-2xl text-[11px] leading-5 text-slate-500 sm:block sm:text-xs sm:leading-relaxed">
                 Select any assignment row to view student progress and review submissions.
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap">
               <button
                 type="button"
                 disabled={!firstPendingAssignment}
                 onClick={handleReviewPending}
-                className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold transition-all ${
+                className={`inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border px-2 text-[10px] font-bold transition-all sm:h-auto sm:gap-2 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-xs ${
                   firstPendingAssignment
                     ? "border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100"
                     : "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
                 }`}
               >
                 <ClipboardCheck className="h-4 w-4" />
-                {totalPendingSubmissions > 0
-                  ? `Review Pending (${totalPendingSubmissions})`
-                  : "No Pending Reviews"}
+                {totalPendingSubmissions > 0 ? (
+                  <>
+                    <span className="sm:hidden">Review ({totalPendingSubmissions})</span>
+                    <span className="hidden sm:inline">Review Pending ({totalPendingSubmissions})</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="sm:hidden">No reviews</span>
+                    <span className="hidden sm:inline">No Pending Reviews</span>
+                  </>
+                )}
               </button>
 
               <button
                 type="button"
                 disabled={activeClasses.length === 0}
-                onClick={() => setView("create")}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none"
+                onClick={handleCreateAssignmentFromList}
+                className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg bg-blue-600 px-2 text-[10px] font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none sm:h-auto sm:gap-2 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-xs"
                 title={
                   activeClasses.length === 0
                     ? "Create or restore an active course first"
@@ -1072,18 +1245,19 @@ export default function TeacherAssignments({
                 }
               >
                 <Plus className="h-4 w-4" />
-                Create Assignment
+                <span className="sm:hidden">New assignment</span>
+                <span className="hidden sm:inline">Create Assignment</span>
               </button>
             </div>
           </div>
 
-          <div className={`mt-3 grid grid-cols-1 gap-2 border-t border-slate-100 pt-3 ${
+          <div className={`mt-2 grid grid-cols-2 gap-1.5 border-t border-slate-100 pt-2 sm:mt-3 sm:gap-2 sm:pt-3 ${
             activeClasses.length > 1
               ? "md:grid-cols-2 xl:grid-cols-[280px_minmax(240px,1fr)_160px_180px]"
               : "md:grid-cols-[minmax(240px,1fr)_160px_180px]"
           }`}>
             {activeClasses.length > 1 && (
-              <label>
+              <label className="order-2 col-span-2 xl:order-none xl:col-span-1">
                 <span className="sr-only">Course</span>
               <select
                 value={selectedClassId}
@@ -1095,7 +1269,7 @@ export default function TeacherAssignments({
                   setSelectedAssignment(null);
                   setSubmissionFilterAssignment(null);
                 }}
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-[16px] font-semibold text-slate-800 outline-none transition-all focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 sm:h-10 sm:rounded-xl sm:px-3.5 sm:text-xs"
               >
                 <option value="">All courses</option>
                 {activeClasses.map((cls) => (
@@ -1106,9 +1280,9 @@ export default function TeacherAssignments({
               </select>
               </label>
             )}
-            <label className="relative">
+            <label className="relative order-1 col-span-2 xl:order-none xl:col-span-1">
               <span className="sr-only">Search assignments</span>
-              <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400 sm:left-3.5 sm:h-4 sm:w-4" />
               <input
                 type="search"
                 value={assignmentSearch}
@@ -1117,7 +1291,7 @@ export default function TeacherAssignments({
                   setAssignmentPage(1);
                 }}
                 placeholder="Search assignments..."
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-xs text-slate-800 outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10"
+                className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 pl-8 pr-3 text-[16px] text-slate-800 outline-none transition-all focus:border-blue-400 focus:bg-white focus:ring-4 focus:ring-blue-500/10 sm:h-10 sm:rounded-xl sm:py-2.5 sm:pl-10 sm:pr-4 sm:text-xs"
               />
             </label>
 
@@ -1127,12 +1301,13 @@ export default function TeacherAssignments({
                 setAssignmentStatusFilter(event.target.value);
                 setAssignmentPage(1);
               }}
-              aria-label="Filter by publication status"
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+              aria-label="Filter by assignment status"
+              className="order-3 h-9 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[14px] font-semibold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 sm:h-10 sm:rounded-xl sm:px-3.5 sm:text-xs xl:order-none"
             >
               <option value="All">All statuses</option>
-              <option value="Published">Published</option>
+              <option value="In progress">In progress</option>
               <option value="Draft">Draft</option>
+              <option value="Published">Published</option>
             </select>
 
             <select
@@ -1142,7 +1317,7 @@ export default function TeacherAssignments({
                 setAssignmentPage(1);
               }}
               aria-label="Filter by grading progress"
-              className="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-xs font-bold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10"
+              className="order-4 h-9 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[14px] font-semibold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 sm:h-10 sm:rounded-xl sm:px-3.5 sm:text-xs xl:order-none"
             >
               <option value="All">All grading states</option>
               <option value="Needs review">Needs review</option>
@@ -1194,12 +1369,28 @@ export default function TeacherAssignments({
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2.5 sm:space-y-2">
                 {paginatedAssignments.map((assignment) => {
-                  const assignmentStatus = normalizeAssignmentStatus(assignment);
-                  const isDraft = assignmentStatus !== "Published";
+                  const assignmentStatus =
+                    getAssignmentLifecycleStatus(
+                      assignment,
+                      builderDraftAssignmentId
+                    );
+
+                  const isInProgress =
+                    assignmentStatus ===
+                    "In progress";
+
+                  const isDraft =
+                    assignmentStatus ===
+                    "Draft";
+
                   const lockDraftActions =
-                    isDraft && !isAssignmentComplete(assignment);
+                    isInProgress ||
+                    (isDraft &&
+                      !isAssignmentComplete(
+                        assignment
+                      ));
                   const relatedClass = activeClasses.find((course) =>
                     assignmentMatchesClass(assignment, course)
                   );
@@ -1218,14 +1409,73 @@ export default function TeacherAssignments({
                   );
 
                   const openReview = () => {
-                    reviewReturnClassIdRef.current = selectedClassId;
-                    if (relatedClass) {
-                      setSelectedClassId(String(relatedClass.id));
+                    if (
+                      isInProgress
+                    ) {
+                      if (relatedClass) {
+                        setSelectedClassId(
+                          String(
+                            relatedClass.id
+                          )
+                        );
+                      }
+
+                      setSelectedAssignmentId(
+                        ""
+                      );
+
+                      setSubmissionStatusFilter(
+                        "All"
+                      );
+
+                      setSelectedAssignment(
+                        null
+                      );
+
+                      setSubmissionFilterAssignment(
+                        null
+                      );
+
+                      /*
+                       * CreateAssignmentModal will read the existing
+                       * assignment-builder recovery record and restore
+                       * the unfinished wizard.
+                       */
+                      setView(
+                        "create"
+                      );
+
+                      return;
                     }
-                    setSelectedAssignmentId(String(assignment.id));
-                    setSubmissionStatusFilter("All");
-                    setSelectedAssignment(assignment);
-                    setSubmissionFilterAssignment(assignment);
+
+                    reviewReturnClassIdRef.current =
+                      selectedClassId;
+
+                    if (relatedClass) {
+                      setSelectedClassId(
+                        String(
+                          relatedClass.id
+                        )
+                      );
+                    }
+
+                    setSelectedAssignmentId(
+                      String(
+                        assignment.id
+                      )
+                    );
+
+                    setSubmissionStatusFilter(
+                      "All"
+                    );
+
+                    setSelectedAssignment(
+                      assignment
+                    );
+
+                    setSubmissionFilterAssignment(
+                      assignment
+                    );
                   };
 
                   return (
@@ -1240,13 +1490,17 @@ export default function TeacherAssignments({
                           openReview();
                         }
                       }}
-                      className="group flex cursor-pointer flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 xl:flex-row xl:items-center"
-                      aria-label={`Open ${assignment.title || "assignment"} student progress`}
+                      className="group flex cursor-pointer flex-col gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 sm:gap-3 sm:p-3 xl:flex-row xl:items-center"
+                      aria-label={
+                        isInProgress
+                          ? `Continue ${assignment.title || "assignment"} setup`
+                          : `Open ${assignment.title || "assignment"} student progress`
+                      }
                     >
-                      <div className="flex min-w-0 items-start justify-between gap-4 xl:w-[32%]">
+                      <div className="flex min-w-0 items-start justify-between gap-2 xl:w-[32%]">
                         <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-sm font-bold text-slate-900">
+                          <div className="flex min-w-0 flex-row flex-wrap items-center gap-1.5 sm:gap-2">
+                            <h3 className="min-w-0 flex-1 truncate text-[13px] font-bold text-slate-900 sm:text-sm">
                               {assignment.title || "Untitled Assignment"}
                             </h3>
                             <span
@@ -1257,33 +1511,106 @@ export default function TeacherAssignments({
                               {assignmentStatus}
                             </span>
                           </div>
-                          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-slate-500">
-                            <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                            Due {getDueDateLabel(assignment)}
-                          </p>
+                          {isInProgress ? (
+                            <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-amber-700 sm:text-[11px]">
+                              <BookOpen className="h-3.5 w-3.5 text-amber-500" />
+                              Setup incomplete · Continue setup
+                            </p>
+                          ) : (
+                            <p className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500 sm:text-[11px]">
+                              <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                              Due {getDueDateLabel(assignment)}
+                            </p>
+                          )}
                           {activeClasses.length > 1 && relatedClass && (
                             <p className="mt-1 truncate text-[10px] font-semibold text-blue-600">
                               {relatedClass.name}
                             </p>
                           )}
                         </div>
-                        <div
-                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white"
-                          title="View student progress"
-                          aria-label="View student progress"
-                        >
-                          <Eye className="h-4 w-4" />
+                        {!isInProgress && (
+                          <div
+                            className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white sm:flex"
+                            title="View student progress"
+                            aria-label="View student progress"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </div>
+                        )}
+                      </div>
+
+                      {isInProgress ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 sm:hidden">
+                          <p className="text-[9px] font-bold text-amber-800">
+                            Finish assignment setup before publishing.
+                          </p>
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex flex-1 items-center divide-x divide-slate-200 rounded-lg border border-slate-100 bg-slate-50/80 px-1 py-1.5 sm:hidden">
+                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                            <span className="text-[12px] font-black text-slate-800">{metrics.students}</span>
+                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Students</span>
+                          </div>
 
-                      <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-3">
-                        <AssignmentCount label="Students" value={metrics.students} tone="slate" />
-                        <AssignmentCount label="Submitted" value={metrics.submitted} tone="blue" />
-                        <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
-                      </div>
+                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                            <span className="text-[12px] font-black text-blue-700">{metrics.submitted}</span>
+                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Sent</span>
+                          </div>
 
-                      <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-2 xl:w-[410px] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
-                        <div className="flex flex-wrap gap-1.5">
+                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                            <span className="text-[12px] font-black text-emerald-700">{metrics.graded}</span>
+                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Graded</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {isInProgress ? (
+                        <div className="hidden flex-1 items-center sm:flex">
+                          <div className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-100 bg-amber-50/40 px-3">
+                            <BookOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+
+                            <span className="text-[10px] font-semibold text-amber-700">
+                              Creation unfinished
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="hidden flex-1 grid-cols-3 gap-2 sm:grid">
+                          <AssignmentCount label="Students" value={metrics.students} tone="slate" />
+                          <AssignmentCount label="Submitted" value={metrics.submitted} tone="blue" />
+                          <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
+                        </div>
+                      )}
+
+                      <div className="border-t border-slate-100 pt-1.5 sm:pt-2 xl:w-[410px] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
+                        {isInProgress ? (
+                          <div className="grid grid-cols-2 gap-1.5 xl:flex xl:flex-wrap">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                openReview();
+                              }}
+                              className="h-8 rounded-md border border-amber-500 bg-amber-500 px-3 text-[9px] font-bold text-white shadow-sm transition-colors hover:border-amber-600 hover:bg-amber-600 sm:h-auto sm:rounded-lg sm:py-1.5 sm:text-[10px]"
+                            >
+                              Continue setup
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setAssignmentPendingDelete(
+                                  assignment
+                                );
+                              }}
+                              className="h-8 rounded-md border border-red-200 bg-red-50 px-3 text-[9px] font-bold text-red-600 transition-colors hover:bg-red-100 sm:h-auto sm:rounded-lg sm:py-1.5 sm:text-[10px]"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-3 gap-1 xl:flex xl:flex-wrap xl:gap-1.5">
                           <button
                             type="button"
                             onClick={(event) => {
@@ -1294,19 +1621,28 @@ export default function TeacherAssignments({
                               lockDraftActions ||
                               statusChangeAssignmentId === String(assignment.id)
                             }
-                            className="rounded-lg border border-blue-600 bg-blue-600 px-2.5 py-1.5 text-[10px] font-bold text-white shadow-sm transition-colors hover:border-blue-700 hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300"
+                            className="h-8 rounded-md border border-blue-600 bg-blue-600 px-1.5 text-[9px] font-bold text-white shadow-sm transition-colors hover:border-blue-700 hover:bg-blue-700 disabled:cursor-not-allowed disabled:border-slate-300 disabled:bg-slate-300 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]"
                           >
                             {assignmentStatus === "Published" ? "Unpublish" : "Publish"}
                           </button>
                           <button
                             type="button"
+                            disabled={metrics.submitted === 0}
                             onClick={(event) => {
                               event.stopPropagation();
+                              if (metrics.submitted === 0) return;
                               openReview();
                             }}
-                            className="rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100"
+                            className="col-span-2 h-8 rounded-md border border-blue-200 bg-blue-50 px-1.5 text-[9px] font-bold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:border-slate-200 disabled:hover:bg-slate-50 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px] xl:col-span-1"
                           >
-                            Review Submissions
+                            {metrics.submitted > 0 ? (
+                              <>
+                                <span className="sm:hidden">Review</span>
+                                <span className="hidden sm:inline">Review Submissions</span>
+                              </>
+                            ) : (
+                              "No submissions"
+                            )}
                           </button>
                           <button
                             type="button"
@@ -1316,7 +1652,7 @@ export default function TeacherAssignments({
                               setView("details");
                             }}
                             disabled={lockDraftActions}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            className="h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[9px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-40 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]"
                           >
                             Details
                           </button>
@@ -1327,7 +1663,7 @@ export default function TeacherAssignments({
                               setSelectedAssignment(assignment);
                               setView("edit");
                             }}
-                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                            className="h-8 rounded-md border border-slate-200 bg-white px-1.5 text-[9px] font-bold text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]"
                           >
                             Edit
                           </button>
@@ -1337,11 +1673,12 @@ export default function TeacherAssignments({
                               event.stopPropagation();
                               setAssignmentPendingDelete(assignment);
                             }}
-                            className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[10px] font-bold text-red-600 transition-colors hover:bg-red-100"
+                            className="h-8 rounded-md border border-red-200 bg-red-50 px-1.5 text-[9px] font-bold text-red-600 transition-colors hover:bg-red-100 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px]"
                           >
                             Delete
                           </button>
                         </div>
+                        )}
                       </div>
                     </article>
                   );
@@ -1431,7 +1768,7 @@ export default function TeacherAssignments({
 
       {assignmentPendingDelete &&
         createPortal(
-          <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-4">
+          <div className="fixed inset-0 z-[2147483647] flex items-center justify-center p-2 sm:p-3 xl:p-4">
             <button
               type="button"
               aria-label="Cancel assignment deletion"
@@ -1493,13 +1830,13 @@ export default function TeacherAssignments({
 
       {activeAssignment &&
         createPortal(
-          <div className="fixed inset-0 z-[2147483646] flex items-center justify-center overflow-y-auto p-3 sm:p-5">
+          <div className="fixed inset-0 z-[2147483646] flex items-center justify-center overflow-y-auto p-2 sm:p-3 xl:p-4 2xl:p-5">
             <div
               aria-hidden="true"
               className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm"
             />
 
-            <div className="relative z-10 my-4 flex max-h-[94vh] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F8FAFC] shadow-2xl">
+            <div className="relative z-10 my-2 flex max-h-[94dvh] w-full max-w-[1500px] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-[#F8FAFC] shadow-2xl">
               <div className="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
                 <div className="min-w-0">
                   <p className="text-[10px] font-bold text-blue-600">
@@ -1543,7 +1880,7 @@ export default function TeacherAssignments({
       {view === "details" &&
         detailsAssignment &&
         createPortal(
-          <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-y-auto p-3 sm:p-5">
+          <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-y-auto p-2 sm:p-3 xl:p-4 2xl:p-5">
             <div
               className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm"
               onClick={() => {
@@ -1551,7 +1888,7 @@ export default function TeacherAssignments({
                 setView("list");
               }}
             />
-            <div className="relative z-10 my-4 max-h-[92vh] w-full max-w-[1450px] overflow-y-auto rounded-3xl border border-slate-200 bg-[#F8FAFC] p-4 shadow-2xl sm:p-6">
+            <div className="relative z-10 my-2 max-h-[92dvh] w-full max-w-[1450px] overflow-y-auto rounded-3xl border border-slate-200 bg-[#F8FAFC] p-4 shadow-2xl sm:p-6">
               <Suspense fallback={<WorkspaceLoading />}>
                 <TeacherAssignmentDetails
                   key={detailsAssignment.id}

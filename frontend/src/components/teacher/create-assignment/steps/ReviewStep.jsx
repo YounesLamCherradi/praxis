@@ -1,4 +1,8 @@
-import React, { useMemo, useState } from "react";
+import React, {
+  useMemo,
+  useState,
+  useEffect
+} from "react";
 import {
   BookOpen,
   CheckCircle2,
@@ -190,6 +194,146 @@ export default function ReviewStep({
   onRegenerateRubric,
 }) {
   const [expandedCriterionId, setExpandedCriterionId] = useState("");
+
+  const [
+    sharedAssignmentTypes,
+    setSharedAssignmentTypes,
+  ] = useState([]);
+
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSharedAssignmentTypes() {
+      try {
+        const response = await fetch(
+          "/api/assignment-types",
+          {
+            method: "GET",
+            credentials: "include",
+            headers: {
+              Accept: "application/json",
+            },
+          }
+        );
+
+        const payload =
+          await response.json();
+
+        if (
+          !response.ok ||
+          payload?.error
+        ) {
+          throw new Error(
+            payload?.error ||
+              "Could not load assignment types."
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const values =
+          Array.isArray(payload?.types)
+            ? payload.types
+                .map((item) => {
+                  if (
+                    typeof item === "string"
+                  ) {
+                    return item;
+                  }
+
+                  return (
+                    item?.value ||
+                    item?.name ||
+                    item?.label ||
+                    ""
+                  );
+                })
+                .map((value) =>
+                  String(
+                    value || ""
+                  ).trim()
+                )
+                .filter(Boolean)
+            : [];
+
+        setSharedAssignmentTypes(
+          values
+        );
+      } catch (error) {
+        console.warn(
+          "Final Review could not load shared assignment types:",
+          error
+        );
+
+        if (!cancelled) {
+          setSharedAssignmentTypes(
+            []
+          );
+        }
+      }
+    }
+
+    loadSharedAssignmentTypes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+
+  const assignmentTypeOptions =
+    useMemo(() => {
+      const baseWithoutOther =
+        ASSIGNMENT_TYPES.filter(
+          (type) =>
+            String(type)
+              .toLowerCase() !==
+            "other"
+        );
+
+      const merged = [
+        ...baseWithoutOther,
+        ...sharedAssignmentTypes,
+
+        /*
+         * Critical:
+         * Always preserve the current selected value,
+         * even if the admin list has changed.
+         */
+        assignmentType,
+
+        "Other",
+      ];
+
+      const seen =
+        new Set();
+
+      return merged
+        .map((value) =>
+          String(
+            value || ""
+          ).trim()
+        )
+        .filter(Boolean)
+        .filter((value) => {
+          const key =
+            value.toLowerCase();
+
+          if (seen.has(key)) {
+            return false;
+          }
+
+          seen.add(key);
+          return true;
+        });
+    }, [
+      sharedAssignmentTypes,
+      assignmentType,
+    ]);
+
   const courseLabel = useMemo(
     () => getCourseLabel(classes, course),
     [classes, course]
@@ -325,7 +469,7 @@ export default function ReviewStep({
                 }}
                 className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
               >
-                {ASSIGNMENT_TYPES.map((type) => (
+                {assignmentTypeOptions.map((type) => (
                   <option key={type} value={type}>
                     {type}
                   </option>

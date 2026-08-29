@@ -12,6 +12,7 @@ import {
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
+  ChevronDown,
   ClipboardCheck,
   FileText,
   Info,
@@ -124,6 +125,96 @@ function limitToSentences(text, maxSentences = 3) {
     .join(" ");
 }
 
+const STUDENT_FINAL_STAGE_VIEW_STORAGE_KEY =
+  "praxis-student-final-stage-view";
+
+function loadStudentFinalStageViews() {
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(
+      STUDENT_FINAL_STAGE_VIEW_STORAGE_KEY
+    );
+
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+
+    return parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (error) {
+    console.warn(
+      "Could not restore student final-stage view:",
+      error
+    );
+
+    return {};
+  }
+}
+
+function loadStudentFinalStageView(
+  assignmentId,
+  fallback = "rubric"
+) {
+  if (!assignmentId) {
+    return fallback;
+  }
+
+  const savedViews =
+    loadStudentFinalStageViews();
+
+  const saved =
+    savedViews[String(assignmentId)];
+
+  return saved === "submit" ||
+    saved === "rubric"
+    ? saved
+    : fallback;
+}
+
+function saveStudentFinalStageView(
+  assignmentId,
+  view
+) {
+  if (
+    typeof window === "undefined" ||
+    !assignmentId
+  ) {
+    return;
+  }
+
+  const normalized =
+    view === "submit"
+      ? "submit"
+      : "rubric";
+
+  try {
+    const current =
+      loadStudentFinalStageViews();
+
+    window.localStorage.setItem(
+      STUDENT_FINAL_STAGE_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...current,
+        [String(assignmentId)]:
+          normalized,
+      })
+    );
+  } catch (error) {
+    console.warn(
+      "Could not persist student final-stage view:",
+      error
+    );
+  }
+}
+
 export default function ActiveAssignmentWorkflow() {
   const {
     activeAssignment,
@@ -190,14 +281,48 @@ export default function ActiveAssignmentWorkflow() {
       return Boolean(entry?.bandId || entry?.score !== undefined);
     }
   );
-  const [finalStageView, setFinalStageView] = useState(() =>
-    rubricComplete ? "submit" : "rubric"
+  const [
+    finalStageView,
+    setFinalStageViewState,
+  ] = useState(() =>
+    loadStudentFinalStageView(
+      activeAssignment?.id,
+      rubricComplete ? "submit" : "rubric"
+    )
   );
+
+  function setFinalStageView(nextView) {
+    const normalized =
+      nextView === "submit"
+        ? "submit"
+        : "rubric";
+
+    setFinalStageViewState(normalized);
+
+    if (activeAssignment?.id) {
+      saveStudentFinalStageView(
+        activeAssignment.id,
+        normalized
+      );
+    }
+  }
+
   const lastDraftFeedbackStepRef = useRef(3);
 
   useEffect(() => {
-    setFinalStageView(rubricComplete ? "submit" : "rubric");
-  }, [activeAssignment?.id, rubricComplete]);
+    if (!activeAssignment?.id) {
+      return;
+    }
+
+    setFinalStageViewState(
+      loadStudentFinalStageView(
+        activeAssignment.id,
+        rubricComplete
+          ? "submit"
+          : "rubric"
+      )
+    );
+  }, [activeAssignment?.id]);
 
   useEffect(() => {
     if (studentStep === 2 || studentStep === 3) {
@@ -392,12 +517,12 @@ export default function ActiveAssignmentWorkflow() {
 
   return (
     <div className="flex-1 min-h-0">
-      <div className="student-assignment-shell flex min-h-[620px] w-full flex-col rounded-2xl border border-slate-200 bg-white p-4 shadow-sm lg:h-[calc(100vh-190px)] lg:max-h-[calc(100vh-190px)]">
-        <div className="student-workflow-header mb-4 flex shrink-0 flex-col gap-3 border-b border-slate-100 pb-3 xl:flex-row xl:items-center">
+      <div className="student-assignment-shell flex min-h-[520px] w-full flex-col rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:rounded-2xl sm:p-4 lg:h-[calc(100dvh-190px)] lg:min-h-0 lg:max-h-[calc(100dvh-190px)]">
+        <div className="student-workflow-header mb-2.5 flex shrink-0 flex-col gap-2 border-b border-slate-100 pb-2.5 sm:mb-4 sm:gap-3 sm:pb-3 xl:flex-row xl:items-center">
           <button
             type="button"
             onClick={closeStudentAssignment}
-            className="group inline-flex w-fit shrink-0 items-center gap-1.5 text-xs font-bold text-slate-500 transition-colors hover:text-blue-700"
+            className="group inline-flex w-fit shrink-0 items-center gap-1 text-[10px] font-bold text-slate-500 transition-colors hover:text-blue-700 sm:gap-1.5 sm:text-xs"
           >
             <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
             Back to Dashboard
@@ -420,7 +545,7 @@ export default function ActiveAssignmentWorkflow() {
             className="flex min-w-0 flex-1 justify-center"
           />
 
-          <div className="flex max-w-full items-center overflow-x-auto rounded-2xl border border-slate-200 bg-[#F8FAFC] p-1.5 xl:ml-auto">
+          <div className="grid w-full max-w-full grid-cols-4 gap-1 rounded-xl border border-slate-200 bg-[#F8FAFC] p-1 sm:flex sm:w-auto sm:items-center sm:gap-0 sm:overflow-x-auto sm:rounded-2xl sm:p-1.5 xl:ml-auto">
             {steps.map((step, index) => {
               const isActive = step.active;
               const isLocked = !step.enabled;
@@ -440,7 +565,7 @@ export default function ActiveAssignmentWorkflow() {
                   {index > 0 && (
                     <span
                       aria-hidden="true"
-                      className={`h-px w-3 shrink-0 sm:w-5 ${
+                      className={`hidden h-px w-3 shrink-0 sm:block sm:w-5 ${
                         isCompleted || isActive ? "bg-blue-300" : "bg-slate-200"
                       }`}
                     />
@@ -479,7 +604,7 @@ export default function ActiveAssignmentWorkflow() {
                           : undefined
                       );
                     }}
-                    className={`flex min-w-[112px] items-center gap-2 whitespace-nowrap rounded-xl border px-2.5 py-2 text-left transition-all ${
+                    className={`flex min-w-0 items-center justify-center gap-1 overflow-hidden whitespace-nowrap rounded-lg border px-1 py-1.5 text-center transition-all sm:min-w-[112px] sm:justify-start sm:gap-2 sm:rounded-xl sm:px-2.5 sm:py-2 sm:text-left ${
                       isActive
                         ? "border-blue-600 bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                         : isCompleted
@@ -490,7 +615,7 @@ export default function ActiveAssignmentWorkflow() {
                     }`}
                   >
                     <span
-                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[10px] font-black ${
+                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[8px] font-black sm:h-6 sm:w-6 sm:text-[10px] ${
                         isActive
                           ? "border-white/40 bg-white/15 text-white"
                           : isCompleted
@@ -510,11 +635,11 @@ export default function ActiveAssignmentWorkflow() {
                     </span>
 
                     <span className="min-w-0">
-                      <span className="block text-[11px] font-bold leading-tight">
+                      <span className="block truncate text-[8px] font-bold leading-tight sm:text-[11px]">
                         {step.label}
                       </span>
                       <span
-                        className={`mt-0.5 block text-[8px] font-mono font-bold uppercase tracking-wide ${
+                        className={`mt-0.5 hidden text-[8px] font-mono font-bold uppercase tracking-wide sm:block ${
                           isActive ? "text-blue-100" : "opacity-70"
                         }`}
                       >
@@ -581,7 +706,7 @@ export default function ActiveAssignmentWorkflow() {
           />
         )}
 
-        <div className="student-assignment-step mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 lg:overflow-hidden">
+        <div className="student-assignment-step mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto sm:mt-3 sm:pr-1">
           {renderActiveStepComponent()}
         </div>
       </div>
@@ -637,25 +762,27 @@ function WorkflowNoticeBox({
       aria-modal={hasPendingAction ? "true" : undefined}
       aria-label={notice?.title || "Check this step"}
       aria-live={hasPendingAction ? undefined : "polite"}
-      className={`w-full rounded-2xl border px-4 py-4 shadow-xl ${style.shell} ${
-        hasPendingAction ? "max-w-lg" : "mt-3 shrink-0"
+      className={`w-full border shadow-xl ${style.shell} ${
+        hasPendingAction
+          ? "max-w-lg rounded-t-2xl px-3 py-3 sm:rounded-2xl sm:px-4 sm:py-4"
+          : "mt-2 shrink-0 rounded-xl px-2.5 py-2.5 sm:mt-3 sm:rounded-2xl sm:px-4 sm:py-4"
       }`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-2 sm:gap-3">
         <span
-          className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border ${style.icon}`}
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border sm:h-9 sm:w-9 sm:rounded-xl ${style.icon}`}
         >
-          <Icon className="h-4 w-4" />
+          <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
         </span>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-2 sm:gap-3">
             <div>
-              <h3 className="text-xs font-bold">
+              <h3 className="pr-7 text-[11px] font-bold leading-tight sm:pr-0 sm:text-xs">
                 {notice?.title || "Check this step"}
               </h3>
 
-              <p className="mt-1 text-[11px] leading-relaxed opacity-90">
+              <p className="mt-0.5 text-[9px] leading-4 opacity-90 sm:mt-1 sm:text-[11px] sm:leading-relaxed">
                 {notice?.message}
               </p>
             </div>
@@ -663,29 +790,29 @@ function WorkflowNoticeBox({
             <button
               type="button"
               onClick={onClose}
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-current/15 bg-white/60 opacity-60 transition-all hover:opacity-100"
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-current/15 bg-white/60 opacity-60 transition-all hover:opacity-100 sm:h-7 sm:w-7 sm:rounded-lg"
               aria-label="Close message"
             >
-              <X className="h-3.5 w-3.5" />
+              <X className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
             </button>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:mt-3 sm:flex sm:flex-wrap sm:items-center">
             {hasPendingAction ? (
               <>
                 <button
                   type="button"
                   onClick={onPrimary}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-[11px] font-bold transition-all ${style.primary}`}
+                  className={`inline-flex min-h-10 w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[10px] font-bold transition-all sm:w-auto sm:gap-2 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-[11px] ${style.primary}`}
                 >
                   {notice.primaryLabel}
-                  <ArrowRight className="h-3.5 w-3.5" />
+                  <ArrowRight className="h-3.5 w-3.5 shrink-0" />
                 </button>
 
                 <button
                   type="button"
                   onClick={onSecondary}
-                  className="rounded-xl border border-current/15 bg-white px-4 py-2.5 text-[11px] font-bold opacity-80 transition-all hover:opacity-100"
+                  className="min-h-10 w-full rounded-lg border border-current/15 bg-white px-3 py-2 text-[10px] font-bold opacity-80 transition-all hover:opacity-100 sm:w-auto sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-[11px]"
                 >
                   {notice.secondaryLabel || "Stay here"}
                 </button>
@@ -694,7 +821,7 @@ function WorkflowNoticeBox({
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-xl border border-current/15 bg-white px-4 py-2.5 text-[11px] font-bold opacity-80 transition-all hover:opacity-100"
+                className="min-h-8 rounded-lg border border-current/15 bg-white px-3 py-1.5 text-[10px] font-bold opacity-80 transition-all hover:opacity-100 sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-[11px]"
               >
                 Got it
               </button>
@@ -710,13 +837,13 @@ function WorkflowNoticeBox({
     typeof document !== "undefined"
   ) {
     return createPortal(
-      <div className="fixed inset-0 z-[2147483646] flex items-center justify-center p-4">
+      <div className="fixed inset-0 z-[2147483646] flex items-end justify-center p-0 sm:items-center sm:p-3 xl:p-4">
         <div
           aria-hidden="true"
           className="absolute inset-0 bg-slate-950/45 backdrop-blur-[4px]"
         />
 
-        <div className="relative z-10 flex w-full justify-center">
+        <div className="relative z-10 flex w-full justify-center pb-[env(safe-area-inset-bottom)] sm:pb-0">
           {noticeCard}
         </div>
       </div>,
@@ -733,32 +860,80 @@ function CompactAssignmentBrief({
   compact = false,
 }) {
   return (
-    <section className="student-assignment-brief relative shrink-0 overflow-hidden rounded-2xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/40 px-5 py-4 shadow-sm">
-      <span className="absolute inset-y-0 left-0 w-1.5 bg-blue-600" />
-      <div className={`flex items-start gap-3 ${compact ? "xl:items-center" : ""}`}>
-        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">
-          <FileText className="h-5 w-5" />
-        </span>
+    <section className="student-assignment-brief relative shrink-0 overflow-hidden rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 via-white to-blue-50/40 shadow-sm sm:rounded-2xl">
+      <span className="absolute inset-y-0 left-0 w-1 bg-blue-600 sm:w-1.5" />
 
-        <div className={`min-w-0 flex-1 ${compact ? "xl:grid xl:grid-cols-[minmax(280px,0.7fr)_minmax(0,1.8fr)] xl:items-center xl:gap-6" : ""}`}>
-          <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="font-mono text-[10px] font-black uppercase tracking-widest text-blue-700">
+      {/* Mobile brief */}
+      <div className="px-3 py-2.5 sm:hidden">
+        <div className="flex items-start gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm shadow-blue-600/20">
+            <FileText className="h-4 w-4" />
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[8px] font-black uppercase tracking-wider text-blue-700">
               Assignment Brief
             </p>
-            <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[9px] font-bold text-blue-700">
-              Read this first
-            </span>
-          </div>
 
-          <h2 className="mt-1.5 font-serif text-lg font-black text-slate-950">
-            {title || "Untitled Assignment"}
-          </h2>
+            <h2 className="mt-0.5 font-serif text-[15px] font-black leading-5 text-slate-950">
+              {title || "Untitled Assignment"}
+            </h2>
           </div>
+        </div>
 
-          <p className={`${compact ? "mt-2 border-t border-blue-100 pt-2 xl:mt-0 xl:border-l xl:border-t-0 xl:py-1 xl:pl-6" : "mt-2 max-w-[1200px]"} text-xs leading-5 text-slate-700`}>
+        <details className="group mt-2 border-t border-blue-100 pt-2">
+          <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between gap-2 rounded-lg bg-white/80 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100 [&::-webkit-details-marker]:hidden">
+            <span>Read instructions</span>
+
+            <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+          </summary>
+
+          <p className="px-1 pb-1 pt-2 text-[11px] leading-5 text-slate-700">
             {instructions}
           </p>
+        </details>
+      </div>
+
+      {/* Tablet / desktop brief */}
+      <div className="hidden px-5 py-4 sm:block">
+        <div className={`flex items-start gap-3 ${compact ? "xl:items-center" : ""}`}>
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-600/20">
+            <FileText className="h-5 w-5" />
+          </span>
+
+          <div
+            className={`min-w-0 flex-1 ${
+              compact
+                ? "xl:grid xl:grid-cols-[minmax(280px,0.7fr)_minmax(0,1.8fr)] xl:items-center xl:gap-6"
+                : ""
+            }`}
+          >
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-mono text-[10px] font-black uppercase tracking-widest text-blue-700">
+                  Assignment Brief
+                </p>
+
+                <span className="rounded-full border border-blue-200 bg-white px-2 py-0.5 text-[9px] font-bold text-blue-700">
+                  Read this first
+                </span>
+              </div>
+
+              <h2 className="mt-1.5 font-serif text-lg font-black text-slate-950">
+                {title || "Untitled Assignment"}
+              </h2>
+            </div>
+
+            <p
+              className={`${
+                compact
+                  ? "mt-2 border-t border-blue-100 pt-2 xl:mt-0 xl:border-l xl:border-t-0 xl:py-1 xl:pl-6"
+                  : "mt-2 max-w-[1200px]"
+              } text-xs leading-5 text-slate-700`}
+            >
+              {instructions}
+            </p>
+          </div>
         </div>
       </div>
     </section>

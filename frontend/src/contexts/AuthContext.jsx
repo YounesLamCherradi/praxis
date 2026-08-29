@@ -46,14 +46,21 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  async function signIn(email, password, stayLoggedIn = true) {
+  async function signIn(
+    email,
+    password,
+    stayLoggedIn = true,
+    loginSurface = "portal"
+  ) {
     // Query keys are shared by route, so remove the previous account's
     // authenticated data before establishing a different session.
     queryClient.clear();
+
     const profile = await AuthService.signIn(
       email,
       password,
-      stayLoggedIn
+      stayLoggedIn,
+      loginSurface
     );
 
     setUser(profile);

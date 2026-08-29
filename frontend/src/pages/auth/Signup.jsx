@@ -25,6 +25,11 @@ import {
 const SIGNUP_CODE_PENDING_KEY = "praxis-signup-code-pending-v1";
 const SIGNUP_CODE_COOLDOWN_MS = 60 * 1000;
 
+// TEMPORARY WORKSHOP MODE:
+// true  = signup without email verification
+// false = normal OTP signup flow
+const WORKSHOP_SIGNUP_WITHOUT_OTP = true;
+
 export default function Signup({ accountRole = "student" }) {
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const navigate = useNavigate();
@@ -55,6 +60,13 @@ export default function Signup({ accountRole = "student" }) {
   }, [inviteCode]);
 
   useEffect(() => {
+    if (WORKSHOP_SIGNUP_WITHOUT_OTP) {
+      window.sessionStorage.removeItem(
+        SIGNUP_CODE_PENDING_KEY
+      );
+      return;
+    }
+
     try {
       const pending = JSON.parse(
         window.sessionStorage.getItem(SIGNUP_CODE_PENDING_KEY) || "null"
@@ -109,6 +121,10 @@ export default function Signup({ accountRole = "student" }) {
   ];
 
   async function handleRequestCode() {
+    if (WORKSHOP_SIGNUP_WITHOUT_OTP) {
+      return;
+    }
+
     setCodeLoading(true);
     setError("");
     setMessage("");
@@ -122,19 +138,46 @@ export default function Signup({ accountRole = "student" }) {
         throw new Error("Access is restricted to @aui.ma accounts.");
       }
 
-      const requestedAt = Date.now();
-      setCountdownNow(requestedAt);
-      setResendAt(requestedAt + SIGNUP_CODE_COOLDOWN_MS);
-      setCodeRequested(true);
-      window.sessionStorage.setItem(
-        SIGNUP_CODE_PENDING_KEY,
-        JSON.stringify({ email: cleanEmail, requestedAt })
+      await AuthService.requestSignupCode(
+        cleanEmail,
+        name.trim()
       );
 
-      await AuthService.requestSignupCode(cleanEmail, name.trim());
-      setMessage("A 6-digit verification code was sent to your email.");
+      // Enter OTP state only after the backend confirms success.
+      const requestedAt = Date.now();
+
+      setCountdownNow(requestedAt);
+      setResendAt(
+        requestedAt + SIGNUP_CODE_COOLDOWN_MS
+      );
+      setCodeRequested(true);
+
+      window.sessionStorage.setItem(
+        SIGNUP_CODE_PENDING_KEY,
+        JSON.stringify({
+          email: cleanEmail,
+          requestedAt,
+        })
+      );
+
+      setMessage(
+        "A 6-digit verification code was sent to your email."
+      );
     } catch (err) {
-      setError(err.message || "Could not send verification code.");
+      // Failed requests must never leave a false OTP state.
+      setCodeRequested(false);
+      setResendAt(0);
+      setCountdownNow(0);
+      setMessage("");
+
+      window.sessionStorage.removeItem(
+        SIGNUP_CODE_PENDING_KEY
+      );
+
+      setError(
+        err.message ||
+          "Could not send verification code."
+      );
     } finally {
       setCodeLoading(false);
     }
@@ -164,7 +207,10 @@ export default function Signup({ accountRole = "student" }) {
       return;
     }
 
-    if (!codeRequested) {
+    if (
+      !WORKSHOP_SIGNUP_WITHOUT_OTP &&
+      !codeRequested
+    ) {
       try {
         const requestedAt = Date.now();
         await AuthService.requestSignupCode(cleanEmail, name.trim());
@@ -184,8 +230,13 @@ export default function Signup({ accountRole = "student" }) {
       return;
     }
 
-    if (!/^\d{6}$/.test(otpCode.trim())) {
-      setError("Enter the 6-digit verification code from your email.");
+    if (
+      !WORKSHOP_SIGNUP_WITHOUT_OTP &&
+      !/^\d{6}$/.test(otpCode.trim())
+    ) {
+      setError(
+        "Enter the 6-digit verification code from your email."
+      );
       setLoading(false);
       return;
     }
@@ -198,7 +249,9 @@ export default function Signup({ accountRole = "student" }) {
         cleanEmail,
         password,
         signupRole,
-        otpCode.trim()
+        WORKSHOP_SIGNUP_WITHOUT_OTP
+          ? ""
+          : otpCode.trim()
       );
 
       setUser(profile);
@@ -218,7 +271,7 @@ export default function Signup({ accountRole = "student" }) {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#F8FAFC] text-slate-900">
+    <div className="relative min-h-[100dvh] overflow-hidden bg-[#F8FAFC] text-slate-900">
       <style>{`
         .signup-grid {
           background-image:
@@ -274,7 +327,7 @@ export default function Signup({ accountRole = "student" }) {
         </button>
       </div>
 
-      <div className="relative z-10 min-h-screen grid lg:grid-cols-2">
+      <div className="relative z-10 grid min-h-[100dvh] lg:grid-cols-2">
         <div className="hidden lg:flex flex-col justify-center px-10 xl:px-16 pt-24 pb-12">
           <div className="max-w-xl signup-float">
             <div className="inline-flex items-center gap-3 bg-white/85 backdrop-blur border border-blue-100 px-4 py-2 rounded-2xl shadow-sm mb-8">
@@ -287,8 +340,11 @@ export default function Signup({ accountRole = "student" }) {
               </div>
 
               <span className="text-xl font-bold tracking-tight leading-none">
-                <span className="text-blue-600">p</span>
-                <span className="text-slate-900">raxis</span>
+                <span className="text-slate-900">pr</span>
+                <span className="text-blue-700">a</span>
+                <span className="text-slate-900">x</span>
+                <span className="text-blue-700">i</span>
+                <span className="text-slate-900">s</span>
               </span>
 
               <span className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
@@ -332,7 +388,7 @@ export default function Signup({ accountRole = "student" }) {
 
         <div className="flex items-center justify-center px-4 sm:px-6 lg:px-10 py-28 lg:py-12">
           <div className="w-full max-w-md">
-            <div className="bg-white/90 backdrop-blur-xl border border-slate-200 shadow-2xl shadow-blue-950/10 rounded-3xl p-6 sm:p-8">
+            <div className="bg-white/90 backdrop-blur-xl border border-slate-200 shadow-2xl shadow-blue-950/10 rounded-2xl p-5 sm:p-6 2xl:rounded-3xl 2xl:p-8">
               <div className="mb-7 text-center">
                 <div className="mx-auto mb-4 w-14 h-14 rounded-2xl bg-white border border-blue-100 shadow-md shadow-blue-100/70 flex items-center justify-center overflow-hidden">
                   <img
@@ -343,7 +399,7 @@ export default function Signup({ accountRole = "student" }) {
                 </div>
 
                 <h2 className="text-2xl font-bold text-slate-950">
-                  {codeRequested
+                  {!WORKSHOP_SIGNUP_WITHOUT_OTP && codeRequested
                     ? "Verify your email"
                     : isInstructorSignup
                     ? "Instructor registration"
@@ -351,10 +407,12 @@ export default function Signup({ accountRole = "student" }) {
                 </h2>
 
                 <p className="mx-auto mt-1 max-w-xs text-sm leading-5 text-slate-500">
-                  {codeRequested
+                  {!WORKSHOP_SIGNUP_WITHOUT_OTP && codeRequested
                     ? "Enter the code to finish registration"
                     : isInstructorSignup
                     ? "Use your authorized AUI email to create your teaching workspace."
+                    : WORKSHOP_SIGNUP_WITHOUT_OTP
+                    ? "Use your AUI email to create your Praxis account."
                     : "Use your AUI email to get started. We’ll send you a verification code."}
                 </p>
               </div>
@@ -374,7 +432,7 @@ export default function Signup({ accountRole = "student" }) {
               )}
 
               <form className="space-y-4" onSubmit={handleSignup}>
-                {!codeRequested && (
+                {(WORKSHOP_SIGNUP_WITHOUT_OTP || !codeRequested) && (
                   <>
                 <div>
                   <label htmlFor="signup-name" className="block text-sm font-semibold text-slate-700">
@@ -429,7 +487,7 @@ export default function Signup({ accountRole = "student" }) {
                   </>
                 )}
 
-                {codeRequested && (
+                {!WORKSHOP_SIGNUP_WITHOUT_OTP && codeRequested && (
                   <div className="rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
                     <div className="mb-4 flex items-start gap-3">
                       <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-white text-blue-700 shadow-sm">
@@ -498,7 +556,7 @@ export default function Signup({ accountRole = "student" }) {
                   </div>
                 )}
 
-                {!codeRequested && (
+                {(WORKSHOP_SIGNUP_WITHOUT_OTP || !codeRequested) && (
                   <div>
                   <label htmlFor="signup-password" className="block text-sm font-semibold text-slate-700">
                     Create password

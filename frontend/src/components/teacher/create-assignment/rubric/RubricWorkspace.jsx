@@ -64,20 +64,20 @@ export default function RubricWorkspace({
     : rubricView;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div className="flex flex-col gap-2 border-b border-slate-100 bg-[#F8FAFC] p-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white sm:rounded-2xl">
+      <div className="flex flex-col gap-1.5 border-b border-slate-100 bg-[#F8FAFC] p-2.5 sm:gap-2 sm:p-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           {!isSavedRubric ? (
             <>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
                 <ClipboardList className="h-4 w-4 text-blue-600" />
 
-                <h4 className="font-serif text-sm font-black text-slate-950">
+                <h4 className="truncate font-serif text-[13px] font-black leading-tight text-slate-950 sm:text-sm">
                   {title || parsedRubricSchema?.title || "Rubric"}
                 </h4>
               </div>
 
-              <p className="mt-1 text-[11px] text-slate-500">
+              <p className="mt-0.5 text-[10px] leading-4 text-slate-500 sm:mt-1 sm:text-[11px]">
                 {normalizedCriteria.length} criteria · {totalPoints} pts.
                 {isManualRubric
                   ? " Edit one criterion at a time to reduce scrolling."
@@ -92,11 +92,11 @@ export default function RubricWorkspace({
         </div>
 
         {canSwitchView && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:gap-2">
             <button
               type="button"
               onClick={() => setRubricView("preview")}
-              className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-bold transition-all ${
+              className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[10px] font-bold transition-all sm:h-auto sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2 sm:text-[11px] ${
                 effectiveView === "preview"
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                   : "border border-slate-200 bg-white text-slate-600 hover:border-blue-200"
@@ -109,7 +109,7 @@ export default function RubricWorkspace({
             <button
               type="button"
               onClick={() => setRubricView("edit")}
-              className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-[11px] font-bold transition-all ${
+              className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-2.5 text-[10px] font-bold transition-all sm:h-auto sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2 sm:text-[11px] ${
                 effectiveView === "edit"
                   ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20"
                   : "border border-slate-200 bg-white text-slate-600 hover:border-blue-200"
@@ -131,12 +131,12 @@ export default function RubricWorkspace({
           setExpandedCriterionId={setExpandedCriterionId}
         />
       ) : (
-        <div className="bg-[#F8FAFC] p-4">
+        <div className="bg-[#F8FAFC] p-2.5 sm:p-4">
           {!isManualRubric && (
-            <div className="mb-4 flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 p-3">
+            <div className="mb-2.5 flex items-start gap-1.5 rounded-lg border border-blue-100 bg-blue-50 p-2.5 sm:mb-4 sm:gap-2 sm:rounded-xl sm:p-3">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-blue-700" />
 
-              <p className="text-[11px] leading-relaxed text-blue-800">
+              <p className="text-[10px] leading-4 text-blue-800 sm:text-[11px] sm:leading-relaxed">
                 Editing is available when the uploaded or generated rubric
                 needs adjustment.
               </p>

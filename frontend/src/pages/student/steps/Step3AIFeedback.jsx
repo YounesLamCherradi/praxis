@@ -1169,7 +1169,7 @@ function InlineFeedbackEditor({
       suppressContentEditableWarning
       data-placeholder="Revise your draft in your own words."
       onInput={handleInput}
-      onPointerDown={(event) => {
+      onClick={(event) => {
         const mark = event.target.closest(
           "mark[data-feedback-issue-id]"
         );
@@ -1177,11 +1177,11 @@ function InlineFeedbackEditor({
         if (!mark) return;
 
         /*
-         * Highlights live inside a contentEditable editor.
-         * Pin the feedback before the browser moves the text caret or
-         * fires mouse-leave behavior.
+         * Do not cancel the native pointer action here.
+         * The browser must first place the caret at the exact
+         * character the student clicked inside the highlight.
+         * The click then pins the feedback note.
          */
-        event.preventDefault();
         handleIssueOpen(event);
       }}
       onMouseOver={handleFeedbackHover}
@@ -1728,7 +1728,7 @@ export default function Step3AIFeedback() {
                   !aiFeedbackAllowed ||
                   feedbackLimitReached
                 }
-                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3.5 py-2.5 text-[11px] font-bold text-white shadow-sm shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-[11px] font-bold text-white shadow-md shadow-blue-600/20 transition-all hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none sm:text-xs"
               >
                 {isChecking ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -1739,7 +1739,7 @@ export default function Step3AIFeedback() {
                 )}
 
                 {isChecking
-                  ? "Checking..."
+                  ? "Getting feedback..."
                   : feedback
                   ? "Request New AI Feedback"
                   : "Request AI Feedback"}
@@ -1811,13 +1811,13 @@ export default function Step3AIFeedback() {
                 type="button"
                 onClick={handleContinueToFinalSubmission}
                 disabled={!draftText.trim()}
-                className={`inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-xs font-bold transition-all ${
+                className={`inline-flex items-center justify-center gap-2 rounded-xl border px-5 py-3 text-xs font-bold transition-all ${
                   draftText.trim()
-                    ? "bg-blue-600 text-white shadow-sm shadow-blue-600/20 hover:bg-blue-700"
-                    : "cursor-not-allowed bg-slate-100 text-slate-400"
+                    ? "border-slate-200 bg-white text-slate-600 shadow-sm hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700"
+                    : "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-300"
                 }`}
               >
-                Continue to Rubric Check
+                Continue to final step
                 <ArrowRight className="h-4 w-4" />
               </button>
             )}

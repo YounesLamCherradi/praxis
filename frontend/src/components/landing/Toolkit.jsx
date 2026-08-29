@@ -148,7 +148,7 @@ export default function Toolkit() {
     <section
       id="toolkit"
       ref={ref}
-      className={`relative overflow-hidden py-14 lg:py-16 bg-[#F8FAFC] border-y border-slate-200 reveal-3d ${
+      className={`relative overflow-hidden py-10 sm:py-14 lg:py-16 bg-[#F8FAFC] border-y border-slate-200 reveal-3d ${
         revealed ? "revealed-active" : ""
       }`}
     >
@@ -171,13 +171,13 @@ export default function Toolkit() {
       <div className="absolute -bottom-32 right-0 w-[420px] h-[420px] rounded-full bg-indigo-500/10 blur-[120px] pointer-events-none" />
 
       <div className="relative max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-10">
-        <div className="max-w-3xl mx-auto text-center mb-9">
+        <div className="mx-auto mb-6 max-w-3xl text-center sm:mb-9">
           <span className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-white px-3.5 py-1.5 text-xs font-semibold text-blue-700 shadow-sm">
             <Layers className="w-3.5 h-3.5" />
             Platform toolkit
           </span>
 
-          <h2 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 sm:text-4xl">
+          <h2 className="mt-3 text-2xl font-bold tracking-tight text-slate-950 sm:text-4xl">
             Responsible AI-supported writing tools.
           </h2>
 
@@ -197,7 +197,7 @@ export default function Toolkit() {
                   key={key}
                   type="button"
                   onClick={() => setActiveTab(key)}
-                  className={`group p-4 rounded-2xl text-left border transition-all w-full ${
+                  className={`group w-full rounded-xl border p-3 text-left transition-all sm:rounded-2xl sm:p-4 ${
                     isActive
                       ? "bg-white border-blue-200 shadow-lg shadow-blue-100/60"
                       : "bg-white/80 border-slate-200 hover:border-blue-200 hover:bg-white hover:shadow-md"
@@ -237,7 +237,7 @@ export default function Toolkit() {
             })}
           </div>
 
-          <div className="lg:col-span-7 bg-gradient-to-br from-blue-950 via-slate-950 to-indigo-950 text-white rounded-3xl p-5 sm:p-6 flex flex-col justify-between border border-blue-900/50 relative overflow-hidden shadow-2xl min-h-[330px]">
+          <div className="relative flex min-h-[280px] flex-col justify-between overflow-hidden rounded-[18px] border border-blue-900/50 bg-slate-950 p-4 text-white shadow-lg sm:min-h-[330px] sm:rounded-3xl sm:bg-gradient-to-br sm:from-blue-950 sm:via-slate-950 sm:to-indigo-950 sm:p-6 sm:shadow-2xl lg:col-span-7">
             <div className="absolute -top-12 -right-12 w-64 h-64 bg-blue-400/15 rounded-full blur-3xl pointer-events-none animate-pulse" />
             <div className="absolute -bottom-12 -left-12 w-64 h-64 bg-indigo-400/10 rounded-full blur-3xl pointer-events-none" />
 

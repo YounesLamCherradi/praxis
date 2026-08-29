@@ -46,10 +46,15 @@ export default function RubricSetupStep({
   const [sourceExpanded, setSourceExpanded] = useState(!rubricMode);
   const [isDraggingRubric, setIsDraggingRubric] = useState(false);
   const [rubricReadingStage, setRubricReadingStage] = useState(0);
+
   const rubricReadingMessages = [
-    "Opening the document",
-    "Finding criteria and score levels",
+    "Opening the rubric document",
+    "Reading the rubric content",
+    "Identifying criteria and point values",
+    "Analyzing performance levels and descriptors",
+    "Checking the scoring structure",
     "Organizing the rubric for review",
+    "Finalizing the rubric preview",
   ];
 
   useEffect(() => {
@@ -59,10 +64,13 @@ export default function RubricSetupStep({
     }
 
     const intervalId = window.setInterval(() => {
-      setRubricReadingStage(
-        (current) => (current + 1) % rubricReadingMessages.length
+      setRubricReadingStage((current) =>
+        Math.min(
+          current + 1,
+          rubricReadingMessages.length - 1
+        )
       );
-    }, 2400);
+    }, 2800);
 
     return () => window.clearInterval(intervalId);
   }, [isParsingRubric]);
@@ -98,14 +106,14 @@ export default function RubricSetupStep({
     <div className="space-y-4">
       <div className="space-y-4">
         {sourceExpanded || !rubricMode ? (
-          <div className="rounded-3xl border border-slate-200 bg-slate-50/70 p-5 sm:p-7">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 sm:rounded-3xl sm:p-7">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-2 sm:mb-5 sm:gap-3">
             <div>
-              <h3 className="text-xl font-black text-slate-950 sm:text-2xl">
+              <h3 className="text-[17px] font-black leading-tight text-slate-950 sm:text-2xl">
                 Rubric <span className="font-semibold text-slate-500">(optional)</span>
               </h3>
 
-              <p className="mt-2 text-base leading-relaxed text-slate-600 sm:text-lg">
+              <p className="mt-1 text-[11px] leading-4 text-slate-500 sm:mt-2 sm:text-lg sm:leading-relaxed sm:text-slate-600">
                 Upload or reuse a rubric. The AI will shape its output to match.
               </p>
             </div>
@@ -117,13 +125,16 @@ export default function RubricSetupStep({
             )}
           </div>
 
-          <label className="block text-base font-black text-slate-800 sm:text-lg">
-            Rubric upload
-            <span className="font-semibold text-slate-500"> — drag and drop or click to browse</span>
+          <label className="block text-[11px] font-black text-slate-700 sm:text-lg">
+            <span className="sm:hidden">Rubric upload</span>
+            <span className="hidden sm:inline">
+              Rubric upload
+              <span className="font-semibold text-slate-500"> — drag and drop or click to browse</span>
+            </span>
           </label>
 
           <label
-            className={`mt-3 flex min-h-44 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-8 text-center transition-all sm:min-h-48 ${
+            className={`mt-2 flex min-h-[108px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-3 py-3 text-center transition-all sm:mt-3 sm:min-h-48 sm:rounded-3xl sm:px-6 sm:py-8 ${
               isDraggingRubric
                 ? "scale-[1.01] border-blue-500 bg-blue-100/70 ring-4 ring-blue-500/15"
                 : rubricMode === "uploaded"
@@ -175,32 +186,39 @@ export default function RubricSetupStep({
             />
 
             {isParsingRubric ? (
-              <Loader2 className="h-9 w-9 animate-spin text-blue-600" />
+              <Loader2 className="h-6 w-6 animate-spin text-blue-600 sm:h-9 sm:w-9" />
             ) : (
-              <Upload className="h-9 w-9 text-blue-600" />
+              <Upload className="h-6 w-6 text-blue-600 sm:h-9 sm:w-9" />
             )}
 
-            <p className="mt-4 text-lg font-bold text-slate-800 sm:text-xl">
-              {isParsingRubric
-                ? "Reading your rubric..."
-                : isDraggingRubric
-                ? "Drop the rubric to upload it"
-                : "Drop your rubric PDF or Word document here, or click to browse"}
+            <p className="mt-2 max-w-[240px] text-[12px] font-bold leading-4 text-slate-800 sm:mt-4 sm:max-w-none sm:text-xl sm:leading-normal">
+              {isParsingRubric ? (
+                "Reading your rubric..."
+              ) : isDraggingRubric ? (
+                "Drop the rubric to upload it"
+              ) : (
+                <>
+                  <span className="sm:hidden">Tap to upload a rubric</span>
+                  <span className="hidden sm:inline">
+                    Drop your rubric PDF or Word document here, or click to browse
+                  </span>
+                </>
+              )}
             </p>
 
-            <p className="mt-2 text-sm text-slate-500 sm:text-base">
+            <p className="mt-1 text-[9px] text-slate-500 sm:mt-2 sm:text-base">
               PDF, DOC, DOCX, or TXT
             </p>
 
             {uploadedRubricName && (
-              <span className="mt-4 max-w-full truncate rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-bold text-blue-700">
+              <span className="mt-2 max-w-full truncate rounded-full border border-blue-200 bg-white px-2.5 py-1 text-[9px] font-bold text-blue-700 sm:mt-4 sm:px-4 sm:py-2 sm:text-sm">
                 {uploadedRubricName}
               </span>
             )}
           </label>
 
-          <div className="mt-6">
-            <label htmlFor="saved-rubric-source" className="block text-base font-bold text-slate-700">
+          <div className="mt-3 sm:mt-6">
+            <label htmlFor="saved-rubric-source" className="block text-[11px] font-bold text-slate-700 sm:text-base">
               Use a previous rubric
             </label>
 
@@ -213,7 +231,7 @@ export default function RubricSetupStep({
                 handleSavedRubricSelection(rubricId);
                 if (rubricId) setSourceExpanded(false);
               }}
-              className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3.5 text-base text-slate-900 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+              className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-[16px] text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 sm:mt-2 sm:h-auto sm:rounded-2xl sm:px-4 sm:py-3.5 sm:text-base sm:focus:ring-4"
             >
               <option value="">Select a saved rubric</option>
               {savedRubricOptions.map((rubric) => (
@@ -225,26 +243,27 @@ export default function RubricSetupStep({
             </select>
 
             {savedRubricOptions.length === 0 && (
-              <p className="mt-2 text-sm text-slate-500">No previous rubrics are available yet.</p>
+              <p className="mt-1 text-[10px] text-slate-500 sm:mt-2 sm:text-sm">No previous rubrics are available yet.</p>
             )}
           </div>
 
-          <div className="mt-5 border-t border-slate-200 pt-4 text-center">
-            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+          <div className="mt-3 border-t border-slate-200 pt-2.5 text-center sm:mt-5 sm:pt-4">
+            <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:justify-center sm:gap-3">
               <button
                 type="button"
                 onClick={() => {
                   startGeneratedRubric();
                   setSourceExpanded(false);
                 }}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition-colors sm:text-base ${
+                className={`inline-flex h-9 items-center justify-center gap-1 rounded-lg px-2 text-[10px] font-bold transition-colors sm:h-auto sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2 sm:text-base ${
                   rubricMode === "generated"
                     ? "bg-violet-50 text-violet-800"
                     : "text-slate-600 hover:bg-violet-50 hover:text-violet-800"
                 }`}
               >
                 <Wand2 className="h-4 w-4" />
-                Let AI create the rubric
+                <span className="sm:hidden">AI rubric</span>
+                <span className="hidden sm:inline">Let AI create the rubric</span>
               </button>
 
               <span className="hidden text-slate-300 sm:inline" aria-hidden="true">•</span>
@@ -255,33 +274,34 @@ export default function RubricSetupStep({
                   startManualRubric();
                   setSourceExpanded(false);
                 }}
-                className={`inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold transition-colors sm:text-base ${
+                className={`inline-flex h-9 items-center justify-center gap-1 rounded-lg px-2 text-[10px] font-bold transition-colors sm:h-auto sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2 sm:text-base ${
                   rubricMode === "manual"
                     ? "bg-blue-100 text-blue-800"
                     : "text-slate-600 hover:bg-blue-50 hover:text-blue-800"
                 }`}
               >
                 <Pencil className="h-4 w-4" />
-                Create rubric manually
+                <span className="sm:hidden">Manual rubric</span>
+                <span className="hidden sm:inline">Create rubric manually</span>
               </button>
             </div>
 
-            <p className="mt-1 text-xs text-slate-500 sm:text-sm">
+            <p className="mt-1 hidden text-xs text-slate-500 sm:block sm:text-sm">
               Choose either option to build a rubric and review it before saving.
             </p>
           </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start justify-between gap-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3 sm:rounded-2xl sm:p-4 sm:items-center">
             <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-wider text-blue-700">
+              <p className="text-[9px] font-bold uppercase tracking-wider text-blue-700 sm:text-xs">
                 Rubric source selected
               </p>
-              <p className="mt-1 truncate text-base font-black text-slate-950 sm:text-lg">
+              <p className="mt-0.5 max-w-[210px] truncate text-[13px] font-black leading-tight text-slate-950 sm:mt-1 sm:max-w-none sm:text-lg">
                 {sourceSummary}
               </p>
               {criteria.length > 0 && (
-                <p className="mt-1 text-sm text-slate-600">
+                <p className="mt-0.5 text-[10px] leading-4 text-slate-500 sm:mt-1 sm:text-sm sm:text-slate-600">
                   {criteria.length} {criteria.length === 1 ? "criterion" : "criteria"} · {rubricTotal} points
                 </p>
               )}
@@ -290,9 +310,10 @@ export default function RubricSetupStep({
             <button
               type="button"
               onClick={() => setSourceExpanded(true)}
-              className="inline-flex shrink-0 items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-2.5 text-sm font-bold text-blue-700 transition hover:bg-blue-50"
+              className="inline-flex h-8 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-white px-2.5 text-[10px] font-bold text-blue-700 transition hover:bg-blue-50 sm:h-auto sm:rounded-xl sm:px-4 sm:py-2.5 sm:text-sm"
             >
-              Change rubric source
+              <span className="sm:hidden">Change</span>
+              <span className="hidden sm:inline">Change rubric source</span>
             </button>
           </div>
         )}
@@ -300,24 +321,29 @@ export default function RubricSetupStep({
         {!sourceExpanded && rubricMode && (
           <section className="space-y-4 min-w-0">
           {rubricMode === "saved" && (
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-end">
+            <div className="rounded-xl border border-slate-200 bg-white p-3 sm:rounded-2xl sm:p-4">
+              <div className="grid grid-cols-1 gap-2 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-end">
                 <div>
-                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                  <label className="block text-[9px] font-bold uppercase tracking-wider text-slate-500 sm:text-[10px]">
                     Rubric title
                   </label>
 
                   <input
                     value={rubricTitle}
                     onChange={(e) => setRubricTitle(e.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs text-slate-900 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 text-[16px] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 sm:mt-2 sm:h-auto sm:rounded-xl sm:p-3 sm:text-xs sm:focus:ring-4"
                     placeholder="Example: Definition Paragraph Rubric"
                     required
                   />
                 </div>
 
-                <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-3 text-[11px] text-blue-800 leading-relaxed">
-                  Saved with the assignment and used to guide the AI feedback and grading tools.
+                <div className="rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-2 text-[10px] leading-4 text-blue-800 sm:rounded-xl sm:px-3 sm:py-3 sm:text-[11px] sm:leading-relaxed">
+                  <span className="sm:hidden">
+                    Used by Praxis for AI feedback and grading.
+                  </span>
+                  <span className="hidden sm:inline">
+                    Saved with the assignment and used to guide the AI feedback and grading tools.
+                  </span>
                   {reusableRubrics.length > 0 ? (
                     <span className="block mt-1 text-blue-700 font-semibold">
                       {reusableRubrics.length} previous rubric
@@ -377,25 +403,30 @@ export default function RubricSetupStep({
           {canShowRubricDetails && (
             <>
               {rubricMode !== "saved" ? (
-                <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                  <div className="grid grid-cols-1 items-center gap-3 lg:grid-cols-[110px_minmax(0,1fr)_250px]">
-                    <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                <div className="rounded-xl border border-slate-200 bg-white p-2.5 sm:rounded-2xl sm:p-3">
+                  <div className="grid grid-cols-1 items-center gap-2 sm:gap-3 lg:grid-cols-[110px_minmax(0,1fr)_250px]">
+                    <label className="text-[9px] font-bold uppercase tracking-wider text-slate-500 sm:text-[10px]">
                       Rubric title
                     </label>
 
                     <input
                       value={rubricTitle}
                       onChange={(e) => setRubricTitle(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-[#F8FAFC] p-3 text-xs text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-4 focus:ring-blue-500/10"
+                      className="h-10 w-full rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 text-[16px] text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/10 sm:h-auto sm:rounded-xl sm:p-3 sm:text-xs sm:focus:ring-4"
                       placeholder="Example: Definition Paragraph Rubric"
                       required
                     />
 
-                    <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2.5">
+                    <div className="flex items-start gap-1.5 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-2 sm:gap-2 sm:rounded-xl sm:px-3 sm:py-2.5">
                       <Link2 className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
 
-                      <p className="text-[11px] text-blue-800 leading-relaxed">
-                        Saved with the assignment and used to guide the AI feedback and grading tools.
+                      <p className="text-[10px] leading-4 text-blue-800 sm:text-[11px] sm:leading-relaxed">
+                        <span className="sm:hidden">
+                          Used for AI feedback and grading.
+                        </span>
+                        <span className="hidden sm:inline">
+                          Saved with the assignment and used to guide the AI feedback and grading tools.
+                        </span>
                       </p>
                     </div>
                   </div>

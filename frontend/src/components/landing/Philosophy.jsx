@@ -14,7 +14,7 @@ export default function Philosophy() {
     <section
       id="why"
       ref={ref}
-      className={`relative overflow-hidden py-16 lg:py-20 bg-slate-950 text-white reveal-3d ${
+      className={`relative overflow-hidden py-12 sm:py-16 lg:py-20 bg-slate-950 text-white reveal-3d ${
         revealed ? "revealed-active" : ""
       }`}
     >
@@ -59,7 +59,7 @@ export default function Philosophy() {
               The Praxis writing philosophy
             </span>
 
-            <blockquote className="text-3xl font-semibold leading-tight tracking-tight text-white sm:text-4xl lg:text-[2.65rem]">
+            <blockquote className="text-2xl font-semibold leading-tight tracking-tight text-white sm:text-4xl lg:text-[2.65rem]">
               “A perfect text with no visible process is harder to trust than
               an honest draft that shows thinking, revision, and growth.”
             </blockquote>
@@ -81,7 +81,7 @@ export default function Philosophy() {
           </div>
 
           <div className="philosophy-float">
-            <div className="bg-white/5 backdrop-blur border border-white/10 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="space-y-3 rounded-[18px] border border-white/10 bg-white/5 p-4 shadow-lg backdrop-blur sm:space-y-4 sm:rounded-3xl sm:p-5 sm:shadow-2xl">
               <PhilosophyPoint
                 icon={PenLine}
                 title="Messy drafting is normal"

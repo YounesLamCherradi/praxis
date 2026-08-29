@@ -130,12 +130,56 @@ function getAiFeedbackEntries(submission = {}) {
   });
 }
 
+const STUDENT_STEP_OVERRIDES_STORAGE_KEY =
+  "praxis-student-step-overrides";
+
 function loadStudentStepOverrides() {
-  return {};
+  if (typeof window === "undefined") {
+    return {};
+  }
+
+  try {
+    const raw = window.localStorage.getItem(
+      STUDENT_STEP_OVERRIDES_STORAGE_KEY
+    );
+
+    if (!raw) {
+      return {};
+    }
+
+    const parsed = JSON.parse(raw);
+
+    return parsed &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed)
+      ? parsed
+      : {};
+  } catch (error) {
+    console.warn(
+      "Could not restore student workflow step:",
+      error
+    );
+
+    return {};
+  }
 }
 
 function saveStudentStepOverrides(overrides = {}) {
-  void overrides;
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      STUDENT_STEP_OVERRIDES_STORAGE_KEY,
+      JSON.stringify(overrides || {})
+    );
+  } catch (error) {
+    console.warn(
+      "Could not persist student workflow step:",
+      error
+    );
+  }
 }
 
 function notifyPraxisDataChanged() {
@@ -2256,24 +2300,10 @@ export function StudentWorkspaceProvider({
   ]);
 
   /*
-    A newly reopened attempt always starts at Step 1.
-    The dependencies only change when the attempt is created/reopened,
-    so the student can navigate to Steps 2, 3, and 4 afterward.
+    Do not force reopened assignments back to Step 1 during hydration.
+    The student's per-assignment workflow position is persisted separately,
+    so a browser refresh should restore the exact step they were using.
   */
-  useEffect(() => {
-    if (
-      normalizeStudentStatus(
-        activeSubmission?.status
-      ) === "reopened"
-    ) {
-      setStudentStep(1);
-    }
-  }, [
-    selectedAssignmentId,
-    activeSubmission?.id,
-    activeSubmission?.reopenedAt,
-    activeSubmission?.status,
-  ]);
 
   function queuePersistentDraftSave(assignmentId, record) {
     const key = getStudentPersistenceKey(assignmentId, record);
@@ -3930,9 +3960,9 @@ export function StudentWorkspaceProvider({
       provisionalStatus === "graded" ||
       (provisionalStatus === "late" && isStudentSubmissionLocked(submission))
         ? 4
-        : provisionalStatus === "reopened"
-          ? 1
-          : Number(studentStepOverrides[String(assignmentId)] || 1);
+        : Number(
+            studentStepOverrides[String(assignmentId)] || 1
+          );
 
     // Keep the tray visible while a cold workflow bundle loads. A first
     // attempt also waits for its durable row, so neither path mounts an empty
