@@ -1184,83 +1184,267 @@ function deriveClassStudents({
 }) {
   const studentMap = new Map();
 
+  /*
+   * A student may arrive from the class-members API with
+   * a profile ID and from another normalized source with
+   * an email address. Match both identities so one person
+   * always produces one Admin research-control row.
+   */
+  function getStudentIdentity(student) {
+    const looksLikeSubmission = Boolean(
+      student?.assignmentId ||
+        student?.assignment_id ||
+        student?.submissionId ||
+        student?.submission_id
+    );
+
+    const id = String(
+      student?.studentId ||
+        student?.student_id ||
+        (!looksLikeSubmission
+          ? student?.id
+          : "") ||
+        ""
+    ).trim();
+
+    const email = normalizeEmail(
+      student?.email ||
+        student?.studentEmail
+    );
+
+    return {
+      id,
+      email,
+    };
+  }
+
+  function getMatchingStudents(student) {
+    const identity =
+      getStudentIdentity(student);
+
+    if (
+      !identity.id &&
+      !identity.email
+    ) {
+      return [];
+    }
+
+    return Array.from(
+      studentMap.values()
+    ).filter((entry) => {
+      const entryId =
+        String(entry?.id || "").trim();
+
+      const entryEmail =
+        normalizeEmail(entry?.email);
+
+      return Boolean(
+        (
+          identity.id &&
+          entryId === identity.id
+        ) ||
+          (
+            identity.email &&
+            entryEmail ===
+              identity.email
+          )
+      );
+    });
+  }
+
+  function getStudentFlags(keys) {
+    for (const key of keys) {
+      if (
+        key &&
+        adminStudentFlags?.[key]
+      ) {
+        return adminStudentFlags[key];
+      }
+    }
+
+    return {};
+  }
+
   function addStudent(student) {
-    const key =
+    const candidateKey =
       getStudentKey(student);
 
-    if (!key) {
+    if (!candidateKey) {
       return;
     }
 
-    const existing =
-      studentMap.get(key);
+    const identity =
+      getStudentIdentity(student);
+
+    const matches =
+      getMatchingStudents(student);
+
+    const key =
+      matches[0]?.key ||
+      candidateKey;
+
+    const existingId =
+      matches
+        .map((entry) => entry?.id)
+        .find(Boolean);
+
+    const existingName =
+      matches
+        .map((entry) => entry?.name)
+        .find(
+          (name) =>
+            name &&
+            name !== "Student"
+        );
+
+    const existingEmail =
+      matches
+        .map((entry) =>
+          normalizeEmail(entry?.email)
+        )
+        .find(Boolean);
+
+    const incomingName =
+      String(
+        student?.name ||
+          student?.studentName ||
+          ""
+      ).trim();
+
+    const usefulIncomingName =
+      incomingName &&
+      incomingName !== "Student"
+        ? incomingName
+        : "";
+
+    const incomingEmail =
+      normalizeEmail(
+        student?.email ||
+          student?.studentEmail
+      );
+
+    const flagKeys = Array.from(
+      new Set(
+        [
+          key,
+          candidateKey,
+          identity.id,
+          identity.email,
+          existingId,
+          existingEmail,
+          ...matches.map(
+            (entry) => entry?.key
+          ),
+        ]
+          .filter(Boolean)
+          .map(String)
+      )
+    );
 
     const flags =
-      adminStudentFlags?.[
-        key
-      ] || {};
+      getStudentFlags(flagKeys);
+
+    /*
+     * Remove every matching alias before inserting the
+     * canonical row. This also repairs an array that had
+     * already received separate ID and email entries.
+     */
+    matches.forEach((entry) => {
+      studentMap.delete(entry.key);
+    });
 
     studentMap.set(key, {
       id:
-        existing?.id ||
-        student?.id ||
-        student?.studentId ||
+        identity.id ||
+        existingId ||
         key,
       key,
       name:
-        student?.name ||
-        student?.studentName ||
-        existing?.name ||
-        student?.email ||
+        usefulIncomingName ||
+        existingName ||
+        incomingName ||
+        incomingEmail ||
+        existingEmail ||
         "Student",
       email:
-        normalizeEmail(
-          student?.email ||
-            student?.studentEmail
-        ) ||
-        existing?.email ||
+        incomingEmail ||
+        existingEmail ||
         "",
       isTestAccount:
         Boolean(
-          flags.isTestAccount
+          flags.isTestAccount ??
+            student?.isTestAccount ??
+            student?.is_test_account ??
+            matches.some(
+              (entry) =>
+                entry?.isTestAccount
+            )
         ),
       excludeFromResearch:
         Boolean(
-          flags.excludeFromResearch
+          flags.excludeFromResearch ??
+            student?.excludeFromResearch ??
+            student
+              ?.exclude_from_writing_behavior ??
+            matches.some(
+              (entry) =>
+                entry
+                  ?.excludeFromResearch
+            )
         ),
     });
   }
 
-  enrollments
+  safeArray(enrollments)
     .filter((enrollment) =>
       classMatchesEnrollment(
         course,
         enrollment
       )
     )
-    .forEach(
-      (enrollment) =>
-        addStudent({
-          id:
-            enrollment?.studentId ||
-            enrollment?.student_id ||
-            enrollment?.id,
-          name:
-            enrollment?.studentName ||
-            "Student",
-          email:
-            enrollment?.studentEmail,
-        })
+    .forEach((enrollment) =>
+      addStudent({
+        id:
+          enrollment?.studentId ||
+          enrollment?.student_id ||
+          enrollment?.id,
+        name:
+          enrollment?.studentName ||
+          enrollment?.name ||
+          "Student",
+        email:
+          enrollment?.studentEmail ||
+          enrollment?.email,
+        isTestAccount:
+          enrollment?.isTestAccount ??
+          enrollment?.is_test_account,
+        excludeFromResearch:
+          enrollment
+            ?.excludeFromResearch ??
+          enrollment
+            ?.exclude_from_writing_behavior,
+      })
     );
 
   const courseAssignmentIds =
     new Set(
-      safeArray(
-        course?.assignments
-      ).map(String)
+      safeArray(course?.assignments)
+        .map((assignment) =>
+          String(
+            assignment?.id ||
+              assignment ||
+              ""
+          )
+        )
+        .filter(Boolean)
     );
 
-  submissions
+  const courseCode =
+    normalizeComparable(
+      course?.code
+    );
+
+  safeArray(submissions)
     .filter((submission) => {
       if (
         courseAssignmentIds.size > 0
@@ -1268,34 +1452,40 @@ function deriveClassStudents({
         return courseAssignmentIds.has(
           String(
             submission?.assignmentId ||
-              submission?.assignment_id
+              submission?.assignment_id ||
+              ""
           )
         );
       }
 
-      return (
+      const submissionClassCode =
         normalizeComparable(
           submission?.classCode
-        ) ===
-          normalizeComparable(
-            course?.code
-          )
+        );
+
+      /*
+       * Empty class codes must never match each other.
+       * Previously, "" === "" could import unrelated
+       * students from submissions in another class.
+       */
+      return Boolean(
+        courseCode &&
+        submissionClassCode &&
+        submissionClassCode ===
+          courseCode
       );
     })
     .forEach(addStudent);
 
-  users
+  safeArray(users)
     .filter(
       (user) =>
         user.role === "student"
     )
     .forEach((user) => {
-      const key =
-        getStudentKey(user);
-
       if (
-        key &&
-        studentMap.has(key)
+        getMatchingStudents(user)
+          .length > 0
       ) {
         addStudent(user);
       }
@@ -1737,7 +1927,7 @@ function ManagementPanel() {
       tone: "red",
       title: `Delete ${user.role === "teacher" ? "teacher" : "student"} account`,
       description:
-        "This is a permanent action and may remove associated Praxis data.",
+        "This permanently removes account access. Academic and research records are retained.",
       item: user,
     });
   }
@@ -1931,6 +2121,9 @@ function ManagementPanel() {
           `/api/admin/management/users/${encodeURIComponent(item.id)}`,
           {
             method: "DELETE",
+            body: JSON.stringify({}),
+            timeoutMs: 120_000,
+            retryDelaysMs: [],
           }
         );
 
@@ -7142,13 +7335,72 @@ function AdminHoverHelp({
   title,
   children,
   width = 292,
+  clickToPin = false,
+  trigger = null,
 }) {
   const triggerRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  const [
+    isPinned,
+    setIsPinned,
+  ] = useState(false);
 
   const [
     tooltipState,
     setTooltipState,
   ] = useState(null);
+
+  useEffect(() => {
+    if (!isPinned) return undefined;
+
+    function closePinnedTooltip(event) {
+      if (
+        triggerRef.current?.contains(
+          event.target
+        ) ||
+        tooltipRef.current?.contains(
+          event.target
+        )
+      ) {
+        return;
+      }
+
+      setIsPinned(false);
+      setTooltipState(null);
+    }
+
+    function handleEscape(event) {
+      if (event.key === "Escape") {
+        setIsPinned(false);
+        setTooltipState(null);
+        triggerRef.current?.focus();
+      }
+    }
+
+    document.addEventListener(
+      "pointerdown",
+      closePinnedTooltip
+    );
+
+    document.addEventListener(
+      "keydown",
+      handleEscape
+    );
+
+    return () => {
+      document.removeEventListener(
+        "pointerdown",
+        closePinnedTooltip
+      );
+
+      document.removeEventListener(
+        "keydown",
+        handleEscape
+      );
+    };
+  }, [isPinned]);
+
 
   function showTooltip() {
     const trigger =
@@ -7220,7 +7472,22 @@ function AdminHoverHelp({
   }
 
   function hideTooltip() {
+    if (isPinned) return;
+
     setTooltipState(null);
+  }
+
+  function togglePinnedTooltip() {
+    if (!clickToPin) return;
+
+    if (isPinned) {
+      setIsPinned(false);
+      setTooltipState(null);
+      return;
+    }
+
+    showTooltip();
+    setIsPinned(true);
   }
 
   return (
@@ -7231,6 +7498,16 @@ function AdminHoverHelp({
         aria-label={
           title ||
           "More information"
+        }
+        aria-expanded={
+          clickToPin
+            ? isPinned
+            : undefined
+        }
+        onClick={
+          clickToPin
+            ? togglePinnedTooltip
+            : undefined
         }
         onMouseEnter={
           showTooltip
@@ -7244,16 +7521,29 @@ function AdminHoverHelp({
         onBlur={
           hideTooltip
         }
-        className="inline-flex h-[19px] w-[19px] shrink-0 cursor-help items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-black leading-none text-slate-400 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus:border-blue-300 focus:bg-blue-50 focus:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+        className={
+          trigger
+            ? "inline-flex shrink-0 cursor-help rounded-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+            : "inline-flex h-[19px] w-[19px] shrink-0 cursor-help items-center justify-center rounded-full border border-slate-200 bg-white text-[10px] font-black leading-none text-slate-400 shadow-sm transition-all hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus:border-blue-300 focus:bg-blue-50 focus:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-100"
+        }
       >
-        ?
+        {trigger || "?"}
       </button>
 
       {tooltipState &&
         createPortal(
           <div
-            role="tooltip"
-            className="pointer-events-none fixed z-[2147483647] rounded-xl border border-blue-500/80 bg-blue-600 px-4 py-3 text-left shadow-[0_20px_55px_rgba(37,99,235,0.24)]"
+            ref={tooltipRef}
+            role={
+              isPinned
+                ? "dialog"
+                : "tooltip"
+            }
+            className={`fixed z-[2147483647] rounded-xl border border-blue-500/80 bg-blue-600 px-4 py-3 text-left shadow-[0_20px_55px_rgba(37,99,235,0.24)] ${
+              isPinned
+                ? "pointer-events-auto"
+                : "pointer-events-none"
+            }`}
             style={{
               left:
                 tooltipState.left,
@@ -7862,10 +8152,6 @@ function AdminOverview({
       benchmarkData?.[level] ||
       null;
 
-    if (!pilot && !live) {
-      return null;
-    }
-
     /*
      * Pilot weighting uses the historical
      * included sample because those are the
@@ -8025,7 +8311,9 @@ function AdminOverview({
     }
 
     let source =
-      "pilot";
+      pilot
+        ? "pilot"
+        : "pending";
 
     if (
       pilotCount > 0 &&
@@ -8103,6 +8391,10 @@ function AdminOverview({
     );
 
 
+  /*
+   * Always display every supported CEFR level.
+   * Levels without data use the Pending status.
+   */
   const displayLevels = [
     "A0",
     "A1",
@@ -8111,12 +8403,7 @@ function AdminOverview({
     "B2",
     "C1",
     "C2",
-  ].filter(
-    (level) =>
-      displayedBenchmarks?.[
-        level
-      ]
-  );
+  ];
 
 
   function renderStatus(
@@ -8262,43 +8549,59 @@ function AdminOverview({
                 </h3>
 
                 <AdminHoverHelp
-                  title="How this data transition works"
-                  width={320}
+                  title="How the benchmark transition works"
+                  width={390}
+                  clickToPin
                 >
                   <p>
-                    The current value starts from the existing pilot baseline and incorporates usable live Praxis submissions as they are collected.
+                    Each level’s displayed benchmark combines two data sources:
+                    the historical pilot baseline and usable live Praxis cohort data.
                   </p>
 
-            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-semibold text-slate-500">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="font-black text-emerald-600">
-                  ✓
-                </span>
-                Within reference
-              </span>
+                  <div className="mt-3 space-y-2">
+                    <p>
+                      <strong>Pilot data</strong> provides the starting benchmark
+                      while live cohort evidence is still limited.
+                    </p>
 
-              <span className="inline-flex items-center gap-1.5">
-                <span className="font-black text-red-600">
-                  ▼
-                </span>
-                Below reference
-              </span>
+                    <p>
+                      <strong>Live data</strong> comes from current Praxis
+                      submissions that contain enough writing-process activity
+                      to produce reliable measurements.
+                    </p>
+                  </div>
 
-              <span className="inline-flex items-center gap-1.5">
-                <span className="font-black text-amber-600">
-                  ▲
-                </span>
-                Above reference
-              </span>
-            </div>
+                  <div className="mt-3 border-t border-blue-400/60 pt-3">
+                    <p className="font-bold text-white">
+                      How the contribution is calculated
+                    </p>
 
-                  <p className="mt-2">
-                    The live contribution automatically increases as more usable cohort data becomes available.
-                  </p>
+                    <p className="mt-1">
+                      Live contribution = usable live submissions ÷
+                      (included pilot submissions + usable live submissions).
+                    </p>
 
-                  <p className="mt-2 font-semibold text-white">
-                    CEFR reference ranges are comparison values only. They are never included in the blend.
-                  </p>
+                    <p className="mt-2">
+                      The pilot contribution is the remaining share. As more
+                      usable live submissions are collected, the live
+                      contribution automatically increases.
+                    </p>
+                  </div>
+
+                  <div className="mt-3 border-t border-blue-400/60 pt-3">
+                    <p>
+                      <strong>Important:</strong> the live percentage represents
+                      its influence on the displayed benchmark. It is not the
+                      percentage of submissions received.
+                    </p>
+
+                    <p className="mt-2">
+                      A submission may be received but not included if it does
+                      not contain enough writing-process data. CEFR reference
+                      ranges are used only for comparison and are never included
+                      in the pilot/live calculation.
+                    </p>
+                  </div>
                 </AdminHoverHelp>
               </div>
 
@@ -8358,28 +8661,30 @@ function AdminOverview({
                             <br />
 
                             <div className="mt-1.5 flex items-center justify-center gap-1.5">
-                              <span
-                                className={`rounded-full border px-2 py-0.5 text-[9px] font-bold ${
-                                  data?.source === "transition"
-                                    ? "border-blue-200 bg-blue-50 text-blue-700"
-                                    : data?.source === "live"
-                                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                    : data?.source === "pending"
-                                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                                    : "border-slate-200 bg-slate-50 text-slate-600"
-                                }`}
-                              >
-                                {data?.source === "transition"
-                                  ? "Transitioning"
-                                  : data?.source === "live"
-                                  ? "Live cohort"
-                                  : data?.source === "pending"
-                                  ? "Pending"
-                                  : "Pilot baseline"}
-                              </span>
-
                               <AdminHoverHelp
                                 title={`${level} data source`}
+                                clickToPin
+                                trigger={
+                                  <span
+                                    className={`rounded-full border px-2 py-0.5 text-[9px] font-bold transition-colors ${
+                                      data?.source === "transition"
+                                        ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                        : data?.source === "live"
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                        : data?.source === "pending"
+                                        ? "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                        : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100"
+                                    }`}
+                                  >
+                                    {data?.source === "transition"
+                                      ? "Transitioning"
+                                      : data?.source === "live"
+                                      ? "Live cohort"
+                                      : data?.source === "pending"
+                                      ? "Pending"
+                                      : "Pilot baseline"}
+                                  </span>
+                                }
                               >
                                 <div className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-1">
                                   <span className="text-blue-100">
@@ -8447,44 +8752,7 @@ function AdminOverview({
                               </AdminHoverHelp>
                             </div>
 
-                            <div className={`mx-auto mt-2 h-1.5 w-20 overflow-hidden rounded-full bg-slate-200 ${
-                                  Number(
-                                    data?.liveWeight || 0
-                                  ) > 0
-                                    ? ""
-                                    : "invisible"
-                                }`}>
-                              <div
-                                className="h-full rounded-full bg-blue-600 transition-all duration-500"
-                                style={{
-                                  width: `${Math.max(
-                                    0,
-                                    Math.min(
-                                      100,
-                                      Math.round(
-                                        Number(
-                                          data?.liveWeight || 0
-                                        ) * 100
-                                      )
-                                    )
-                                  )}%`,
-                                }}
-                              />
-                            </div>
 
-                            <p className={`mt-1.5 text-[10px] font-black text-blue-700 ${
-                              Number(
-                                data?.liveWeight || 0
-                              ) > 0
-                                ? ""
-                                : "invisible"
-                            }`}>
-                              {Math.round(
-                                Number(
-                                  data?.liveWeight || 0
-                                ) * 100
-                              )}% live
-                            </p>
                           </th>
                         );
                       }
@@ -9325,27 +9593,27 @@ function StudentResearchRow({
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-[#F8FAFC] p-4">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
+      <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
+        <div className="flex min-w-0 items-start gap-3 2xl:flex-1">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-500/20 bg-blue-600 font-mono text-xs font-black text-white shadow-sm shadow-blue-100">
             {getInitials(
               student.name
             )}
           </div>
 
-          <div className="min-w-0">
-            <p className="truncate text-sm font-bold text-slate-900">
+          <div className="min-w-0 flex-1">
+            <p className="break-words text-sm font-bold leading-5 text-slate-900">
               {student.name}
             </p>
 
-            <p className="truncate font-mono text-[10px] text-slate-400">
+            <p className="mt-0.5 break-all font-mono text-[10px] leading-4 text-slate-400">
               {student.email ||
                 "No email"}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 2xl:shrink-0 2xl:justify-end">
           <div className="group relative">
             <button
               type="button"

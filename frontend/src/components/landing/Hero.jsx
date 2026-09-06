@@ -30,10 +30,20 @@ const COACH_MESSAGES = [
 ];
 
 export default function Hero() {
-  const [visibleMessages, setVisibleMessages] = useState(
-    COACH_MESSAGES.length
-  );
+  const [visibleMessages, setVisibleMessages] = useState(0);
   const [playing, setPlaying] = useState(false);
+
+  // Start the recorded Coach conversation whenever the
+  // landing page is opened.
+  useEffect(() => {
+    const startTimer = window.setTimeout(() => {
+      setVisibleMessages(1);
+      setPlaying(true);
+    }, 700);
+
+    return () =>
+      window.clearTimeout(startTimer);
+  }, []);
 
   useEffect(() => {
     if (!playing) return;
@@ -47,7 +57,7 @@ export default function Hero() {
       setVisibleMessages((value) =>
         Math.min(COACH_MESSAGES.length, value + 1)
       );
-    }, 850);
+    }, 2200);
 
     return () => window.clearTimeout(timer);
   }, [playing, visibleMessages]);

@@ -82,6 +82,11 @@ export default function RoleJourney() {
   const [submittedGrade, setSubmittedGrade] =
     useState(null);
 
+  // Steps 2 and 3 use this exact same text.
+  const [studentDraft, setStudentDraft] = useState(
+    "Planning before beginning a difficult task can make the whole process easier. First, prepare the tools and information you need. Next, complete each stage carefully instead of rushing. Finally, check the result and correct any problems."
+  );
+
   useEffect(() => {
     function handleRole(event) {
       if (
@@ -253,11 +258,18 @@ export default function RoleJourney() {
               )}
 
               {role === "student" && step === 1 && (
-                <StudentDraftDemo />
+                <StudentDraftDemo
+                  text={studentDraft}
+                  setText={setStudentDraft}
+                  onContinue={() => setStep(2)}
+                />
               )}
 
               {role === "student" && step === 2 && (
-                <StudentFeedbackDemo />
+                <StudentFeedbackDemo
+                  draft={studentDraft}
+                  setDraft={setStudentDraft}
+                />
               )}
 
               {role === "student" && step === 3 && (
@@ -407,18 +419,18 @@ function ChatMessage({
   );
 }
 
-function StudentDraftDemo() {
-  const [text, setText] = useState(
-    "Planning before beginning a difficult task can make the whole process easier. First, prepare the tools and information you need. Next, complete each stage carefully instead of rushing. Finally, check the result and correct any problems."
-  );
+function StudentDraftDemo({
+  text,
+  setText,
+  onContinue,
+}) {
+  const words = useMemo(() => {
+    const value = String(text || "").trim();
 
-  const words = useMemo(
-    () =>
-      text.trim()
-        ? text.trim().split(/\s+/).length
-        : 0,
-    [text]
-  );
+    return value
+      ? value.split(/\s+/).length
+      : 0;
+  }, [text]);
 
   return (
     <DemoCard title="Draft editor">
@@ -436,183 +448,203 @@ function StudentDraftDemo() {
         className="w-full resize-none rounded-2xl border border-slate-200 bg-white p-5 text-sm leading-7 text-slate-700 outline-none transition focus:border-blue-300 focus:ring-4 focus:ring-blue-100"
       />
 
-      <p className="text-[10px] text-slate-400">
-        Try editing the text. This demonstration stays only
-        in your browser.
-      </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <p className="text-[10px] text-slate-400">
+          The exact writing entered here will appear in AI feedback.
+        </p>
+
+        <button
+          type="button"
+          onClick={onContinue}
+          disabled={!String(text || "").trim()}
+          className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-[11px] font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+        >
+          Continue to AI feedback
+          <ArrowRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
     </DemoCard>
   );
 }
 
-function StudentFeedbackDemo() {
-  const originalText =
-    "Planning before beginning a difficult task can make the whole process easier. First you should prepare everything because that makes stuff better. Next, complete each stage carefully and check the result before finishing.";
+function escapeLandingHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
 
-  const editorRef = useRef(null);
+function escapeLandingRegExp(value) {
+  return String(value || "")
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  const [draft, setDraft] = useState(originalText);
-  const [open, setOpen] = useState(true);
+function createLandingFeedback(draft) {
+  const value = String(draft || "").trim();
 
-  const addressed =
-    draft.trim() !== originalText &&
-    !/\bstuff\b/i.test(draft);
+  const vagueWord =
+    value.match(
+      /\b(stuff|things|everything|something|good|bad|very)\b/i
+    )?.[0];
 
-  function editorMarkup() {
-    return originalText.replace(
-      /\bstuff\b/i,
-      `<mark
-        data-feedback-target="true"
-        class="cursor-pointer rounded bg-amber-100 px-1 py-0.5 text-slate-900 ring-1 ring-amber-300"
-      >stuff</mark>`
+  if (vagueWord) {
+    return {
+      target: vagueWord,
+      message:
+        `“${vagueWord}” is too general. Replace it with more specific wording.`,
+    };
+  }
+
+  const words = value.match(/\S+/g) || [];
+
+  const opening = words
+    .slice(0, Math.min(6, words.length))
+    .join(" ")
+    .replace(/[.,!?;:]+$/, "");
+
+  return {
+    target: opening,
+    message:
+      "Review this opening. Make the main idea more specific and direct.",
+  };
+}
+
+function StudentFeedbackDemo({
+  draft,
+  setDraft,
+}) {
+  const feedback = useMemo(
+    () => createLandingFeedback(draft),
+    []
+  );
+
+  const [addressed, setAddressed] =
+    useState(false);
+
+  // Keep typing inside the browser-managed editable element.
+  // Updating React state on every character would rebuild the
+  // HTML and move the caret to the beginning.
+  const pendingDraftRef =
+    useRef(draft);
+
+  function highlightedMarkup() {
+    const safeDraft =
+      escapeLandingHtml(draft);
+
+    if (!feedback.target) {
+      return safeDraft;
+    }
+
+    const expression =
+      new RegExp(
+        escapeLandingRegExp(
+          feedback.target
+        ),
+        "i"
+      );
+
+    return safeDraft.replace(
+      expression,
+      (matchedText) =>
+        `<mark
+          data-feedback-target="true"
+          class="rounded bg-amber-100 px-1 py-0.5 text-slate-900 ring-1 ring-amber-300"
+        >${matchedText}</mark>`
     );
   }
 
-  function resetDraft() {
-    const editor = editorRef.current;
-
-    if (editor) {
-      editor.innerHTML = editorMarkup();
-    }
-
-    setDraft(originalText);
-    setOpen(true);
+  function readEditorText(element) {
+    return String(
+      element?.innerText || ""
+    ).replace(/\u00a0/g, " ");
   }
 
   function handleEditorInput(event) {
-    const nextText =
-      String(event.currentTarget.innerText || "")
-        .replace(/\u00a0/g, " ");
-
-    setDraft(nextText);
+    // Do not call setDraft here. A React render during typing
+    // would reset the contentEditable caret.
+    pendingDraftRef.current =
+      readEditorText(event.currentTarget);
   }
 
-  function handleEditorClick(event) {
-    const target = event.target;
+  function handleEditorBlur(event) {
+    const nextText =
+      readEditorText(event.currentTarget);
 
-    if (
-      target instanceof HTMLElement &&
-      target.closest('[data-feedback-target="true"]')
-    ) {
-      setOpen(true);
-    }
+    pendingDraftRef.current =
+      nextText;
+
+    const targetStillExists =
+      nextText
+        .toLowerCase()
+        .includes(
+          feedback.target.toLowerCase()
+        );
+
+    const nextAddressed =
+      Boolean(feedback.target) &&
+      !targetStillExists &&
+      Boolean(nextText.trim());
+
+    setDraft(nextText);
+    setAddressed(nextAddressed);
   }
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]">
       <DemoCard title="Draft with AI feedback">
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-          <span className="text-[10px] font-semibold text-slate-500">
-            Click the highlighted issue, then revise it directly.
-          </span>
-
-          <button
-            type="button"
-            onClick={resetDraft}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-600 transition hover:border-blue-200 hover:text-blue-700"
-          >
-            <RotateCcw className="h-3 w-3" />
-            Reset
-          </button>
+        <div className="rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] font-semibold text-blue-700">
+          This is the exact writing entered in the previous step.
         </div>
 
         <div
-          ref={editorRef}
+          key={feedback.target}
           contentEditable
           suppressContentEditableWarning
           role="textbox"
           aria-multiline="true"
-          aria-label="Editable draft feedback demonstration"
+          aria-label="Editable AI feedback demonstration"
           onInput={handleEditorInput}
-          onClick={handleEditorClick}
+          onBlur={handleEditorBlur}
           dangerouslySetInnerHTML={{
-            __html: editorMarkup(),
+            __html: highlightedMarkup(),
           }}
           className={`min-h-[220px] cursor-text whitespace-pre-wrap rounded-2xl border bg-white p-4 text-sm leading-7 text-slate-700 outline-none transition focus:ring-4 ${
             addressed
-              ? "border-emerald-300 focus:border-emerald-400 focus:ring-emerald-100"
-              : "border-amber-200 focus:border-amber-300 focus:ring-amber-100"
+              ? "border-emerald-300 focus:ring-emerald-100"
+              : "border-amber-300 focus:ring-amber-100"
           }`}
         />
 
         <div
-          className={`rounded-xl border px-3 py-2.5 text-[10px] leading-5 ${
+          className={`rounded-xl border px-3 py-2.5 text-[10px] font-semibold ${
             addressed
               ? "border-emerald-200 bg-emerald-50 text-emerald-700"
               : "border-amber-200 bg-amber-50 text-amber-700"
           }`}
         >
-          {addressed ? (
-            <span className="inline-flex items-center gap-2 font-semibold">
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              Revision addressed — the vague wording was changed.
-            </span>
-          ) : (
-            <>
-              The highlighted word{" "}
-              <button
-                type="button"
-                onClick={() => setOpen(true)}
-                className="rounded bg-amber-100 px-1 font-bold text-amber-800 underline decoration-amber-400 underline-offset-2"
-              >
-                stuff
-              </button>{" "}
-              is the current revision point.
-            </>
-          )}
+          {addressed
+            ? "✓ Revision addressed and saved in the shared draft."
+            : "Edit the highlighted wording directly."}
         </div>
       </DemoCard>
 
-      <div>
-        {open ? (
-          <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-lg">
-            <div className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-amber-600" />
+      <div className="rounded-2xl border border-amber-200 bg-white p-5 shadow-lg">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-amber-600" />
 
-              <span className="text-xs font-bold text-slate-900">
-                Revision point
-              </span>
-            </div>
+          <span className="text-xs font-bold text-slate-900">
+            Revision point
+          </span>
+        </div>
 
-            <p className="mt-3 text-xs leading-6 text-slate-600">
-              The sentence is too general. Replace “stuff” with
-              the specific preparation the reader needs to
-              complete.
-            </p>
+        <p className="mt-3 text-xs leading-6 text-slate-600">
+          {feedback.message}
+        </p>
 
-            <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-3 text-[10px] leading-5 text-blue-700">
-              Praxis points to the exact wording and explains the
-              issue. The student makes the revision directly in
-              the draft.
-            </div>
-
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-              <p className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
-                Interactive demonstration
-              </p>
-
-              <p className="mt-1 text-[10px] leading-5 text-slate-500">
-                This example runs entirely in the browser and
-                makes no AI or API request.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="mt-4 text-[10px] font-bold text-slate-400 hover:text-slate-700"
-            >
-              Close feedback
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="w-full rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-xs font-semibold text-slate-500 transition hover:border-amber-300 hover:text-amber-700"
-          >
-            Open feedback
-          </button>
-        )}
+        <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-3 text-[10px] leading-5 text-blue-700">
+          Any edit made here also updates the draft from the
+          previous step.
+        </div>
       </div>
     </div>
   );

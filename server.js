@@ -175,7 +175,7 @@ app.use((req, res, next) => {
       "default-src 'self'",
       "base-uri 'self'",
       "object-src 'none'",
-      "frame-ancestors 'self' https://praxis.aui.ma",
+      "frame-ancestors 'self' http://praxis.aui.ma https://praxis.aui.ma",
       "img-src 'self' data:",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
@@ -2006,7 +2006,9 @@ async function getClassStudentRecipients(classId) {
      FROM public.class_members cm
      LEFT JOIN public.profiles p
        ON p.id = cm.student_id
-     WHERE cm.class_id = $1`,
+     WHERE cm.class_id = $1
+       AND cm.status = 'approved'
+       AND p.deleted_at IS NULL`,
     [classId]
   );
 
@@ -2928,6 +2930,90 @@ async function processNotificationOutbox() {
 }
 
 
+let scheduledPublicationInFlight = false;
+
+async function processScheduledAssignmentPublications() {
+  if (scheduledPublicationInFlight) {
+    return [];
+  }
+
+  scheduledPublicationInFlight = true;
+
+  try {
+    const { rows: publishedAssignments } =
+      await db.query(
+        `UPDATE public.assignments
+            SET status = 'published',
+                version = version + 1,
+                updated_at = NOW()
+          WHERE status = 'scheduled'
+            AND published_at IS NOT NULL
+            AND published_at <= NOW()
+            AND deleted_at IS NULL
+        RETURNING *`
+      );
+
+    for (const assignment of publishedAssignments) {
+      try {
+        await saveAssignmentRevision(
+          assignment,
+          null,
+          'published'
+        );
+
+        await enqueueDomainEvent({
+          eventType:
+            'assignment_published',
+          aggregateType:
+            'assignment',
+          aggregateId:
+            assignment.id,
+          idempotencyKey:
+            `assignment-published:${assignment.id}:${assignment.version}`,
+          payload: {
+            assignmentId:
+              assignment.id,
+            classId:
+              assignment.class_id,
+            version:
+              assignment.version,
+          },
+        });
+      } catch (eventError) {
+        console.error(
+          'Scheduled assignment publication event failed:',
+          safeLogError(eventError)
+        );
+      }
+    }
+
+    if (
+      publishedAssignments.length &&
+      canSendNotificationEmails()
+    ) {
+      processNotificationOutbox().catch(
+        (notifyError) => {
+          console.error(
+            'Scheduled publication outbox processing failed:',
+            safeLogError(notifyError)
+          );
+        }
+      );
+    }
+
+    return publishedAssignments;
+  } catch (error) {
+    console.error(
+      'Scheduled assignment publication failed:',
+      safeLogError(error)
+    );
+
+    return [];
+  } finally {
+    scheduledPublicationInFlight = false;
+  }
+}
+
 async function processUpcomingDeadlineReminders() {
   if (
     !canSendNotificationEmails() ||
@@ -3423,6 +3509,7 @@ async function ensureStudentBelongsToClass(
      FROM public.class_members
      WHERE class_id = $1
        AND student_id = $2
+       AND status = 'approved'
      LIMIT 1`,
     [classId, studentId]
   );
@@ -3527,9 +3614,12 @@ async function ensureStudentCanAccessAssignment(
      INNER JOIN public.class_members cm
        ON cm.class_id = a.class_id
       AND cm.student_id = $2
+      AND cm.status = 'approved'
      WHERE a.id = $1
        AND a.deleted_at IS NULL
        AND a.status = 'published'
+       AND c.archived = false
+       AND c.is_published = true
      LIMIT 1`,
     [assignmentId, studentId]
   );
@@ -5959,6 +6049,117 @@ app.post('/api/auth/signout', async (req, res) => {
   return res.json({ ok: true });
 });
 
+
+/*
+ * Workshop account correction:
+ * permanently delete a newly created student/instructor account
+ * so the same email can immediately register with the correct role.
+ *
+ * Protected academic accounts cannot use this endpoint.
+ */
+app.delete('/api/auth/account', async (req, res) => {
+  try {
+    const user =
+      await getUser(req);
+
+    if (!user) {
+      clearAuthCookies(req, res);
+
+      return res.status(401).json({
+        error: 'Not authenticated.',
+      });
+    }
+
+    if (!['student', 'teacher'].includes(user.role)) {
+      return res.status(403).json({
+        error:
+          'This account cannot be deleted from this menu.',
+      });
+    }
+
+    const confirmation =
+      String(req.body?.confirmation || '')
+        .trim()
+        .toUpperCase();
+
+    if (confirmation !== 'DELETE') {
+      return res.status(400).json({
+        error:
+          'Type DELETE to confirm account deletion.',
+      });
+    }
+
+    let deleteResult;
+
+    if (user.role === 'student') {
+      /*
+       * Membership-only accounts may be deleted.
+       * Any submission means academic work exists and deletion
+       * must instead be handled by an administrator.
+       */
+      deleteResult =
+        await db.query(
+          `DELETE FROM public.profiles p
+            WHERE p.id = $1
+              AND p.role = 'student'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.submissions s
+                WHERE s.student_id = p.id
+              )
+          RETURNING p.id`,
+          [user.id]
+        );
+    } else {
+      /*
+       * A mistaken instructor account may be deleted only
+       * before creating a class. Classes can contain assignments,
+       * memberships, submissions and research records.
+       */
+      deleteResult =
+        await db.query(
+          `DELETE FROM public.profiles p
+            WHERE p.id = $1
+              AND p.role = 'teacher'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.classes c
+                WHERE c.teacher_id = p.id
+              )
+          RETURNING p.id`,
+          [user.id]
+        );
+    }
+
+    if (!deleteResult.rows[0]) {
+      return res.status(409).json({
+        error:
+          user.role === 'student'
+            ? 'This account already contains submission data and cannot be deleted here. Please contact the administrator.'
+            : 'This account already contains course data and cannot be deleted here. Please contact the administrator.',
+      });
+    }
+
+    clearAuthCookies(req, res);
+
+    return res.json({
+      ok: true,
+      emailReusable: true,
+    });
+
+  } catch (error) {
+    console.error(
+      '[SELF ACCOUNT DELETE]',
+      safeLogError(error)
+    );
+
+    return res.status(500).json({
+      error:
+        'Could not delete this account right now.',
+    });
+  }
+});
+
 app.post('/api/auth/forgot-password', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -7043,8 +7244,10 @@ app.get('/api/classes', async (req, res) => {
        FROM public.classes c
        LEFT JOIN public.class_members cm
          ON cm.class_id = c.id
+        AND cm.status <> 'removed'
        LEFT JOIN public.profiles p
          ON p.id = cm.student_id
+        AND p.deleted_at IS NULL
        WHERE c.teacher_id = $1
        GROUP BY c.id
        ORDER BY c.created_at DESC`,
@@ -8135,7 +8338,8 @@ app.get('/api/student/classes', async (req, res) => {
       await db.query(
         `SELECT class_id, status
            FROM public.class_members
-          WHERE student_id = $1`,
+          WHERE student_id = $1
+            AND status IN ('pending', 'approved')`,
         [user.id]
       );
 
@@ -8181,7 +8385,10 @@ app.get('/api/student/classes', async (req, res) => {
          FROM public.classes c
          LEFT JOIN public.profiles p
            ON p.id = c.teacher_id
-         WHERE c.id = ANY($1::uuid[])`,
+         WHERE c.id = ANY($1::uuid[])
+           AND c.archived = false
+           AND c.is_published = true
+           AND p.deleted_at IS NULL`,
         [classIds]
       );
 
@@ -8399,7 +8606,9 @@ app.get('/api/classes/:classId/members', async (req, res) => {
          FROM public.class_members cm
          LEFT JOIN public.profiles p
            ON p.id = cm.student_id
-         WHERE cm.class_id = $1`,
+         WHERE cm.class_id = $1
+           AND cm.status <> 'removed'
+           AND p.deleted_at IS NULL`,
         [req.params.classId]
       );
 
@@ -9099,6 +9308,7 @@ const ASSIGNMENT_ALLOWED_FIELDS = new Set([
   'rubric',
   'status',
   'deadline',
+  'published_at',
   'uploaded_rubric_text',
   'auto_outline_from_chat',
   'class_id',
@@ -9305,6 +9515,71 @@ function sanitizeAssignmentPayload(payload = {}) {
   return sanitizePayload(payload, ASSIGNMENT_ALLOWED_FIELDS);
 }
 
+function normalizeAssignmentPublicationPayload(
+  payload = {},
+  existingAssignment = null
+) {
+  const normalized = {
+    ...payload,
+  };
+
+  const status = String(
+    normalized.status ??
+      existingAssignment?.status ??
+      'draft'
+  )
+    .trim()
+    .toLowerCase();
+
+  if (!['draft', 'published', 'scheduled'].includes(status)) {
+    throw new Error(
+      'Assignment status must be draft, published, or scheduled.'
+    );
+  }
+
+  normalized.status = status;
+
+  if (status === 'scheduled') {
+    const publishAt =
+      normalized.published_at ??
+      existingAssignment?.published_at;
+
+    const publishTimestamp =
+      Date.parse(String(publishAt || ''));
+
+    if (
+      !Number.isFinite(publishTimestamp) ||
+      publishTimestamp <= Date.now()
+    ) {
+      throw new Error(
+        'Scheduled publication requires a future date and time.'
+      );
+    }
+
+    normalized.published_at =
+      new Date(publishTimestamp).toISOString();
+  } else if (status === 'published') {
+    const existingPublishedTimestamp =
+      Date.parse(
+        String(
+          existingAssignment?.published_at ||
+            ''
+        )
+      );
+
+    normalized.published_at =
+      existingAssignment?.status === 'published' &&
+      Number.isFinite(existingPublishedTimestamp) &&
+      existingPublishedTimestamp <= Date.now()
+        ? new Date(existingPublishedTimestamp).toISOString()
+        : new Date().toISOString();
+  } else {
+    normalized.published_at = null;
+  }
+
+  return normalized;
+}
+
 const POSTGRES_ASSIGNMENT_WRITABLE_COLUMNS = new Set([
   'title',
   'description',
@@ -9342,6 +9617,12 @@ async function queryAssignmentsForClass(
   classId,
   accessRole
 ) {
+  /*
+   * This also guarantees correct visibility after an idle Passenger
+   * period: the first assignment request promotes anything now due.
+   */
+  await processScheduledAssignmentPublications();
+
   const values = [
     classId,
   ];
@@ -9485,10 +9766,20 @@ app.post('/api/classes/:classId/assignments', async (req, res) => {
         );
     }
 
-    const payload =
-      sanitizeAssignmentPayload(
-        req.body
-      );
+    let payload;
+
+    try {
+      payload =
+        normalizeAssignmentPublicationPayload(
+          sanitizeAssignmentPayload(
+            req.body
+          )
+        );
+    } catch (validationError) {
+      return res.status(400).json({
+        error: validationError.message,
+      });
+    }
 
     let data;
 
@@ -9666,13 +9957,24 @@ app.patch('/api/assignments/:id', async (req, res) => {
       });
     }
 
-    const payload = {
-      ...sanitizeAssignmentPayload(
-        req.body
-      ),
-      version:
-        expectedVersion + 1,
-    };
+    let payload;
+
+    try {
+      payload = {
+        ...normalizeAssignmentPublicationPayload(
+          sanitizeAssignmentPayload(
+            req.body
+          ),
+          ownedAssignment
+        ),
+        version:
+          expectedVersion + 1,
+      };
+    } catch (validationError) {
+      return res.status(400).json({
+        error: validationError.message,
+      });
+    }
 
     let data;
 
@@ -10936,10 +11238,16 @@ app.get('/api/student/submissions', async (req, res) => {
         await db.query(
           `SELECT DISTINCT a.id
              FROM public.assignments a
+             INNER JOIN public.classes c
+               ON c.id = a.class_id
              INNER JOIN public.class_members cm
                ON cm.class_id = a.class_id
+              AND cm.status = 'approved'
             WHERE cm.student_id = $1
               AND a.status = 'published'
+              AND a.deleted_at IS NULL
+              AND c.archived = false
+              AND c.is_published = true
               AND a.id = ANY($2::uuid[])`,
           [
             user.id,
@@ -10952,10 +11260,16 @@ app.get('/api/student/submissions', async (req, res) => {
         await db.query(
           `SELECT DISTINCT a.id
              FROM public.assignments a
+             INNER JOIN public.classes c
+               ON c.id = a.class_id
              INNER JOIN public.class_members cm
                ON cm.class_id = a.class_id
+              AND cm.status = 'approved'
             WHERE cm.student_id = $1
-              AND a.status = 'published'`,
+              AND a.status = 'published'
+              AND a.deleted_at IS NULL
+              AND c.archived = false
+              AND c.is_published = true`,
           [user.id]
         );
     }
@@ -12762,6 +13076,7 @@ app.get('/api/admin/management', async (req, res) => {
            last_login_at
          FROM public.profiles
          WHERE role IN ('teacher', 'student')
+           AND deleted_at IS NULL
          ORDER BY role, LOWER(COALESCE(name, email)), created_at`
       ),
 
@@ -12774,6 +13089,7 @@ app.get('/api/admin/management', async (req, res) => {
              SELECT COUNT(*)::int
              FROM public.class_members cm
              WHERE cm.class_id = c.id
+               AND cm.status = 'approved'
            ) AS student_count,
            (
              SELECT COUNT(*)::int
@@ -12961,27 +13277,32 @@ app.patch('/api/admin/management/users/:userId', async (req, res) => {
 
 
 app.delete('/api/admin/management/users/:userId', async (req, res) => {
-  const client =
-    await db.connect();
-
   try {
     const adminUser =
       await requireAdmin(req, res);
 
-    if (!adminUser) {
-      client.release();
-      return;
-    }
+    if (!adminUser) return;
 
     const targetId =
       String(req.params.userId || '').trim();
 
+    if (!targetId) {
+      return res.status(400).json({
+        error: 'A user account is required.',
+      });
+    }
+
     const targetResult =
-      await client.query(
-        `SELECT id, name, email, role
-           FROM public.profiles
-          WHERE id = $1
-          LIMIT 1`,
+      await db.query(
+        `SELECT
+           id,
+           name,
+           email,
+           role,
+           deleted_at
+         FROM public.profiles
+         WHERE id = $1
+         LIMIT 1`,
         [targetId]
       );
 
@@ -12989,64 +13310,119 @@ app.delete('/api/admin/management/users/:userId', async (req, res) => {
       targetResult.rows[0] || null;
 
     if (!target) {
-      client.release();
-
       return res.status(404).json({
         error: 'User account not found.',
       });
     }
 
     if (!['teacher', 'student'].includes(target.role)) {
-      client.release();
-
       return res.status(400).json({
-        error: 'This account cannot be deleted from Management.',
+        error:
+          'This account cannot be deleted from Management.',
       });
     }
 
-    await client.query('BEGIN');
-
     /*
-     * assignment_revisions.assignment_id uses RESTRICT,
-     * so teacher deletion must clear revisions before the
-     * teacher -> classes -> assignments cascade can run.
+     * Match the working student/instructor dashboard behavior:
+     *
+     * - Empty student accounts can be permanently deleted when
+     *   they have no submissions.
+     * - Empty teacher accounts can be permanently deleted when
+     *   they have no classes.
+     *
+     * Permanent deletion releases the email for immediate reuse.
      */
-    if (target.role === 'teacher') {
-      const assignmentResult =
-        await client.query(
-          `SELECT a.id
-             FROM public.assignments a
-             JOIN public.classes c
-               ON c.id = a.class_id
-            WHERE c.teacher_id = $1`,
+    let permanentDeleteResult;
+
+    if (target.role === 'student') {
+      permanentDeleteResult =
+        await db.query(
+          `DELETE FROM public.profiles p
+            WHERE p.id = $1
+              AND p.role = 'student'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.submissions s
+                WHERE s.student_id = p.id
+              )
+          RETURNING p.id`,
           [targetId]
         );
-
-      const assignmentIds =
-        assignmentResult.rows
-          .map((row) => row.id)
-          .filter(Boolean);
-
-      if (assignmentIds.length) {
-        await client.query(
-          `DELETE FROM public.assignment_revisions
-            WHERE assignment_id =
-              ANY($1::uuid[])`,
-          [assignmentIds]
+    } else {
+      permanentDeleteResult =
+        await db.query(
+          `DELETE FROM public.profiles p
+            WHERE p.id = $1
+              AND p.role = 'teacher'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM public.classes c
+                WHERE c.teacher_id = p.id
+              )
+          RETURNING p.id`,
+          [targetId]
         );
-      }
     }
 
-    await client.query(
-      `DELETE FROM public.profiles
+    if (permanentDeleteResult.rows[0]) {
+      return res.json({
+        ok: true,
+        deletionMode: 'permanent',
+        emailReusable: true,
+        deletedUser: {
+          id: target.id,
+          name: target.name,
+          email: target.email,
+          role: target.role,
+        },
+      });
+    }
+
+    /*
+     * Academic data exists, so retain the profile and its records.
+     * Disable access, revoke sessions and remove/archive active
+     * participation. The email remains reserved in this case.
+     */
+    await db.query(
+      `UPDATE public.profiles
+          SET auth_disabled = true,
+              deleted_at = COALESCE(deleted_at, NOW())
         WHERE id = $1`,
       [targetId]
     );
 
-    await client.query('COMMIT');
+    await db.query(
+      `UPDATE public.auth_sessions
+          SET revoked_at = COALESCE(revoked_at, NOW())
+        WHERE user_id = $1
+          AND revoked_at IS NULL`,
+      [targetId]
+    );
+
+    if (target.role === 'student') {
+      await db.query(
+        `UPDATE public.class_members
+            SET status = 'removed'
+          WHERE student_id = $1
+            AND status <> 'removed'`,
+        [targetId]
+      );
+    }
+
+    if (target.role === 'teacher') {
+      await db.query(
+        `UPDATE public.classes
+            SET archived = true,
+                is_published = false
+          WHERE teacher_id = $1`,
+        [targetId]
+      );
+    }
 
     return res.json({
       ok: true,
+      deletionMode: 'deactivated',
+      emailReusable: false,
       deletedUser: {
         id: target.id,
         name: target.name,
@@ -13056,10 +13432,6 @@ app.delete('/api/admin/management/users/:userId', async (req, res) => {
     });
 
   } catch (error) {
-    try {
-      await client.query('ROLLBACK');
-    } catch {}
-
     console.error(
       'Admin account deletion failed:',
       safeLogError(error)
@@ -13070,11 +13442,6 @@ app.delete('/api/admin/management/users/:userId', async (req, res) => {
         error.message ||
         'Could not delete this account.',
     });
-
-  } finally {
-    try {
-      client.release();
-    } catch {}
   }
 });
 
@@ -13518,6 +13885,7 @@ app.get('/api/admin/teachers/:teacherId/classes', async (req, res) => {
                  ELSE jsonb_build_object(
                    'id', p.id,
                    'name', p.name,
+                   'email', p.email,
                    'role', p.role,
                    'is_test_account',
                      p.is_test_account
@@ -13685,6 +14053,7 @@ app.get('/api/admin/classes/:classId/detail', async (req, res) => {
                ELSE jsonb_build_object(
                  'id', p.id,
                  'name', p.name,
+                 'email', p.email,
                  'role', p.role,
                  'is_test_account',
                    p.is_test_account,
@@ -14520,6 +14889,8 @@ Important rules:
 - Do not silently skip, merge, rename, or invent rubric criteria.
 - Return exactly one criteria entry for every rubric criterion, using the criterionId and criterionName supplied in the rubric.
 - Keep the rubric criteria in the same order as the supplied rubric.
+- Every returned rubric criterion score must use increments of exactly 0.25 points, remain at or above 0, and never exceed that criterion's maximum points. Valid examples include 2, 2.25, 2.5, and 2.75.
+- When a rubric is supplied, calculate finalScore by summing those quarter-point criterion scores exactly.
 - For criteria that evaluate the written product, use the student's submitted writing.
 - For a criterion named Process, Writing Process, or another criterion whose descriptor evaluates the student's writing process, use the supplied Writing Process Evidence.
 - Process must NOT be graded only from the final essay.
@@ -14527,25 +14898,26 @@ Important rules:
 
 - When a Process criterion exists, first calculate an internal Process Engagement score out of 10 using exactly these four components:
 
-  A. COACH / PLANNING ENGAGEMENT: 0-3 points
-  - 0 points: no meaningful student planning interaction.
-  - 1 point: at least one meaningful student planning contribution, but engagement is limited, generic, or very shallow.
-  - 2 points: at least two meaningful student planning turns that develop multiple planning elements such as topic, thesis, ideas, evidence, organization, or outline decisions.
-  - 3 points: meaningful planning engagement AND evidence that the planning or outline influenced the later draft/final submission.
-  - Count STUDENT contributions, not the number of AI Coach replies.
-  - Messages such as "yes", "ok", "thanks", greetings, repeated requests, or other non-substantive messages do not count as meaningful planning.
-  - The existence of an outline alone does not automatically earn planning points; consider whether the planning has substance and whether it connects to the writing.
-
-  B. AI FEEDBACK USAGE: 0-2 points
-  - 0 points: no AI draft feedback was meaningfully requested/used.
-  - 1 point: the student requested meaningful AI feedback, but there is little or no clear evidence of revision after receiving it.
-  - 2 points: there is at least one clear feedback-to-revision cycle: meaningful AI feedback was received and later writing/revision evidence shows that the student continued revising after it. Multiple meaningful feedback/revision cycles strengthen the case for full credit.
-  - Do not reward repeated feedback requests when the student has not meaningfully revised between requests.
-  - Raw request count is evidence, not an automatic score.
-
-  C. RESPONSE TO AI FEEDBACK: 0-3 points
-  - Examine the actionable issues/next steps contained in AI feedback history.
-  - Compare each actionable feedback item with the final submitted writing and the available later revision evidence.
+  A. COACH / PLANNING AND CRITICAL THINKING: 0-3 points
+  - 0 points: no meaningful planning, only feature use, or only generic/minimal messages such as "yes", "ok", "help me", "give me ideas", greetings, thanks, or undeveloped statements.
+  - 1 point: at least one genuinely substantive student contribution containing some original reasoning or decision-making, but the planning remains limited or underdeveloped.
+  - 2 points: multiple substantive student contributions that develop several planning elements such as purpose, position, topic, thesis, ideas, evidence, sequence, audience, or organization. The student must explain, connect, compare, prioritize, or develop ideas rather than merely list them.
+  - 3 points: sustained, substantive planning and critical thinking AND clear evidence that specific planning decisions influenced the saved outline or final submission.
+  - Count STUDENT contributions, not AI Coach replies.
+  - Message count, message length, opening the Coach, or saving an outline must never determine the score by itself.
+  - Do not infer critical thinking merely because the student wrote a long message. Look for reasoning, development, evaluation, choices, connections, or application.
+  - Repeated, copied, superficial, or non-substantive messages receive no planning credit.
+  - The existence of an outline alone does not earn planning points; evaluate its substance and its connection to the later writing.
+  B. AI FEEDBACK USAGE: 0-1 point
+  - 0 points: no meaningful AI draft feedback was requested, the request was superficial, feedback was requested without genuine later revision activity, or requests were repeated only to activate/use the feature.
+  - 1 point: at least one meaningful AI feedback request was followed by genuine later writing or revision activity.
+  - Requesting feedback by itself earns 0 points.
+  - Do not reward repeated requests, request count, button use, or multiple checks without meaningful revision between them.
+  - This component measures whether feedback entered a genuine revision cycle. The quality and completeness of the response are scored separately in Component C.
+  C. RESPONSE TO AI FEEDBACK: 0-4 points
+  - Examine every actionable issue or next step contained in the AI feedback history.
+  - Compare each actionable feedback item with the final submitted writing and available later revision evidence.
+  - Do not award credit merely because writing continued. The later change must be meaningfully connected to the specific feedback item.
   - Classify each actionable item internally as:
       Addressed = 1.0
       Needs review / partial / uncertain = 0.5
@@ -14554,25 +14926,27 @@ Important rules:
       response ratio =
       (Addressed + 0.5 * Needs review) / total actionable feedback items
   - Then:
-      feedback response score = response ratio * 3
-  - Round this component to the nearest 0.5 and keep it between 0 and 3.
-  - "Addressed" means the student made a relevant attempt to respond to the requested feedback. It does NOT mean that the resulting revision is perfect.
+      feedback response score = response ratio * 4
+  - Round this component to the nearest 0.5 and keep it between 0 and 4.
+  - "Addressed" means the student made a relevant attempt that responds to the substance of the feedback. It does NOT mean that the result is perfect.
+  - Tiny unrelated edits, unchanged passages, requesting feedback again, or general writing activity do not count as Addressed.
   - If there is no actionable AI feedback evidence, this component is 0.
-
-  D. REFLECTION: 0-2 points
+  D. REFLECTION AND CRITICAL THINKING: 0-2 points
   Evaluate four indicators worth 0.5 points each:
-  - 0.5: identifies at least one specific change the student made.
-  - 0.5: connects a change to AI feedback, Coach/planning, revision, or another part of the writing process.
-  - 0.5: explains why the change improved or affected the writing.
-  - 0.5: identifies a remaining weakness, lesson learned, or useful next step.
-  - Generic statements such as "I improved my essay" are not enough for full credit.
-  - Where possible, compare claims in the reflection with the actual process evidence and final writing.
+  - 0.5: identifies at least one specific, verifiable change the student made.
+  - 0.5: clearly connects that change to AI feedback, Coach/planning, revision evidence, or another part of the writing process.
+  - 0.5: explains why or how the change improved, clarified, strengthened, or otherwise affected the writing.
+  - 0.5: identifies a specific remaining weakness, lesson learned, alternative considered, or useful next step.
+  - Award each indicator only when it is specific and supported by the available writing-process evidence.
+  - Generic, unsupported, repeated, or vague statements such as "I improved my essay" receive no reflection credit.
+  - Reflection length alone is not evidence of quality or critical thinking.
+  - Compare reflection claims with the actual process evidence and final writing; do not award points for claims contradicted by the evidence.
 
 - PROCESS TOTAL:
-  Process Engagement = Planning (0-3)
-                     + AI Feedback Usage (0-2)
-                     + Feedback Response (0-3)
-                     + Reflection (0-2)
+  Process Engagement = Planning and Critical Thinking (0-3)
+                     + AI Feedback Usage (0-1)
+                     + Feedback Response (0-4)
+                     + Reflection and Critical Thinking (0-2)
                      = 0-10.
 
 - MAP THE INTERNAL 10-POINT SCORE TO THE RUBRIC:
@@ -14580,12 +14954,12 @@ Important rules:
   - Calculate:
       mapped Process points =
       (Process Engagement / 10) * Process criterion maximum points
-  - Round the mapped result to the nearest 0.5 point.
+  - Round the mapped result to the nearest 0.25 point.
   - Never exceed the Process criterion maximum and never go below 0.
   - Use this mapped value as the suggested score for that Process rubric criterion.
 
 - In the Process criterion comment, show a concise transparent breakdown in this form:
-  "Process X/10: Planning A/3; AI feedback usage B/2; feedback response C/3; reflection D/2. Mapped to Y/Z rubric points."
+  "Process X/10: planning and critical thinking A/3; AI feedback usage B/1; feedback response C/4; reflection and critical thinking D/2. Mapped to Y/Z rubric points."
   Then add one short sentence explaining the strongest evidence or the main missing evidence.
 
 - Do not award Process points merely because a chat, outline, feedback request, revision event, or reflection exists. Evaluate meaningful engagement.
@@ -14846,6 +15220,37 @@ if (process.env.SENTRY_DSN) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+
+  processScheduledAssignmentPublications().catch(
+    (error) => {
+      console.error(
+        'Initial scheduled publication check failed:',
+        safeLogError(error)
+      );
+    }
+  );
+
+  const scheduledPublicationJob = setInterval(
+    () => {
+      processScheduledAssignmentPublications().catch(
+        (error) => {
+          console.error(
+            'Scheduled publication check failed:',
+            safeLogError(error)
+          );
+        }
+      );
+    },
+    30_000
+  );
+
+  if (
+    typeof scheduledPublicationJob.unref ===
+    'function'
+  ) {
+    scheduledPublicationJob.unref();
+  }
+
   if (canSendNotificationEmails()) {
     getBackendSetupStatus()
       .then((setupStatus) => {

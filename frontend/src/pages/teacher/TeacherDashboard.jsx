@@ -701,6 +701,67 @@ export default function TeacherDashboard() {
     }
   }
 
+  async function handleDeleteOwnAccount() {
+    setIsAccountMenuOpen(false);
+
+    const confirmation =
+      window.prompt(
+        "Delete this account so you can register again with the correct role?\n\nThis is only available before course data is created.\n\nType DELETE to confirm."
+      );
+
+    if (
+      String(confirmation || "")
+        .trim()
+        .toUpperCase() !== "DELETE"
+    ) {
+      return;
+    }
+
+    try {
+      const response =
+        await authenticatedFetch(
+          "/api/auth/account",
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              confirmation: "DELETE",
+            }),
+            timeoutMs: 20_000,
+            retryDelaysMs: [],
+          }
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      if (
+        !response.ok ||
+        data?.error
+      ) {
+        window.alert(
+          data?.error ||
+          "Could not delete this account."
+        );
+        return;
+      }
+
+      window.location.assign(
+        "/signup"
+      );
+
+    } catch {
+      window.alert(
+        "Could not delete this account. Please try again."
+      );
+    }
+  }
+
   function computeCourseStatus(cls) {
     if (cls?.archived === true) {
       return {
@@ -2009,6 +2070,18 @@ export default function TeacherDashboard() {
                 >
                   <KeyRound className="h-4 w-4 text-blue-500" />
                   <span className="flex-1">Change Password</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDeleteOwnAccount}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-red-600 transition-all hover:bg-red-50 hover:text-red-700"
+                >
+                  <Trash2 className="h-4 w-4" />
+
+                  <span className="flex-1">
+                    Delete Account
+                  </span>
                 </button>
 
                 <button

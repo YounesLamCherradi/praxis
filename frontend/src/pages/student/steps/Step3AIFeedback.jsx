@@ -552,8 +552,18 @@ function findIssueRangeInText(text, issue, assignment = {}) {
         matchType: "excerpt",
       };
     }
+
+    /*
+     * The AI supplied a specific excerpt, but those exact words
+     * are not present in this draft version. Do not fall back to
+     * another sentence or line because that would visually attach
+     * the feedback to text the AI did not identify.
+     */
+    return null;
   }
 
+  // Line matching is allowed only for older/general feedback
+  // records that do not contain an excerpt.
   const lineNumber = Number(issue?.lineNumber);
 
   if (Number.isFinite(lineNumber) && lineNumber > 0) {
@@ -1643,8 +1653,14 @@ export default function Step3AIFeedback() {
       ""
   );
 
+  /*
+   * The inline editor displays draftText, so its highlight count
+   * and general-note classification must use that same text.
+   * reviewedText remains the immutable historical snapshot that
+   * was originally sent to AI.
+   */
   const highlightRanges = findHighlightRanges(
-    reviewedText,
+    draftText,
     issues,
     activeAssignment || {}
   );
@@ -1654,7 +1670,7 @@ export default function Step3AIFeedback() {
   const generalIssues = issues.filter(
     (issue) =>
       !findIssueRangeInText(
-        reviewedText,
+        draftText,
         issue,
         activeAssignment || {}
       )

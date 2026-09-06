@@ -517,7 +517,7 @@ export default function ActiveAssignmentWorkflow() {
 
   return (
     <div className="flex-1 min-h-0">
-      <div className="student-assignment-shell flex min-h-[520px] w-full flex-col rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:rounded-2xl sm:p-4 lg:h-[calc(100dvh-190px)] lg:min-h-0 lg:max-h-[calc(100dvh-190px)]">
+      <div className="student-assignment-shell flex min-h-[520px] w-full flex-col rounded-xl border border-slate-200 bg-white p-2 shadow-sm sm:rounded-2xl sm:p-4 lg:h-[calc(100dvh-130px)] lg:min-h-0 lg:max-h-[calc(100dvh-130px)]">
         <div className="student-workflow-header mb-2.5 flex shrink-0 flex-col gap-2 border-b border-slate-100 pb-2.5 sm:mb-4 sm:gap-3 sm:pb-3 xl:flex-row xl:items-center">
           <button
             type="button"
@@ -881,7 +881,7 @@ function CompactAssignmentBrief({
           </div>
         </div>
 
-        <details className="group mt-2 border-t border-blue-100 pt-2">
+        <details open className="group mt-2 border-t border-blue-100 pt-2">
           <summary className="flex min-h-8 cursor-pointer list-none items-center justify-between gap-2 rounded-lg bg-white/80 px-2.5 py-1.5 text-[10px] font-bold text-blue-700 ring-1 ring-blue-100 [&::-webkit-details-marker]:hidden">
             <span>Read instructions</span>
 

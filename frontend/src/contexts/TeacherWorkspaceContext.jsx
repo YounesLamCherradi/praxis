@@ -1391,9 +1391,14 @@ export function TeacherWorkspaceProvider({ children }) {
       rubrics,
     });
 
+    const rawStatus =
+      String(assignmentData.status || "Draft").toLowerCase();
+
     const normalizedStatus =
-      String(assignmentData.status || "Draft").toLowerCase() === "published"
+      rawStatus === "published"
         ? "Published"
+        : rawStatus === "scheduled"
+        ? "Scheduled"
         : "Draft";
 
     let newAssignment = {
@@ -1451,7 +1456,9 @@ export function TeacherWorkspaceProvider({ children }) {
 
       publishedAt:
         normalizedStatus === "Published"
-          ? now
+          ? assignmentData.publishedAt || now
+          : normalizedStatus === "Scheduled"
+          ? assignmentData.publishedAt || null
           : null,
 
       archived: false,
@@ -1528,10 +1535,18 @@ export function TeacherWorkspaceProvider({ children }) {
       rubrics,
     });
 
+    const rawStatus =
+      String(
+        updatedAssignment.status ||
+          existingAssignment?.status ||
+          "Draft"
+      ).toLowerCase();
+
     const normalizedStatus =
-      String(updatedAssignment.status || existingAssignment?.status || "Draft")
-        .toLowerCase() === "published"
+      rawStatus === "published"
         ? "Published"
+        : rawStatus === "scheduled"
+        ? "Scheduled"
         : "Draft";
 
     let assignment = {
@@ -1561,6 +1576,10 @@ export function TeacherWorkspaceProvider({ children }) {
           ? updatedAssignment.publishedAt ||
             existingAssignment?.publishedAt ||
             now
+          : normalizedStatus === "Scheduled"
+          ? updatedAssignment.publishedAt ||
+            existingAssignment?.publishedAt ||
+            null
           : null,
 
       rubricId: attachedRubric?.id || null,

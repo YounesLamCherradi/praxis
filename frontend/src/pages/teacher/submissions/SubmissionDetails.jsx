@@ -43,17 +43,69 @@ import { requestJson } from "../../../services/auth.js";
 import { buildReplayTimeline } from "../../../utils/replayTimeline";
 
 const ANNOTATION_CODES = [
-  { code: "CS", label: "Comma splice", type: "mechanics" },
-  { code: "RO", label: "Run-on", type: "sentence" },
-  { code: "FR", label: "Fragment", type: "sentence" },
-  { code: "P", label: "Missing punctuation", type: "mechanics" },
-  { code: "VT", label: "Wrong verb tense", type: "grammar" },
-  { code: "WF", label: "Wrong word form", type: "grammar" },
-  { code: "AGR", label: "Agreement error", type: "grammar" },
-  { code: "SP", label: "Spelling error", type: "spelling" },
-  { code: "WW", label: "Wrong word", type: "word choice" },
-  { code: "GOOD", label: "Good", type: "positive" },
-  { code: "NOTE", label: "Note", type: "note" },
+  {
+    code: "CS",
+    label:
+      "Comma splice: two complete sentences joined with only a comma",
+    type: "mechanics",
+  },
+  {
+    code: "RO",
+    label:
+      "Run-on: two or more sentences run together without correct punctuation",
+    type: "sentence",
+  },
+  {
+    code: "FR",
+    label:
+      "Fragment: incomplete sentence — missing a subject or verb",
+    type: "sentence",
+  },
+  {
+    code: "P",
+    label:
+      "Missing punctuation: a period, comma, or other mark is needed here",
+    type: "mechanics",
+  },
+  {
+    code: "VT",
+    label:
+      "Wrong verb tense: doesn't match the tense of the rest of the text",
+    type: "grammar",
+  },
+  {
+    code: "WF",
+    label:
+      "Wrong word form: e.g. adjective used where an adverb is needed",
+    type: "grammar",
+  },
+  {
+    code: "AGR",
+    label:
+      "Agreement error: subject and verb, or noun and pronoun, don't agree",
+    type: "grammar",
+  },
+  {
+    code: "SP",
+    label: "Spelling error",
+    type: "spelling",
+  },
+  {
+    code: "WW",
+    label:
+      "Wrong word: incorrect word choice for this context",
+    type: "word choice",
+  },
+  {
+    code: "GOOD",
+    label: "Good",
+    type: "positive",
+  },
+  {
+    code: "NOTE",
+    label: "Note",
+    type: "note",
+  },
 ];
 
 function normalizeTeacherAnnotationCode(item = {}) {
@@ -104,6 +156,37 @@ function roundToHalf(value) {
   return Math.round(Number(value || 0) * 2) / 2;
 }
 
+/*
+ * Rubric grading uses quarter-point precision.
+ * Generated rubric bands retain their existing half-point
+ * behavior, while manual and AI scores use this rule.
+ */
+const RUBRIC_SCORE_STEP = 0.25;
+
+function roundToRubricStep(value) {
+  return (
+    Math.round(
+      Number(value || 0) /
+        RUBRIC_SCORE_STEP
+    ) * RUBRIC_SCORE_STEP
+  );
+}
+
+function isRubricStepValue(value) {
+  const numeric = Number(value);
+
+  return (
+    Number.isFinite(numeric) &&
+    Math.abs(
+      numeric / RUBRIC_SCORE_STEP -
+        Math.round(
+          numeric /
+            RUBRIC_SCORE_STEP
+        )
+    ) < 1e-9
+  );
+}
+
 function clampScore(value, min, max) {
   const numeric = Number(value || 0);
 
@@ -111,7 +194,7 @@ function clampScore(value, min, max) {
   if (numeric < min) return min;
   if (numeric > max) return max;
 
-  return roundToHalf(numeric);
+  return roundToRubricStep(numeric);
 }
 
 function buildDefaultBands(points = 0) {
@@ -1811,14 +1894,13 @@ const SubmissionDetails = forwardRef(function SubmissionDetails(
 
   if (!submission) return null;
 
+  /*
+   * Use the canonical submitted-writing resolver here too.
+   * Feedback resolution must compare the feedback-time excerpt
+   * against the selected attempt's final writing.
+   */
   const submissionText =
-    submission.submittedText ||
-    submission.submissionText ||
-    submission.finalText ||
-    submission.content ||
-    submission.draftText ||
-    submission.text ||
-    "";
+    getSubmissionText(submission);
 
   const integrityLogs = safeArray(submission.integrityLogs);
   const copyPasteLogs = safeArray(submission.copyPasteLogs);
@@ -2571,11 +2653,10 @@ These are instructor-only review signals and are not automatic grades.`;
 
         const numericValue = Number(entry.score);
 
-        const isHalfStepScore =
-          Math.abs(
-            numericValue * 2 -
-              Math.round(numericValue * 2)
-          ) < 1e-9;
+        const isRubricStepScore =
+          isRubricStepValue(
+            numericValue
+          );
 
         if (
           Number.isNaN(numericValue) ||
@@ -2589,9 +2670,9 @@ These are instructor-only review signals and are not automatic grades.`;
           return;
         }
 
-        if (!isHalfStepScore) {
+        if (!isRubricStepScore) {
           setSaveMessage(
-            `Score for "${criterion.name}" must use 0.5 increments.`
+            `Score for "${criterion.name}" must use 0.25 increments.`
           );
           setReviewMode("grading");
           return;
@@ -2615,11 +2696,10 @@ These are instructor-only review signals and are not automatic grades.`;
 
       if (finalOverrideEnabled && finalOverride !== "") {
         const overrideValue = Number(finalOverride);
-        const isHalfStepOverride =
-          Math.abs(
-            overrideValue * 2 -
-              Math.round(overrideValue * 2)
-          ) < 1e-9;
+        const isRubricStepOverride =
+          isRubricStepValue(
+            overrideValue
+          );
 
         if (
           Number.isNaN(overrideValue) ||
@@ -2632,9 +2712,9 @@ These are instructor-only review signals and are not automatic grades.`;
           return;
         }
 
-        if (!isHalfStepOverride) {
+        if (!isRubricStepOverride) {
           setSaveMessage(
-            "Final score override must use 0.5 increments."
+            "Final score override must use 0.25 increments."
           );
           setReviewMode("grading");
           return;
@@ -2770,10 +2850,10 @@ These are instructor-only review signals and are not automatic grades.`;
             />
           ) : (
             <div className="space-y-3">
-              <div className="grid grid-cols-1 items-start gap-2.5 sm:gap-4 xl:grid-cols-2">
+              <div className="grid grid-cols-1 items-stretch gap-2.5 sm:gap-4 xl:grid-cols-2">
                 <fieldset
                   disabled={readOnly}
-                  className={`m-0 min-w-0 border-0 p-0 ${
+                  className={`m-0 flex min-w-0 flex-col self-stretch border-0 p-0 ${
                     readOnly
                       ? "[&_button]:cursor-not-allowed [&_button]:opacity-50 [&_textarea]:cursor-not-allowed [&_textarea]:bg-slate-100"
                       : ""
@@ -2922,7 +3002,7 @@ function StudentTextReviewPanel({
   clearSelectionState,
 }) {
   return (
-    <section className="flex h-auto min-h-0 max-h-none min-w-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm xl:h-[calc(100dvh-340px)] xl:min-h-[380px] xl:max-h-[600px] 2xl:h-[calc(100dvh-330px)] 2xl:min-h-[520px] 2xl:max-h-[720px] 2xl:rounded-2xl">
+    <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm 2xl:rounded-2xl">
       <div className="shrink-0 border-b border-slate-200 px-3 py-2.5 sm:px-4 sm:py-3">
         <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3">
           <div className="flex min-w-0 items-center gap-2">
@@ -2966,12 +3046,7 @@ function StudentTextReviewPanel({
             captureSelectedText();
           }, 80);
         }}
-        onTouchEnd={() => {
-          window.setTimeout(() => {
-            captureSelectedText();
-          }, 80);
-        }}
-        className="scroll-smooth overflow-visible bg-[#F8FAFC] px-3 py-3 pb-5 text-[13px] font-mono leading-6 text-slate-700 whitespace-pre-wrap select-text cursor-text xl:min-h-0 xl:flex-1 xl:overflow-y-auto xl:overscroll-contain xl:px-5 xl:py-5 xl:pb-12 xl:leading-7 xl:[scrollbar-gutter:stable] xl:[scrollbar-width:thin]"
+        className="scroll-smooth min-h-0 flex-1 overflow-visible whitespace-pre-wrap bg-[#F8FAFC] px-3 py-3 pb-5 text-[13px] font-mono leading-6 text-slate-700 select-text cursor-text xl:px-5 xl:py-5 xl:pb-6 xl:leading-7"
       >
         {renderAnnotatedText(submissionText, annotations, deleteAnnotation)}
       </div>
@@ -3132,7 +3207,7 @@ function CombinedFeedbackWorkspace({
                   <input
                     type="number"
                     min="0"
-                    step="0.5"
+                    step={RUBRIC_SCORE_STEP}
                     value={finalOverride}
                     onChange={(event) => setFinalOverride(event.target.value)}
                     onClick={(event) => event.stopPropagation()}
@@ -4168,14 +4243,28 @@ function analyzeAiFeedbackResolution({
 
       reason =
         "The text the feedback asked the student to remove is still present unchanged in the current writing.";
-    } else if (
-      revision.changed ||
-      !revision.text
-    ) {
+
+    } else if (!revision.text) {
       status = "addressed";
 
       reason =
-        "The requested content no longer remains unchanged in the current writing. Because the feedback asked for removal, this is clear evidence of a relevant attempt to respond.";
+        "Praxis could no longer find the passage the student was asked to remove in the current writing.";
+
+    } else if (
+      revision.changed &&
+      revision.score >= 0.72
+    ) {
+      status = "not_addressed";
+
+      reason =
+        "Praxis detected a small wording change, but the passage the student was asked to remove remains substantially present in the current writing.";
+
+    } else if (revision.changed) {
+      status = "needs_review";
+
+      reason =
+        "The original passage was substantially rewritten, but an instructor should confirm whether the requested removal was actually completed.";
+
     } else {
       status = "needs_review";
 
@@ -6071,6 +6160,19 @@ function WritingBehaviourWorkspace({
   const finalText = getSubmissionText(submission);
   const finalWordCount = countWords(finalText);
 
+  /*
+   * The workspace receives one selected submission attempt,
+   * so this count belongs only to that attempt.
+   */
+  const tabSwitchCount = Math.max(
+    0,
+    Number(
+      submission?.focusLossCount ??
+        safeArray(focusLossLogs).length ??
+        0
+    )
+  );
+
   const playbackData = useMemo(
     () =>
       buildPlaybackFrames(
@@ -7050,9 +7152,16 @@ function WritingBehaviourWorkspace({
                       </div>
                     </div>
 
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[8px] font-semibold text-slate-600 sm:px-2 sm:py-1 sm:text-[10px]">
+                    <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+                      <span className="rounded-full border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[8px] font-semibold text-violet-700 sm:px-2 sm:py-1 sm:text-[10px]">
                         {replayTimeline.length} paste {replayTimeline.length === 1 ? "event" : "events"}
+                      </span>
+
+                      <span
+                        className="rounded-full border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[8px] font-semibold text-blue-700 sm:px-2 sm:py-1 sm:text-[10px]"
+                        title="Number of times the Praxis writing page lost focus during this attempt."
+                      >
+                        {tabSwitchCount} tab {tabSwitchCount === 1 ? "switch" : "switches"}
                       </span>
 
                       {timelineOpen ? (
@@ -8851,7 +8960,7 @@ function CriterionAccordion({
         <div className="flex shrink-0 items-center gap-0.5 sm:gap-1">
           <button
             type="button"
-            onClick={() => adjustCriterionScore(criterion, -0.5)}
+            onClick={() => adjustCriterionScore(criterion, -RUBRIC_SCORE_STEP)}
             aria-label={`Decrease ${criterion.name} score`}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700 sm:rounded-lg"
           >
@@ -8861,7 +8970,7 @@ function CriterionAccordion({
             type="number"
             min="0"
             max={criterion.points}
-            step="0.5"
+            step={RUBRIC_SCORE_STEP}
             value={entry.score}
             onChange={(event) => updateCriterionScore(criterion, event.target.value)}
             aria-label={`${criterion.name} score`}
@@ -8870,7 +8979,7 @@ function CriterionAccordion({
           <span className="text-[9px] font-bold text-slate-400 sm:text-[10px]">/{criterion.points}</span>
           <button
             type="button"
-            onClick={() => adjustCriterionScore(criterion, 0.5)}
+            onClick={() => adjustCriterionScore(criterion, RUBRIC_SCORE_STEP)}
             aria-label={`Increase ${criterion.name} score`}
             className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:border-blue-200 hover:text-blue-700 sm:rounded-lg"
           >

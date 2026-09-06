@@ -34,9 +34,12 @@ export function normalizeAssignment(row = {}) {
     maxWords: Number(value.wordCountMax || 0),
     rubricSchema,
     rubric: Array.isArray(rubricSchema.criteria) ? rubricSchema.criteria : [],
-    status: String(value.status || "draft").toLowerCase() === "published"
-      ? "Published"
-      : "Draft",
+    status:
+      String(value.status || "draft").toLowerCase() === "published"
+        ? "Published"
+        : String(value.status || "draft").toLowerCase() === "scheduled"
+        ? "Scheduled"
+        : "Draft",
   };
 }
 
@@ -58,8 +61,17 @@ function assignmentPayload(assignment = {}) {
     rubric: assignment.rubricSchema || {
       criteria: Array.isArray(assignment.rubric) ? assignment.rubric : [],
     },
-    status: rawStatus === "published" || rawStatus === "active" ? "published" : "draft",
+    status:
+      rawStatus === "published" || rawStatus === "active"
+        ? "published"
+        : rawStatus === "scheduled"
+        ? "scheduled"
+        : "draft",
     deadline: assignment.dueDate || assignment.deadline || null,
+    published_at:
+      assignment.publishedAt ||
+      assignment.published_at ||
+      null,
     uploaded_rubric_text: assignment.uploadedRubricText || "",
     auto_outline_from_chat: Boolean(assignment.autoOutlineFromChat),
     expected_version: assignment.version || undefined,

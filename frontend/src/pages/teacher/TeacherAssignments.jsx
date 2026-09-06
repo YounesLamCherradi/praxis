@@ -83,9 +83,18 @@ function normalizeAssignmentStatus(assignment) {
   const value = String(rawValue).toLowerCase();
 
   if (value) {
-    return value === "published" || value === "active"
-      ? "Published"
-      : "Draft";
+    if (
+      value === "published" ||
+      value === "active"
+    ) {
+      return "Published";
+    }
+
+    if (value === "scheduled") {
+      return "Scheduled";
+    }
+
+    return "Draft";
   }
 
   if (assignment?.isPublished === true || assignment?.published === true) {
@@ -110,6 +119,13 @@ function getAssignmentLifecycleStatus(
     return "Published";
   }
 
+  if (
+    publicationStatus ===
+    "Scheduled"
+  ) {
+    return "Scheduled";
+  }
+
   const assignmentId =
     String(
       assignment?.id || ""
@@ -130,10 +146,10 @@ function getAssignmentLifecycleStatus(
     assignmentId ===
       recoveryAssignmentId
   ) {
-    return "In progress";
+    return "Draft";
   }
 
-  return "Draft";
+  return "Unpublished";
 }
 
 
@@ -204,8 +220,16 @@ function getStatusStyles(status) {
     return "border-blue-200 bg-blue-50 text-blue-700";
   }
 
-  if (status === "In progress") {
+  if (status === "Draft") {
     return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+
+  if (status === "Scheduled") {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+
+  if (status === "Unpublished") {
+    return "border-slate-200 bg-slate-50 text-slate-600";
   }
 
   return "border-slate-200 bg-slate-50 text-slate-600";
@@ -509,7 +533,7 @@ export default function TeacherAssignments({
       setStatusChangeMessage(
         normalizeAssignmentStatus(updated) === "Published"
           ? "Assignment published."
-          : "Assignment moved back to draft."
+          : "Assignment moved back to unpublished."
       );
     } catch (error) {
       setStatusChangeMessage(
@@ -1157,7 +1181,7 @@ export default function TeacherAssignments({
     );
 
     if (
-      status === "In progress"
+      status === "Draft"
     ) {
       return (
         assignmentGradingFilter ===
@@ -1305,8 +1329,9 @@ export default function TeacherAssignments({
               className="order-3 h-9 min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-2 text-[14px] font-semibold text-slate-700 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 sm:h-10 sm:rounded-xl sm:px-3.5 sm:text-xs xl:order-none"
             >
               <option value="All">All statuses</option>
-              <option value="In progress">In progress</option>
               <option value="Draft">Draft</option>
+              <option value="Unpublished">Unpublished</option>
+              <option value="Scheduled">Scheduled</option>
               <option value="Published">Published</option>
             </select>
 
@@ -1379,11 +1404,11 @@ export default function TeacherAssignments({
 
                   const isInProgress =
                     assignmentStatus ===
-                    "In progress";
+                    "Draft";
 
                   const isDraft =
                     assignmentStatus ===
-                    "Draft";
+                    "Unpublished";
 
                   const lockDraftActions =
                     isInProgress ||
@@ -1409,42 +1434,7 @@ export default function TeacherAssignments({
                   );
 
                   const openReview = () => {
-                    if (
-                      isInProgress
-                    ) {
-                      if (relatedClass) {
-                        setSelectedClassId(
-                          String(
-                            relatedClass.id
-                          )
-                        );
-                      }
-
-                      setSelectedAssignmentId(
-                        ""
-                      );
-
-                      setSubmissionStatusFilter(
-                        "All"
-                      );
-
-                      setSelectedAssignment(
-                        null
-                      );
-
-                      setSubmissionFilterAssignment(
-                        null
-                      );
-
-                      /*
-                       * CreateAssignmentModal will read the existing
-                       * assignment-builder recovery record and restore
-                       * the unfinished wizard.
-                       */
-                      setView(
-                        "create"
-                      );
-
+                    if (isInProgress) {
                       return;
                     }
 
@@ -1493,7 +1483,7 @@ export default function TeacherAssignments({
                       className="group flex cursor-pointer flex-col gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm transition-all hover:border-blue-200 hover:bg-blue-50/20 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-blue-500/10 sm:gap-3 sm:p-3 xl:flex-row xl:items-center"
                       aria-label={
                         isInProgress
-                          ? `Continue ${assignment.title || "assignment"} setup`
+                          ? `${assignment.title || "Assignment"} is a draft. Use Edit to continue setup.`
                           : `Open ${assignment.title || "assignment"} student progress`
                       }
                     >
@@ -1511,105 +1501,57 @@ export default function TeacherAssignments({
                               {assignmentStatus}
                             </span>
                           </div>
-                          {isInProgress ? (
-                            <p className="mt-1 flex items-center gap-1.5 text-[10px] font-semibold text-amber-700 sm:text-[11px]">
-                              <BookOpen className="h-3.5 w-3.5 text-amber-500" />
-                              Setup incomplete · Continue setup
-                            </p>
-                          ) : (
-                            <p className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500 sm:text-[11px]">
-                              <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                              Due {getDueDateLabel(assignment)}
-                            </p>
-                          )}
+                          <p className="mt-1 flex items-center gap-1.5 text-[10px] text-slate-500 sm:text-[11px]">
+                            <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                            Due {getDueDateLabel(assignment)}
+                          </p>
                           {activeClasses.length > 1 && relatedClass && (
                             <p className="mt-1 truncate text-[10px] font-semibold text-blue-600">
                               {relatedClass.name}
                             </p>
                           )}
                         </div>
-                        {!isInProgress && (
-                          <div
-                            className="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white sm:flex"
-                            title="View student progress"
-                            aria-label="View student progress"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </div>
-                        )}
+                        <div
+                          className={`hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:flex ${
+                            isInProgress
+                              ? "bg-slate-50 text-slate-300"
+                              : "bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-600 group-hover:text-white"
+                          }`}
+                          title={
+                            isInProgress
+                              ? "Details unavailable until setup is complete"
+                              : "View student progress"
+                          }
+                          aria-hidden="true"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </div>
                       </div>
 
-                      {isInProgress ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 sm:hidden">
-                          <p className="text-[9px] font-bold text-amber-800">
-                            Finish assignment setup before publishing.
-                          </p>
+                      <div className="flex flex-1 items-center divide-x divide-slate-200 rounded-lg border border-slate-100 bg-slate-50/80 px-1 py-1.5 sm:hidden">
+                        <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                          <span className="text-[12px] font-black text-slate-800">{metrics.students}</span>
+                          <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Students</span>
                         </div>
-                      ) : (
-                        <div className="flex flex-1 items-center divide-x divide-slate-200 rounded-lg border border-slate-100 bg-slate-50/80 px-1 py-1.5 sm:hidden">
-                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
-                            <span className="text-[12px] font-black text-slate-800">{metrics.students}</span>
-                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Students</span>
-                          </div>
 
-                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
-                            <span className="text-[12px] font-black text-blue-700">{metrics.submitted}</span>
-                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Sent</span>
-                          </div>
-
-                          <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
-                            <span className="text-[12px] font-black text-emerald-700">{metrics.graded}</span>
-                            <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Graded</span>
-                          </div>
+                        <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                          <span className="text-[12px] font-black text-blue-700">{metrics.submitted}</span>
+                          <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Sent</span>
                         </div>
-                      )}
 
-                      {isInProgress ? (
-                        <div className="hidden flex-1 items-center sm:flex">
-                          <div className="flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-amber-100 bg-amber-50/40 px-3">
-                            <BookOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        <div className="flex flex-1 items-baseline justify-center gap-1 px-1">
+                          <span className="text-[12px] font-black text-emerald-700">{metrics.graded}</span>
+                          <span className="text-[8px] font-semibold uppercase tracking-wide text-slate-400">Graded</span>
+                        </div>
+                      </div>
 
-                            <span className="text-[10px] font-semibold text-amber-700">
-                              Creation unfinished
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="hidden flex-1 grid-cols-3 gap-2 sm:grid">
-                          <AssignmentCount label="Students" value={metrics.students} tone="slate" />
-                          <AssignmentCount label="Submitted" value={metrics.submitted} tone="blue" />
-                          <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
-                        </div>
-                      )}
+                      <div className="hidden flex-1 grid-cols-3 gap-2 sm:grid">
+                        <AssignmentCount label="Students" value={metrics.students} tone="slate" />
+                        <AssignmentCount label="Submitted" value={metrics.submitted} tone="blue" />
+                        <AssignmentCount label="Graded" value={metrics.graded} tone="emerald" />
+                      </div>
 
                       <div className="border-t border-slate-100 pt-1.5 sm:pt-2 xl:w-[410px] xl:border-l xl:border-t-0 xl:pl-3 xl:pt-0">
-                        {isInProgress ? (
-                          <div className="grid grid-cols-2 gap-1.5 xl:flex xl:flex-wrap">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                openReview();
-                              }}
-                              className="h-8 rounded-md border border-amber-500 bg-amber-500 px-3 text-[9px] font-bold text-white shadow-sm transition-colors hover:border-amber-600 hover:bg-amber-600 sm:h-auto sm:rounded-lg sm:py-1.5 sm:text-[10px]"
-                            >
-                              Continue setup
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setAssignmentPendingDelete(
-                                  assignment
-                                );
-                              }}
-                              className="h-8 rounded-md border border-red-200 bg-red-50 px-3 text-[9px] font-bold text-red-600 transition-colors hover:bg-red-100 sm:h-auto sm:rounded-lg sm:py-1.5 sm:text-[10px]"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        ) : (
                           <div className="grid grid-cols-3 gap-1 xl:flex xl:flex-wrap xl:gap-1.5">
                           <button
                             type="button"
@@ -1627,10 +1569,16 @@ export default function TeacherAssignments({
                           </button>
                           <button
                             type="button"
-                            disabled={metrics.submitted === 0}
+                            disabled={
+                              isInProgress ||
+                              metrics.submitted === 0
+                            }
                             onClick={(event) => {
                               event.stopPropagation();
-                              if (metrics.submitted === 0) return;
+                              if (
+                                isInProgress ||
+                                metrics.submitted === 0
+                              ) return;
                               openReview();
                             }}
                             className="col-span-2 h-8 rounded-md border border-blue-200 bg-blue-50 px-1.5 text-[9px] font-bold text-blue-700 transition-colors hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:border-slate-200 disabled:hover:bg-slate-50 sm:h-auto sm:rounded-lg sm:px-2.5 sm:py-1.5 sm:text-[10px] xl:col-span-1"
@@ -1678,7 +1626,6 @@ export default function TeacherAssignments({
                             Delete
                           </button>
                         </div>
-                        )}
                       </div>
                     </article>
                   );

@@ -132,10 +132,21 @@ function mergeSubmissionSources(primary = [], secondary = []) {
   return Array.from(merged.values());
 }
 
-function getSubmissionText(submission) {
+function getSubmissionText(submission = {}) {
+  /*
+   * Historical attempts carry their submitted writing in finalText.
+   * Always prefer that authoritative attempt snapshot before aliases
+   * that may contain an older draft or feedback-time text.
+   */
   return String(
-    submission?.submittedText ||
+    submission?.finalText ||
+      submission?.submittedText ||
       submission?.submissionText ||
+      submission?.content ||
+      submission?.draftText ||
+      submission?.text ||
+      submission?.essay ||
+      submission?.response ||
       ""
   ).trim();
 }
@@ -2350,10 +2361,16 @@ export default function TeacherSubmissions({
     const data = getPraxisData();
     const enrollments = data.enrollments || [];
 
-    const latestSubmissions = mergeSubmissionSources(
-      submissions,
-      data.submissions
-    );
+    /*
+     * PostgreSQL/API submissions are authoritative.
+     *
+     * Do not merge browser-local legacy submissions here.
+     * Their IDs can differ from the server IDs, causing an
+     * obsolete copy to appear as another/current attempt and
+     * supplying stale text to revision analysis.
+     */
+    const latestSubmissions =
+      safeArray(submissions);
 
     const classEnrollments = enrollments.filter((enrollment) =>
       sameClass(enrollment, selectedAssignment)

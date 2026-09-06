@@ -463,6 +463,18 @@ export default function StudentDashboard() {
   const [isAccountMenuOpen, setIsAccountMenuOpen] =
     useState(false);
 
+  const [isDeleteAccountOpen, setIsDeleteAccountOpen] =
+    useState(false);
+
+  const [deleteAccountConfirmation, setDeleteAccountConfirmation] =
+    useState("");
+
+  const [deleteAccountError, setDeleteAccountError] =
+    useState("");
+
+  const [isDeletingAccount, setIsDeletingAccount] =
+    useState(false);
+
   const [isSidebarOpen, setIsSidebarOpen] =
     useState(false);
 
@@ -1122,6 +1134,90 @@ export default function StudentDashboard() {
     }
   }
 
+  function handleDeleteOwnAccount() {
+    setIsAccountMenuOpen(false);
+    setDeleteAccountConfirmation("");
+    setDeleteAccountError("");
+    setIsDeletingAccount(false);
+    setIsDeleteAccountOpen(true);
+  }
+
+  function closeDeleteAccountModal() {
+    if (isDeletingAccount) return;
+
+    setIsDeleteAccountOpen(false);
+    setDeleteAccountConfirmation("");
+    setDeleteAccountError("");
+  }
+
+  async function confirmDeleteOwnAccount() {
+    const confirmation =
+      String(deleteAccountConfirmation || "")
+        .trim()
+        .toUpperCase();
+
+    if (confirmation !== "DELETE") {
+      setDeleteAccountError(
+        "Type DELETE exactly to confirm."
+      );
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    setDeleteAccountError("");
+
+    try {
+      const response =
+        await authenticatedFetch(
+          "/api/auth/account",
+          {
+            method: "DELETE",
+            headers: {
+              "Content-Type":
+                "application/json",
+            },
+            body: JSON.stringify({
+              confirmation: "DELETE",
+            }),
+            timeoutMs: 20_000,
+            retryDelaysMs: [],
+          }
+        );
+
+      const data =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      if (
+        !response.ok ||
+        data?.error
+      ) {
+        setDeleteAccountError(
+          data?.error ||
+          "Could not delete this account."
+        );
+        return;
+      }
+
+      setIsDeleteAccountOpen(false);
+
+      window.location.assign(
+        "/signup"
+      );
+
+    } catch (error) {
+      setDeleteAccountError(
+        error?.name === "AbortError"
+          ? "The request took too long. Please try again."
+          : "Could not delete this account. Please try again."
+      );
+
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  }
+
   function openEnrollModal() {
     setIsSidebarOpen(false);
     setCourseCodeInput("");
@@ -1738,6 +1834,18 @@ export default function StudentDashboard() {
 
                 <button
                   type="button"
+                  onClick={handleDeleteOwnAccount}
+                  className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-red-600 transition-all hover:bg-red-50 hover:text-red-700"
+                >
+                  <Trash2 className="h-4 w-4" />
+
+                  <span className="flex-1">
+                    Delete Account
+                  </span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={handleLogout}
                   className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-slate-600 transition-all hover:bg-rose-50 hover:text-rose-600"
                 >
@@ -2294,6 +2402,173 @@ export default function StudentDashboard() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isDeleteAccountOpen && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (
+              event.target === event.currentTarget
+            ) {
+              closeDeleteAccountModal();
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="student-delete-account-title"
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-red-100 bg-white shadow-2xl"
+            onMouseDown={(event) => {
+              event.stopPropagation();
+            }}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-red-100 bg-red-50/70 px-5 py-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100 text-red-600">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+
+                <div>
+                  <h2
+                    id="student-delete-account-title"
+                    className="text-base font-bold text-slate-950"
+                  >
+                    Delete student account
+                  </h2>
+
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    Delete this newly created account and register again with the correct role.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeDeleteAccountModal}
+                disabled={isDeletingAccount}
+                aria-label="Close delete account dialog"
+                className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-white hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 px-5 py-5">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="truncate text-sm font-bold text-slate-800">
+                  {studentName}
+                </p>
+
+                <p className="mt-1 truncate text-xs text-slate-500">
+                  {studentEmail}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-xs font-bold text-amber-900">
+                  Workshop account correction
+                </p>
+
+                <p className="mt-1 text-xs leading-5 text-amber-800">
+                  This option is available only before submission data is created. Accounts containing academic work cannot be deleted here.
+                </p>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="student-delete-account-confirmation"
+                  className="text-xs font-bold text-slate-700"
+                >
+                  Type DELETE to confirm
+                </label>
+
+                <input
+                  id="student-delete-account-confirmation"
+                  type="text"
+                  autoComplete="off"
+                  autoFocus
+                  value={deleteAccountConfirmation}
+                  disabled={isDeletingAccount}
+                  onChange={(event) => {
+                    setDeleteAccountConfirmation(
+                      event.target.value
+                    );
+
+                    if (deleteAccountError) {
+                      setDeleteAccountError("");
+                    }
+                  }}
+                  onKeyDown={(event) => {
+                    if (
+                      event.key === "Enter" &&
+                      String(
+                        deleteAccountConfirmation ||
+                        ""
+                      )
+                        .trim()
+                        .toUpperCase() === "DELETE" &&
+                      !isDeletingAccount
+                    ) {
+                      confirmDeleteOwnAccount();
+                    }
+                  }}
+                  placeholder="DELETE"
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm font-bold uppercase tracking-wider text-slate-900 outline-none transition-all placeholder:text-slate-300 focus:border-red-400 focus:bg-white focus:ring-4 focus:ring-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                />
+              </div>
+
+              {deleteAccountError && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700"
+                >
+                  {deleteAccountError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-slate-100 bg-slate-50/70 px-5 py-4">
+              <button
+                type="button"
+                onClick={closeDeleteAccountModal}
+                disabled={isDeletingAccount}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-600 transition-all hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmDeleteOwnAccount}
+                disabled={
+                  isDeletingAccount ||
+                  String(
+                    deleteAccountConfirmation ||
+                    ""
+                  )
+                    .trim()
+                    .toUpperCase() !== "DELETE"
+                }
+                className="inline-flex min-w-[132px] items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-xs font-bold text-white shadow-md shadow-red-600/20 transition-all hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                {isDeletingAccount ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Delete Account
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

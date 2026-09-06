@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  AlertCircle,
   X,
   ArrowLeft,
   ArrowRight,
@@ -155,6 +156,27 @@ function getDefaultDueDateValue(daysFromNow = 7) {
   return local.toISOString().slice(0, 16);
 }
 
+function toDateTimeLocalInput(value) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const local = new Date(
+    date.getTime() -
+      date.getTimezoneOffset() *
+        60 *
+        1000
+  );
+
+  return local
+    .toISOString()
+    .slice(0, 16);
+}
+
 function normalizeCourseKey(value) {
   return String(value || "")
     .trim()
@@ -297,6 +319,29 @@ export default function CreateAssignmentModal({
 
   const [dueDate, setDueDate] = useState("");
 
+  const [publicationMode, setPublicationMode] = useState(() => {
+    const status = String(
+      editingAssignment?.status || "draft"
+    ).toLowerCase();
+
+    if (status === "published") return "published";
+    if (status === "scheduled") return "scheduled";
+    return "draft";
+  });
+
+  const [scheduledPublishAt, setScheduledPublishAt] = useState(() => {
+    const status = String(
+      editingAssignment?.status || "draft"
+    ).toLowerCase();
+
+    return status === "scheduled"
+      ? toDateTimeLocalInput(
+          editingAssignment?.publishedAt ||
+            editingAssignment?.published_at
+        )
+      : "";
+  });
+
   const [assignmentType, setAssignmentType] = useState("Response");
   const [assignmentTypeCustom, setAssignmentTypeCustom] = useState("");
   const [studentLevel, setStudentLevel] = useState("B1");
@@ -392,6 +437,8 @@ export default function CreateAssignmentModal({
       description,
       course,
       dueDate,
+      publicationMode,
+      scheduledPublishAt,
       assignmentType,
       assignmentTypeCustom,
       studentLevel,
@@ -427,6 +474,8 @@ export default function CreateAssignmentModal({
       description,
       course,
       dueDate,
+      publicationMode,
+      scheduledPublishAt,
       assignmentType,
       assignmentTypeCustom,
       studentLevel,
@@ -553,6 +602,16 @@ export default function CreateAssignmentModal({
       }
     }
     setDueDate(String(parsed.dueDate || ""));
+    setPublicationMode(
+      ["draft", "published", "scheduled"].includes(
+        String(parsed.publicationMode || "").toLowerCase()
+      )
+        ? String(parsed.publicationMode).toLowerCase()
+        : "draft"
+    );
+    setScheduledPublishAt(
+      String(parsed.scheduledPublishAt || "")
+    );
     const parsedType = String(parsed.assignmentType || "").trim();
     if (ASSIGNMENT_TYPES.includes(parsedType) && parsedType !== "Other") {
       setAssignmentType(parsedType);
@@ -845,26 +904,57 @@ export default function CreateAssignmentModal({
   const hasValidAssignmentType =
     assignmentType !== "Other" || Boolean(String(assignmentTypeCustom || "").trim());
 
+  const missingDetailFields = [];
+
+  if (creationMode === "ai" && !generatedDraft) {
+    missingDetailFields.push("generated assignment");
+  }
+
+  if (!title.trim()) {
+    missingDetailFields.push("assignment title");
+  }
+
+  if (!description.trim()) {
+    missingDetailFields.push("student instructions");
+  }
+
+  if (!selectedCourse) {
+    missingDetailFields.push("course");
+  }
+
+  if (
+    !String(dueDate || "").trim() ||
+    !/T\d{2}:\d{2}/.test(String(dueDate))
+  ) {
+    missingDetailFields.push("deadline date and time");
+  }
+
+  if (creationMode === "ai" && !aiBrief.trim()) {
+    missingDetailFields.push("assignment description for AI");
+  }
+
+  if (!hasValidAssignmentType) {
+    missingDetailFields.push("custom assignment type");
+  }
+
+  if (!hasValidWordRange) {
+    missingDetailFields.push("valid word-count range");
+  }
+
   const canContinueDetails =
-    creationMode === "ai"
-      ? Boolean(
-          generatedDraft &&
-            title.trim() &&
-            description.trim() &&
-            selectedCourse &&
-            dueDate &&
-            aiBrief.trim() &&
-            hasValidAssignmentType &&
-            hasValidWordRange
-        )
-      : Boolean(
-          title.trim() &&
-            description.trim() &&
-            selectedCourse &&
-            dueDate &&
-            hasValidAssignmentType &&
-            hasValidWordRange
-        );
+    missingDetailFields.length === 0;
+
+  const scheduledPublishTimestamp =
+    scheduledPublishAt
+      ? new Date(scheduledPublishAt).getTime()
+      : Number.NaN;
+
+  const hasValidScheduledPublishAt =
+    publicationMode !== "scheduled" ||
+    (
+      Number.isFinite(scheduledPublishTimestamp) &&
+      scheduledPublishTimestamp > Date.now()
+    );
 
   useEffect(() => {
     if (!editingAssignment) {
@@ -904,6 +994,29 @@ export default function CreateAssignmentModal({
 
     setCourse(editingAssignment.classCode || editingAssignment.className || "");
     setDueDate(editingAssignment.dueDate || "");
+
+    {
+      const existingStatus = String(
+        editingAssignment.status || "draft"
+      ).toLowerCase();
+
+      setPublicationMode(
+        existingStatus === "published"
+          ? "published"
+          : existingStatus === "scheduled"
+          ? "scheduled"
+          : "draft"
+      );
+
+      setScheduledPublishAt(
+        existingStatus === "scheduled"
+          ? toDateTimeLocalInput(
+              editingAssignment.publishedAt ||
+                editingAssignment.published_at
+            )
+          : ""
+      );
+    }
 
     {
       const existingType = String(editingAssignment.assignmentType || "").trim();
@@ -1930,7 +2043,14 @@ export default function CreateAssignmentModal({
 
     if (!canContinueDetails) {
       setAssignmentSaveError(
-        "Some required assignment details are missing. Go back to Assignment details, complete the highlighted fields, then try again."
+        `Complete these assignment details: ${missingDetailFields.join(", ")}.`
+      );
+      return;
+    }
+
+    if (!hasValidScheduledPublishAt) {
+      setAssignmentSaveError(
+        "Choose a publication date and time in the future."
       );
       return;
     }
@@ -1957,6 +2077,26 @@ export default function CreateAssignmentModal({
 
     const aiFeedbackEnabled = normalizedFeedbackRequestLimit > 0;
 
+    const requestedStatus =
+      publicationMode === "published"
+        ? "Published"
+        : publicationMode === "scheduled"
+        ? "Scheduled"
+        : "Draft";
+
+    const wasAlreadyPublished =
+      String(editingAssignment?.status || "").toLowerCase() ===
+      "published";
+
+    const requestedPublishedAt =
+      publicationMode === "scheduled"
+        ? new Date(scheduledPublishAt).toISOString()
+        : publicationMode === "published"
+        ? wasAlreadyPublished && editingAssignment?.publishedAt
+          ? editingAssignment.publishedAt
+          : new Date().toISOString()
+        : null;
+
     const assignment = {
       title: cleanTitle,
       description: cleanDescription,
@@ -1981,7 +2121,8 @@ export default function CreateAssignmentModal({
 
       dueDate,
 
-      status: editingAssignment ? editingAssignment.status : "Draft",
+      status: requestedStatus,
+      publishedAt: requestedPublishedAt,
 
       minWords: Number(minWords),
       maxWords: Number(maxWords),
@@ -2348,6 +2489,116 @@ export default function CreateAssignmentModal({
             </div>
           )}
 
+          {step === 3 && missingDetailFields.length > 0 && (
+            <div
+              role="status"
+              className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-xs font-medium text-amber-900"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-bold">Complete before continuing</p>
+                <p className="mt-0.5 leading-relaxed">
+                  Missing: {missingDetailFields.join(", ")}.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {step === 5 && (
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+              <div>
+                <h3 className="font-serif text-base font-bold text-slate-950">
+                  Publication
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">
+                  Save privately, publish immediately, or choose when students can access the assignment.
+                </p>
+              </div>
+
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
+                {[
+                  {
+                    value: "draft",
+                    title: "Save as draft",
+                    description: "Only you can see it.",
+                  },
+                  {
+                    value: "published",
+                    title: "Publish now",
+                    description: "Students can access it immediately.",
+                  },
+                  {
+                    value: "scheduled",
+                    title: "Schedule publication",
+                    description: "Students gain access at the selected time.",
+                  },
+                ].map((option) => (
+                  <label
+                    key={option.value}
+                    className={`cursor-pointer rounded-xl border p-3 transition ${
+                      publicationMode === option.value
+                        ? "border-blue-500 bg-blue-50 ring-2 ring-blue-500/10"
+                        : "border-slate-200 bg-white hover:border-blue-200"
+                    }`}
+                  >
+                    <span className="flex items-start gap-2.5">
+                      <input
+                        type="radio"
+                        name="assignment-publication-mode"
+                        value={option.value}
+                        checked={publicationMode === option.value}
+                        onChange={(event) => {
+                          setPublicationMode(event.target.value);
+                          setAssignmentSaveError("");
+                        }}
+                        className="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>
+                        <span className="block text-xs font-bold text-slate-900">
+                          {option.title}
+                        </span>
+                        <span className="mt-0.5 block text-[10px] leading-4 text-slate-500">
+                          {option.description}
+                        </span>
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {publicationMode === "scheduled" && (
+                <div className="mt-4 rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+                  <label className="block space-y-1.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-blue-800">
+                      Publication date and time
+                      <span className="ml-1 text-red-600">*</span>
+                    </span>
+                    <input
+                      type="datetime-local"
+                      value={scheduledPublishAt}
+                      min={toDateTimeLocalInput(new Date(Date.now() + 60000))}
+                      onChange={(event) => {
+                        setScheduledPublishAt(event.target.value);
+                        setAssignmentSaveError("");
+                      }}
+                      className={`w-full rounded-xl border bg-white px-3 py-3 text-xs text-slate-900 outline-none focus:ring-4 ${
+                        hasValidScheduledPublishAt
+                          ? "border-blue-200 focus:border-blue-500 focus:ring-blue-500/10"
+                          : "border-rose-300 focus:border-rose-500 focus:ring-rose-500/10"
+                      }`}
+                    />
+                  </label>
+
+                  {!hasValidScheduledPublishAt && (
+                    <p className="mt-2 text-[11px] font-semibold text-rose-700">
+                      Choose a publication date and time in the future.
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
+
           {step === 5 && assignmentSaveError && (
             <div
               role="alert"
@@ -2415,9 +2666,13 @@ export default function CreateAssignmentModal({
                 <span>
                   {isSavingAssignment
                     ? "Saving..."
+                    : publicationMode === "scheduled"
+                    ? "Schedule Assignment"
+                    : publicationMode === "published"
+                    ? "Publish Assignment"
                     : editingAssignment
-                    ? "Save Assignment"
-                    : "Create Assignment"}
+                    ? "Save Draft"
+                    : "Create Draft"}
                 </span>
               </button>
             )}

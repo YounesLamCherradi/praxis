@@ -2990,7 +2990,7 @@ function OwnWorkDefinition({
             }`}
           >
             {attested
-              ? "Confirmed — continue"
+              ? "Confirmed"
               : "Close and review later"}
           </button>
         </footer>
@@ -3207,8 +3207,8 @@ function HorizontalRubricCriteria({
   const activeSelection = selfRubricScores?.[activeCriterion?.id];
 
   return (
-    <div className="space-y-2 sm:space-y-3 [@media(min-width:1024px)_and_(max-height:900px)]:space-y-1.5">
-      <div className="grid grid-cols-2 gap-1.5 pb-0.5 sm:flex sm:gap-2 sm:overflow-x-auto">
+    <div className="space-y-2 sm:space-y-3 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-2 lg:space-y-0 [@media(min-width:1024px)_and_(max-height:900px)]:h-auto [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5">
+      <div className="grid grid-cols-2 gap-1.5 pb-0.5 sm:flex sm:gap-2 sm:overflow-x-auto lg:shrink-0">
         {rubricCriteria.map((criterion, index) => {
           const criterionKey = `${criterion.id || "criterion"}::${index}`;
           const selected = selfRubricScores?.[criterion.id];
@@ -3228,7 +3228,7 @@ function HorizontalRubricCriteria({
               onClick={() => onOpenCriterion(criterionKey)}
               className={`min-w-0 rounded-lg border px-2 py-1.5 text-left transition-all sm:min-w-[190px] sm:flex-1 sm:rounded-xl sm:px-3 [@media(min-width:1024px)_and_(max-height:900px)]:py-1 ${
                 isCompleted
-                  ? "border-emerald-300 bg-emerald-50 shadow-sm"
+                  ? "border-emerald-500 bg-emerald-100 shadow-md shadow-emerald-900/10 ring-2 ring-emerald-500/15"
                   : isActive
                   ? "border-blue-300 bg-blue-50 shadow-sm ring-2 ring-blue-500/10"
                   : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
@@ -3239,7 +3239,7 @@ function HorizontalRubricCriteria({
                   <p className="line-clamp-2 text-[9px] font-bold leading-3.5 text-slate-900 sm:line-clamp-1 sm:text-[11px] sm:leading-4">
                     {criterion.name}
                   </p>
-                  <p className={`mt-0.5 text-[7px] font-semibold sm:text-[8px] ${selectedBand ? "text-emerald-700" : "text-slate-400"}`}>
+                  <p className={`mt-0.5 text-[7px] font-semibold sm:text-[8px] ${selectedBand ? "text-emerald-800" : "text-slate-400"}`}>
                     {selectedBand ? selectedBand.label : "Not assessed"}
                   </p>
                 </div>
@@ -3253,8 +3253,8 @@ function HorizontalRubricCriteria({
       </div>
 
       {activeCriterion && (
-        <section className="overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm sm:rounded-2xl">
-          <div className="border-b border-blue-100 bg-blue-50/70 px-2.5 py-2 sm:px-4 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1">
+        <section className="overflow-hidden rounded-xl border border-blue-200 bg-white shadow-sm sm:rounded-2xl lg:flex lg:min-h-0 lg:flex-1 lg:flex-col [@media(min-width:1024px)_and_(max-height:900px)]:flex-none">
+          <div className="shrink-0 border-b border-blue-100 bg-blue-50/70 px-2.5 py-2 sm:px-4 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1">
             <div className="flex items-start justify-between gap-2 sm:flex-wrap sm:gap-3">
               <div>
                 <p className="font-mono text-[7px] font-black uppercase tracking-wider text-blue-600 sm:text-[9px]">
@@ -3264,7 +3264,7 @@ function HorizontalRubricCriteria({
                   {activeCriterion.name}
                 </h3>
                 {activeCriterion.description && (
-                  <p className="mt-0.5 line-clamp-2 max-w-5xl text-[9px] leading-4 text-slate-500 sm:text-[10px] [@media(min-width:1024px)_and_(max-height:900px)]:line-clamp-none">
+                  <p className="mt-0.5 line-clamp-2 max-w-5xl text-[9px] leading-4 text-slate-500 sm:text-[10px] lg:line-clamp-none">
                     {activeCriterion.description}
                   </p>
                 )}
@@ -3275,7 +3275,7 @@ function HorizontalRubricCriteria({
             </div>
           </div>
 
-          <div className="grid items-start gap-1.5 p-1.5 sm:grid-cols-2 sm:gap-2 sm:p-2 xl:grid-cols-5 [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5">
+          <div className="grid items-start gap-1.5 p-1.5 sm:grid-cols-2 sm:gap-2 sm:p-2 lg:min-h-0 lg:flex-1 lg:items-stretch xl:grid-cols-5 [@media(min-width:1024px)_and_(max-height:900px)]:flex-none [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5">
             {safeArray(activeCriterion.bands).map((band) => {
               const isSelected =
                 String(activeSelection?.bandId) === String(band.id);
@@ -3287,9 +3287,9 @@ function HorizontalRubricCriteria({
                   onClick={() =>
                     onSelectBand(activeCriterion, band, activeIndex)
                   }
-                  className={`self-start rounded-lg border px-2.5 py-2 text-left transition-all sm:rounded-xl sm:px-3 sm:py-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:py-1 ${
+                  className={`self-start rounded-lg border px-2.5 py-2 text-left transition-all sm:rounded-xl sm:px-3 sm:py-1.5 lg:flex lg:h-full lg:self-stretch lg:flex-col lg:items-stretch lg:justify-start [@media(min-width:1024px)_and_(max-height:900px)]:py-1 ${
                     isSelected
-                      ? "border-blue-400 bg-blue-50 ring-2 ring-blue-500/10"
+                      ? "border-blue-600 bg-blue-100 shadow-md shadow-blue-900/10 ring-2 ring-blue-500/25"
                       : "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
                   }`}
                 >
@@ -3300,7 +3300,7 @@ function HorizontalRubricCriteria({
                       </p>
                       {band.description && (
                         <p
-                          className="mt-0.5 line-clamp-3 text-[8px] leading-3.5 text-slate-500 sm:line-clamp-6 sm:text-[9px] sm:leading-[1.35] [@media(min-width:1024px)_and_(max-height:900px)]:line-clamp-none"
+                          className="mt-0.5 line-clamp-3 text-[8px] leading-3.5 text-slate-500 sm:line-clamp-6 sm:text-[9px] sm:leading-[1.35] lg:line-clamp-none"
                           title={band.description}
                         >
                           {band.description}
@@ -3389,6 +3389,11 @@ function SelfGradeDrawer({
     band,
     criterionIndex
   ) {
+    /*
+     * Save and render the student's choice immediately.
+     * Keep the selected option visible briefly so its blue
+     * confirmation state can be clearly seen before moving on.
+     */
     selectSelfRubricBand(
       criterion,
       band
@@ -3402,19 +3407,21 @@ function SelfGradeDrawer({
         nextCriterionIndex
       ];
 
-    if (nextCriterion) {
+    if (!nextCriterion) return;
+
+    window.setTimeout(() => {
       setOpenCriterionKey(
         `${nextCriterion.id || "criterion"}::${nextCriterionIndex}`
       );
-    }
+    }, 450);
   }
 
   if (!open) return null;
 
   return (
-      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden sm:pr-1">
-        <div className="flex h-full min-h-0 w-full flex-col gap-2 pb-2 [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:pb-1">
-          <section className="flex min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl [@media(min-width:1024px)_and_(max-height:900px)]:flex-1">
+      <div className="flex h-full min-h-0 w-full flex-col overflow-hidden sm:pr-1 [@media(min-width:1024px)_and_(max-height:900px)]:overflow-y-auto [@media(min-width:1024px)_and_(max-height:900px)]:overscroll-contain [@media(min-width:1024px)_and_(max-height:900px)]:[scrollbar-gutter:stable]">
+        <div className="flex h-full min-h-0 w-full flex-col gap-2 pb-2 [@media(min-width:1024px)_and_(max-height:900px)]:h-auto [@media(min-width:1024px)_and_(max-height:900px)]:min-h-full [@media(min-width:1024px)_and_(max-height:900px)]:gap-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:pb-1">
+          <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm sm:rounded-2xl [@media(min-width:1024px)_and_(max-height:900px)]:flex-none [@media(min-width:1024px)_and_(max-height:900px)]:overflow-visible">
         <header className="shrink-0 border-b border-slate-200 px-2.5 py-2.5 sm:px-4 [@media(min-width:1024px)_and_(max-height:900px)]:py-1.5">
           <div className="flex flex-col gap-1.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3 sm:gap-y-1">
             <div className="flex min-w-0 items-center gap-2">
@@ -3439,7 +3446,7 @@ function SelfGradeDrawer({
           </div>
         </header>
 
-        <div className="min-h-0 shrink-0 bg-[#F8FAFC] p-1.5 sm:p-2 [@media(min-width:1024px)_and_(max-height:900px)]:flex-1 [@media(min-width:1024px)_and_(max-height:900px)]:overflow-y-auto [@media(min-width:1024px)_and_(max-height:900px)]:overscroll-contain [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5 [@media(min-width:1024px)_and_(max-height:900px)]:[scrollbar-gutter:stable]">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-[#F8FAFC] p-1.5 sm:p-2 [scrollbar-gutter:stable] [@media(min-width:1024px)_and_(max-height:900px)]:flex-none [@media(min-width:1024px)_and_(max-height:900px)]:overflow-visible [@media(min-width:1024px)_and_(max-height:900px)]:p-1.5">
           {rubricCriteria.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center">
               <Info className="mx-auto h-7 w-7 text-slate-300" />
@@ -3492,7 +3499,7 @@ function SelfGradeDrawer({
           </section>
         )}
 
-          <footer className="mt-auto shrink-0 rounded-xl border border-slate-200 bg-white px-2 py-2 shadow-md sm:rounded-2xl sm:px-3 sm:py-1 sm:shadow-sm [@media(min-width:1024px)_and_(max-height:900px)]:py-0.5">
+          <footer className="shrink-0 rounded-xl border border-slate-200 bg-white px-2 py-2 shadow-md sm:rounded-2xl sm:px-3 sm:py-1 sm:shadow-sm [@media(min-width:1024px)_and_(max-height:900px)]:py-0.5">
           <div className="flex flex-col gap-1.5 sm:gap-2 xl:flex-row xl:items-center">
           <div className="shrink-0 rounded-lg border border-blue-100 bg-blue-50 px-2.5 py-1.5 sm:rounded-xl sm:px-3 sm:py-1 xl:w-[250px]">
             <div className="flex items-end justify-between gap-3">
